@@ -3,8 +3,7 @@ import { ref, onMounted, onUnmounted } from 'vue'
 import { solutions, type Solution } from './solutions'
 import { useDocker } from './composables/useDocker'
 import SolutionCard from './components/SolutionCard.vue'
-import CDPViewer from './components/CDPViewer.vue'
-import MJPEGViewer from './components/MJPEGViewer.vue'
+import AiChat from './components/AiChat.vue'
 
 const selected = ref<Solution | null>(null)
 const urlInput = ref('https://www.baidu.com')
@@ -13,6 +12,9 @@ const { state: docker, startAll, stopAll, startPolling, stopPolling } = useDocke
 
 const sidebarWidth = ref(288)
 const isResizing = ref(false)
+const aiPanelWidth = ref(340)
+const isResizingAi = ref(false)
+const aiPanelOpen = ref(true)
 
 function startResize(e: MouseEvent) {
   e.preventDefault()
@@ -32,8 +34,33 @@ function startResize(e: MouseEvent) {
   document.addEventListener('mouseup', onUp)
 }
 
+function startResizeAi(e: MouseEvent) {
+  e.preventDefault()
+  isResizingAi.value = true
+  document.body.classList.add('resizing')
+  const onMove = (ev: MouseEvent) => {
+    const w = Math.max(280, Math.min(600, window.innerWidth - ev.clientX))
+    aiPanelWidth.value = w
+  }
+  const onUp = () => {
+    isResizingAi.value = false
+    document.body.classList.remove('resizing')
+    document.removeEventListener('mousemove', onMove)
+    document.removeEventListener('mouseup', onUp)
+  }
+  document.addEventListener('mousemove', onMove)
+  document.addEventListener('mouseup', onUp)
+}
+
 function select(s: Solution) {
   selected.value = s
+}
+
+function onBrowserActive() {
+  const selenium = solutions.find(s => s.id === 'selenium')
+  if (selenium && selected.value?.id !== 'selenium') {
+    selected.value = selenium
+  }
 }
 
 const navError = ref('')
@@ -91,6 +118,19 @@ onUnmounted(stopPolling)
         >
           <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20"><rect x="4" y="4" width="12" height="12" rx="1.5"/></svg>
           全部停止
+        </button>
+        <div class="w-px h-5 bg-[var(--color-border)]" />
+        <button
+          @click="aiPanelOpen = !aiPanelOpen"
+          class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors"
+          :class="aiPanelOpen
+            ? 'bg-[var(--color-accent)]/20 text-[var(--color-accent)] border-[var(--color-accent)]/30 hover:bg-[var(--color-accent)]/30'
+            : 'bg-[var(--color-surface-hover)] text-[var(--color-text-dim)] border-[var(--color-border)] hover:text-[var(--color-text)]'"
+        >
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z" />
+          </svg>
+          AI 助手
         </button>
       </div>
     </header>
@@ -164,27 +204,32 @@ onUnmounted(stopPolling)
           </div>
 
           <iframe
-            v-if="selected?.viewerType === 'iframe'"
+            v-if="selected"
             :key="selected.id"
             :src="selected.url"
             class="absolute inset-0 w-full h-full border-0"
             allow="fullscreen; clipboard-read; clipboard-write; autoplay"
             sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-modals"
           />
-
-          <CDPViewer
-            v-else-if="selected?.viewerType === 'cdp-canvas'"
-            :key="selected.id"
-            :ws-url="selected.url"
-          />
-
-          <MJPEGViewer
-            v-else-if="selected?.viewerType === 'mjpeg'"
-            :key="selected.id"
-            :stream-url="selected.url"
-          />
         </div>
       </main>
+
+      <!-- AI Panel resize handle -->
+      <div
+        v-if="aiPanelOpen"
+        class="shrink-0 w-1 cursor-col-resize hover:bg-[var(--color-accent)]/30 active:bg-[var(--color-accent)]/50 transition-colors"
+        :class="isResizingAi ? 'bg-[var(--color-accent)]/50' : ''"
+        @mousedown="startResizeAi"
+      />
+
+      <!-- AI Panel -->
+      <aside
+        v-if="aiPanelOpen"
+        class="shrink-0 border-l border-[var(--color-border)] overflow-hidden"
+        :style="{ width: aiPanelWidth + 'px' }"
+      >
+        <AiChat @browser-active="onBrowserActive" />
+      </aside>
     </div>
 
     <!-- Error toast -->
