@@ -6,4 +6,6 @@ dist-ssr/
 .DS_Store
 .idea/
 .vscode/
+.cursor/
+cursor.md
 *.sw?
