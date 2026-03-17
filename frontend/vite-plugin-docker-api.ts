@@ -1,70 +1,9 @@
-import { exec } from 'node:child_process'
-import { promisify } from 'node:util'
-import path from 'node:path'
-import { fileURLToPath } from 'node:url'
 import type { Plugin } from 'vite'
 import type { IncomingMessage } from 'node:http'
-
-const execAsync = promisify(exec)
-const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const PROJECT_ROOT = path.resolve(__dirname, '..')
-
-const SERVICE_MAP: Record<string, string[]> = {
-  neko: ['neko'],
-  novnc: ['novnc-chrome'],
-  kasmvnc: ['kasmvnc'],
-  browserless: ['browserless', 'browserless-proxy'],
-  'cdp-diy': ['chrome-headless', 'cdp-proxy'],
-  selenium: ['selenium'],
-  mjpeg: ['mjpeg-stream'],
-}
+import { SERVICE_MAP, dockerCompose, getStatuses, log as sharedLog } from './lib/docker'
 
 function log(msg: string, ...args: unknown[]) {
-  const ts = new Date().toLocaleTimeString('zh-CN', { hour12: false })
-  console.log(`[docker-api ${ts}] ${msg}`, ...args)
-}
-
-async function dockerCompose(args: string, timeout = 120_000) {
-  log(`exec: docker compose ${args}`)
-  const start = Date.now()
-  try {
-    const result = await execAsync(`docker compose ${args}`, {
-      cwd: PROJECT_ROOT,
-      timeout,
-    })
-    log(`done (${((Date.now() - start) / 1000).toFixed(1)}s): docker compose ${args.slice(0, 60)}`)
-    return result
-  } catch (e: any) {
-    log(`FAIL (${((Date.now() - start) / 1000).toFixed(1)}s): docker compose ${args.slice(0, 60)}`)
-    log(`  stderr: ${e.stderr?.slice(0, 300) || '(none)'}`)
-    log(`  message: ${e.message?.slice(0, 300) || '(none)'}`)
-    throw e
-  }
-}
-
-async function getStatuses(): Promise<Record<string, string>> {
-  const result: Record<string, string> = {}
-  try {
-    const { stdout } = await dockerCompose('ps -a --format json')
-    for (const line of stdout.trim().split('\n')) {
-      if (!line.trim()) continue
-      try {
-        const obj = JSON.parse(line)
-        result[obj.Service] = obj.State
-      } catch {
-        // might be an array format on some Docker versions
-        try {
-          const arr = JSON.parse(stdout)
-          if (Array.isArray(arr)) {
-            for (const obj of arr) result[obj.Service] = obj.State
-          }
-        } catch {}
-      }
-    }
-  } catch {
-    // docker compose not ready or no containers
-  }
-  return result
+  sharedLog('docker-api', msg, ...args)
 }
 
 function json(res: any, status: number, data: unknown) {
@@ -82,34 +21,12 @@ function readBody(req: IncomingMessage): Promise<string> {
   })
 }
 
-const HTTP_NAV_ENDPOINTS: Record<string, string> = {
-  novnc: 'http://localhost:6081/navigate',
-  browserless: 'http://localhost:3001/navigate',
-  'cdp-diy': 'http://localhost:3100/navigate',
-  mjpeg: 'http://localhost:3200/navigate',
-}
-
 const XDOTOOL_TARGETS: Record<string, { service: string; display: string; wmClass: string }> = {
-  neko: { service: 'neko', display: ':99.0', wmClass: 'chromium' },
-  kasmvnc: { service: 'kasmvnc', display: ':1', wmClass: 'chromium' },
   selenium: { service: 'selenium', display: ':99.0', wmClass: 'chromium' },
 }
 
 async function navigateInBrowser(solutionId: string, url: string): Promise<{ ok: boolean; url?: string; error?: string }> {
   log(`navigate: [${solutionId}] -> ${url}`)
-
-  const httpEndpoint = HTTP_NAV_ENDPOINTS[solutionId]
-  if (httpEndpoint) {
-    log(`  via HTTP proxy -> ${httpEndpoint}`)
-    const resp = await fetch(httpEndpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url }),
-    })
-    const data = (await resp.json()) as { ok: boolean; url?: string }
-    log(`  result:`, data)
-    return data
-  }
 
   const target = XDOTOOL_TARGETS[solutionId]
   if (target) {
