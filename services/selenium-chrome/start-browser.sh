@@ -6,5 +6,8 @@ exec /usr/lib/chromium/chromium \
   --disable-gpu \
   --disable-dev-shm-usage \
   --disable-blink-features=AutomationControlled \
+  --disable-infobars \
+  --lang=zh-CN \
+  --window-size=1920,1080 \
   --start-maximized \
   https://www.baidu.com

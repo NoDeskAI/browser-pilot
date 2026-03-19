@@ -114,11 +114,25 @@ function toolArgsSummary(args: Record<string, any> | undefined): string {
 function toolResultSummary(result: any): string {
   if (!result) return ''
   if (result.error) return `错误: ${result.error}`
-  if (result.ok === true) return '成功'
+  if (result.currentPage?.url || result.currentPage?.title) {
+    const title = result.currentPage.title || '(无标题)'
+    const url = result.currentPage.url || ''
+    const count = typeof result.currentPage.elementCount === 'number'
+      ? ` · 元素 ${result.currentPage.elementCount}`
+      : ''
+    return `页面: ${title}${url ? ` · ${url}` : ''}${count}`
+  }
+  if (result.url || result.title || typeof result.elementCount === 'number') {
+    const title = result.title || '(无标题)'
+    const url = result.url || ''
+    const count = typeof result.elementCount === 'number' ? ` · 元素 ${result.elementCount}` : ''
+    return `页面: ${title}${url ? ` · ${url}` : ''}${count}`
+  }
   if (result.statuses) {
     const entries = Object.entries(result.statuses as Record<string, string>)
     return entries.map(([k, v]) => `${k}: ${v}`).join(', ')
   }
+  if (result.ok === true) return '成功'
   return JSON.stringify(result).slice(0, 80)
 }
 
@@ -176,7 +190,7 @@ function buildApiMessages() {
       const toolCalls = m.blocks.filter(b => b.type === 'tool_call' && b.toolName)
       const toolResults = m.blocks.filter(b => b.type === 'tool_result' && b.id)
       if (toolCalls.length > 0) {
-        const summary = toolCalls.map((tc, i) => {
+        const summary = toolCalls.map((tc) => {
           const tr = toolResults.find(r => r.id === tc.id)
           const status = tr?.result?.ok === false ? `FAIL` : 'ok'
           const page = tr?.result?.currentPage ? ` ${tr.result.currentPage.url}` : ''
@@ -214,6 +228,7 @@ async function send() {
   const assistantMsg: ChatMessage = { role: 'assistant', blocks: [] }
   messages.value.push(assistantMsg)
   const aIdx = messages.value.length - 1
+  const assistantEntry = messages.value[aIdx]!
 
   try {
     const resp = await fetch('/api/ai/chat', {
@@ -231,7 +246,7 @@ async function send() {
 
     if (!resp.ok) {
       const err = await resp.json()
-      messages.value[aIdx].blocks.push({ type: 'error', content: err.error || resp.statusText })
+      assistantEntry.blocks.push({ type: 'error', content: err.error || resp.statusText })
       return
     }
 
@@ -256,7 +271,7 @@ async function send() {
 
         try {
           const evt = JSON.parse(raw)
-          const blocks = messages.value[aIdx].blocks
+          const blocks = assistantEntry.blocks
 
           switch (evt.type) {
             case 'text': {
@@ -304,7 +319,7 @@ async function send() {
     }
   } catch (e: any) {
     if (e.name === 'AbortError') return
-    messages.value[aIdx].blocks.push({ type: 'error', content: `请求失败: ${e.message}` })
+    assistantEntry.blocks.push({ type: 'error', content: `请求失败: ${e.message}` })
   } finally {
     if (currentAbort === abort) {
       currentAbort = null
@@ -419,10 +434,18 @@ onMounted(() => {
 
         <!-- Tool result -->
         <div v-else-if="item.block.type === 'tool_result'" class="flex justify-start">
-          <div class="max-w-[90%]">
+          <div class="max-w-[90%] space-y-1">
             <div v-if="item.block.result" class="px-2.5 py-1.5 rounded-md bg-[var(--color-bg)] border border-[var(--color-border)] text-[10px] text-[var(--color-text-dim)] font-mono">
               {{ toolResultSummary(item.block.result) }}
             </div>
+            <button
+              v-if="item.block.screenshot"
+              @click="previewImage = item.block.screenshot"
+              class="inline-flex items-center gap-1 px-2 py-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:border-[var(--color-accent)]/50 transition-colors"
+              type="button"
+            >
+              预览截图
+            </button>
           </div>
         </div>
 
@@ -466,7 +489,7 @@ onMounted(() => {
     <!-- Screenshot preview overlay -->
     <Teleport to="body">
       <div v-if="previewImage" class="fixed inset-0 z-[9999] bg-black/80 flex items-center justify-center cursor-pointer" @click="previewImage = null">
-        <img :src="'data:image/jpeg;base64,' + previewImage" class="max-w-[90vw] max-h-[90vh] rounded-lg shadow-2xl" />
+        <img :src="'data:image/png;base64,' + previewImage" class="max-w-[90vw] max-h-[90vh] rounded-lg shadow-2xl" />
       </div>
     </Teleport>
   </div>
