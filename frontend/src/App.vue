@@ -4,10 +4,16 @@ import { solutions, type Solution } from './solutions'
 import { useDocker } from './composables/useDocker'
 import SolutionCard from './components/SolutionCard.vue'
 import AiChat from './components/AiChat.vue'
+import DOMDiffViewer from './components/DOMDiffViewer.vue'
+import CDPViewer from './components/CDPViewer.vue'
+import MJPEGViewer from './components/MJPEGViewer.vue'
+import RrwebViewer from './components/RrwebViewer.vue'
+import NoVNCViewer from './components/NoVNCViewer.vue'
 
 const selected = ref<Solution | null>(null)
 const urlInput = ref('https://www.baidu.com')
 const navigating = ref(false)
+const viewerRef = ref<any>(null)
 const { state: docker, startAll, stopAll, startPolling, stopPolling } = useDocker()
 
 const sidebarWidth = ref(288)
@@ -73,6 +79,13 @@ async function navigate() {
   urlInput.value = url
   navigating.value = true
   navError.value = ''
+
+  if (selected.value.viewerType !== 'iframe') {
+    viewerRef.value?.navigate(url)
+    navigating.value = false
+    return
+  }
+
   try {
     const resp = await fetch('/api/docker/navigate', {
       method: 'POST',
@@ -203,8 +216,49 @@ onUnmounted(stopPolling)
             <p class="text-sm">点击左侧任意方案卡片，右侧将展示远程浏览器的实时画面</p>
           </div>
 
+          <CDPViewer
+            v-if="selected?.viewerType === 'cdp-screenshot'"
+            ref="viewerRef"
+            :key="selected.id"
+            :ws-url="selected.url"
+            :initial-url="urlInput"
+            @url-change="(url: string) => urlInput = url"
+          />
+          <MJPEGViewer
+            v-else-if="selected?.viewerType === 'mjpeg'"
+            ref="viewerRef"
+            :key="selected.id"
+            :service-url="selected.url"
+            :initial-url="urlInput"
+            @url-change="(url: string) => urlInput = url"
+          />
+          <DOMDiffViewer
+            v-else-if="selected?.viewerType === 'dom-diff'"
+            ref="viewerRef"
+            :key="selected.id"
+            :ws-url="selected.url"
+            :initial-url="urlInput"
+            @url-change="(url: string) => urlInput = url"
+          />
+          <RrwebViewer
+            v-else-if="selected?.viewerType === 'rrweb'"
+            ref="viewerRef"
+            :key="selected.id"
+            :ws-url="selected.url"
+            :initial-url="urlInput"
+            @url-change="(url: string) => urlInput = url"
+          />
+          <NoVNCViewer
+            v-else-if="selected?.viewerType === 'novnc'"
+            ref="viewerRef"
+            :key="selected.id"
+            :ws-url="selected.url"
+            :initial-url="urlInput"
+            :solution-id="selected.id"
+            @url-change="(url: string) => urlInput = url"
+          />
           <iframe
-            v-if="selected"
+            v-else-if="selected"
             :key="selected.id"
             :src="selected.url"
             class="absolute inset-0 w-full h-full border-0"
