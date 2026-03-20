@@ -23,9 +23,26 @@ const viewOnly = ref(false)
 const clipboardText = ref('')
 const clipboardOpen = ref(false)
 const isFullscreen = ref(false)
+const totalRecv = ref(0)
+const totalSent = ref(0)
+const currentRate = ref(0)
 
 let rfb: RFB | null = null
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+let bytesWindow: number[] = []
+let rateTimer: ReturnType<typeof setInterval> | null = null
+
+function fmtBytes(b: number): string {
+  if (b < 1024) return b + ' B'
+  if (b < 1048576) return (b / 1024).toFixed(1) + ' KB'
+  return (b / 1048576).toFixed(1) + ' MB'
+}
+
+function fmtRate(bps: number): string {
+  if (bps < 1024) return bps.toFixed(0) + ' B/s'
+  if (bps < 1048576) return (bps / 1024).toFixed(1) + ' KB/s'
+  return (bps / 1048576).toFixed(1) + ' MB/s'
+}
 
 function clearContainer() {
   const el = vncContainer.value
@@ -43,12 +60,40 @@ function connectRFB() {
   const el = vncContainer.value
   if (!el) return
 
+  const OrigWS = window.WebSocket
+  const recvRef = totalRecv
+  const sentRef = totalSent
+  const bw = bytesWindow
+  ;(window as any).WebSocket = class extends OrigWS {
+    constructor(...args: any[]) {
+      super(...(args as [string, string?]))
+      this.addEventListener('message', (e: MessageEvent) => {
+        const size = e.data instanceof ArrayBuffer ? e.data.byteLength
+          : e.data instanceof Blob ? e.data.size
+          : new Blob([e.data]).size
+        recvRef.value += size
+        bw.push(size)
+      })
+      const origSend = this.send.bind(this)
+      this.send = (data: any) => {
+        const size = data instanceof ArrayBuffer ? data.byteLength
+          : data instanceof Blob ? data.size
+          : new Blob([data]).size
+        sentRef.value += size
+        origSend(data)
+      }
+    }
+  }
+
   try {
     rfb = new RFB(el, props.wsUrl)
   } catch {
+    window.WebSocket = OrigWS
     scheduleReconnect()
     return
   }
+
+  window.WebSocket = OrigWS
 
   rfb.scaleViewport = scaleMode.value === 'scale'
   rfb.resizeSession = scaleMode.value === 'resize'
@@ -87,6 +132,10 @@ function scheduleReconnect() {
 }
 
 async function navigate(url: string) {
+  totalRecv.value = 0
+  totalSent.value = 0
+  currentRate.value = 0
+  bytesWindow = []
   try {
     const resp = await fetch('/api/docker/navigate', {
       method: 'POST',
@@ -145,6 +194,10 @@ function onFullscreenChange() {
 defineExpose({ navigate })
 
 onMounted(() => {
+  rateTimer = setInterval(() => {
+    currentRate.value = bytesWindow.reduce((a, b) => a + b, 0)
+    bytesWindow = []
+  }, 1000)
   connectRFB()
   if (props.initialUrl) navigate(props.initialUrl)
   document.addEventListener('fullscreenchange', onFullscreenChange)
@@ -153,6 +206,7 @@ onMounted(() => {
 onUnmounted(() => {
   if (rfb) { try { rfb.disconnect() } catch { /* noop */ } rfb = null }
   if (reconnectTimer) clearTimeout(reconnectTimer)
+  if (rateTimer) clearInterval(rateTimer)
   document.removeEventListener('fullscreenchange', onFullscreenChange)
 })
 
@@ -177,7 +231,12 @@ watch(compressionLevel, applyQuality)
 
       <span v-if="desktopName" class="text-[var(--color-text-dim)] shrink-0 truncate max-w-32" :title="desktopName">{{ desktopName }}</span>
 
-      <!-- Divider -->
+      <span class="w-px h-3.5 bg-[var(--color-border)] shrink-0" />
+
+      <span class="text-[var(--color-text-dim)] shrink-0">↓ {{ fmtBytes(totalRecv) }}</span>
+      <span class="text-[var(--color-text-dim)] shrink-0">↑ {{ fmtBytes(totalSent) }}</span>
+      <span class="text-[var(--color-text-dim)] shrink-0">{{ fmtRate(currentRate) }}</span>
+
       <span class="w-px h-3.5 bg-[var(--color-border)] shrink-0" />
 
       <!-- Clipboard -->
