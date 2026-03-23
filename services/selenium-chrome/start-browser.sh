@@ -3,6 +3,7 @@ sleep 3
 export DISPLAY=:99.0
 exec /usr/lib/chromium/chromium \
   --no-sandbox \
+  --test-type \
   --disable-gpu \
   --disable-dev-shm-usage \
   --disable-blink-features=AutomationControlled \
