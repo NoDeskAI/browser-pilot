@@ -143,7 +143,7 @@ onUnmounted(stopPolling)
             : 'bg-[var(--color-surface-hover)] text-[var(--color-text-dim)] border-[var(--color-border)] hover:text-[var(--color-text)]'"
         >
           <Sparkles class="w-3.5 h-3.5" />
-          AI 助手
+          NoDeskPane Agent
         </button>
       </div>
     </header>

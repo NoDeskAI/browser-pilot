@@ -494,7 +494,7 @@ onBeforeUnmount(() => {
     <div class="shrink-0 flex items-center justify-between px-3 py-2.5 border-b border-[var(--color-border)]">
       <div class="flex items-center gap-2">
         <Sparkles class="w-4 h-4 text-[var(--color-accent)]" />
-        <span class="text-sm font-semibold">AI Agent</span>
+        <span class="text-sm font-semibold">NoDeskPane Agent</span>
         <span class="text-[9px] px-1.5 py-0.5 rounded-full bg-[var(--color-accent)]/15 text-[var(--color-accent)]">ReAct</span>
       </div>
       <div class="flex items-center gap-1">
@@ -577,7 +577,7 @@ onBeforeUnmount(() => {
       <div v-if="messages.length === 0" class="h-full flex flex-col items-center justify-center text-[var(--color-text-dim)]">
         <Sparkles class="w-10 h-10 mb-3 opacity-20" :stroke-width="1" />
         <p class="text-xs text-center leading-relaxed">
-          ReAct Agent 已就绪<br />
+          NoDeskPane Agent 已就绪<br />
           <span class="text-[10px] opacity-60">可操控远程浏览器、管理 Docker 服务</span>
         </p>
       </div>
