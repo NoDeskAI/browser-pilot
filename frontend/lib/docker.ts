@@ -9,6 +9,10 @@ export const PROJECT_ROOT = path.resolve(__dirname, '../..')
 
 export const SERVICE_MAP: Record<string, string[]> = {
   selenium: ['selenium'],
+  'cdp-screenshot': ['cdp-proxy'],
+  mjpeg: ['mjpeg-stream'],
+  'dom-diff': ['dom-diff-proxy'],
+  rrweb: ['rrweb-proxy'],
 }
 
 export function log(tag: string, msg: string, ...args: unknown[]) {

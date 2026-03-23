@@ -18,5 +18,48 @@ services:
       - "7900:7900"
     environment:
       SE_VNC_NO_PASSWORD: 1
-      SE_SCREEN_WIDTH: 1366
-      SE_SCREEN_HEIGHT: 768
+      SE_SCREEN_WIDTH: 1280
+      SE_SCREEN_HEIGHT: 800
+      SE_SCREEN_DEPTH: 24
+
+  cdp-proxy:
+    build: ./services/cdp-proxy
+    restart: unless-stopped
+    shm_size: "2gb"
+    ports:
+      - "3100:3100"
+    environment:
+      PORT: 3100
+      FPS: 5
+      PUPPETEER_EXECUTABLE_PATH: /usr/bin/chromium
+
+  mjpeg-stream:
+    build: ./services/mjpeg-stream
+    restart: unless-stopped
+    shm_size: "2gb"
+    ports:
+      - "3200:3200"
+    environment:
+      PORT: 3200
+      FPS: 5
+      PUPPETEER_EXECUTABLE_PATH: /usr/bin/chromium
+
+  dom-diff-proxy:
+    build: ./services/dom-diff-proxy
+    restart: unless-stopped
+    shm_size: "2gb"
+    ports:
+      - "3300:3300"
+    environment:
+      PORT: 3300
+      PUPPETEER_EXECUTABLE_PATH: /usr/bin/chromium
+
+  rrweb-proxy:
+    build: ./services/rrweb-proxy
+    restart: unless-stopped
+    shm_size: "2gb"
+    ports:
+      - "3400:3400"
+    environment:
+      PORT: 3400
+      PUPPETEER_EXECUTABLE_PATH: /usr/bin/chromium
