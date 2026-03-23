@@ -169,7 +169,7 @@ export function dockerApiPlugin(): Plugin {
             const target = XDOTOOL_TARGETS[body.solutionId]
             if (!target) return json(res, 400, { ok: false, error: `未知方案: ${body.solutionId}` })
             const safeLang = (body.lang || 'zh-CN').replace(/[^a-zA-Z0-9_-]/g, '')
-            const cmd = `echo "${safeLang}" > /tmp/browser-lang && pkill -f chromium || true`
+            const cmd = `echo "${safeLang}" > /tmp/browser-lang && pkill -x chromium || true`
             try {
               await dockerCompose(`exec -T ${target.service} bash -c '${cmd}'`, 10_000)
               return json(res, 200, { ok: true, lang: safeLang })

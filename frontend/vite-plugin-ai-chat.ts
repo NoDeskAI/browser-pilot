@@ -998,7 +998,6 @@ export function aiChatPlugin(): Plugin {
         const abortRequest = () => {
           if (!requestAbort.signal.aborted) requestAbort.abort()
         }
-        req.on('close', abortRequest)
         res.on('close', abortRequest)
         activeRequestSignal = requestAbort.signal
 
@@ -1114,7 +1113,6 @@ export function aiChatPlugin(): Plugin {
             try { sseWrite(res, { type: 'error', message: e.message }); res.end() } catch {}
           }
         } finally {
-          req.off('close', abortRequest)
           res.off('close', abortRequest)
           if (activeRequestSignal === requestAbort.signal) {
             activeRequestSignal = null
