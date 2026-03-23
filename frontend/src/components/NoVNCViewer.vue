@@ -64,26 +64,27 @@ function connectRFB() {
   const recvRef = totalRecv
   const sentRef = totalSent
   const bw = bytesWindow
-  ;(window as any).WebSocket = class extends OrigWS {
-    constructor(...args: any[]) {
-      super(...(args as [string, string?]))
-      this.addEventListener('message', (e: MessageEvent) => {
+  ;(window as any).WebSocket = new Proxy(OrigWS, {
+    construct(target, args) {
+      const ws = new target(...(args as [string, string?]))
+      ws.addEventListener('message', (e: MessageEvent) => {
         const size = e.data instanceof ArrayBuffer ? e.data.byteLength
           : e.data instanceof Blob ? e.data.size
           : new Blob([e.data]).size
         recvRef.value += size
         bw.push(size)
       })
-      const origSend = this.send.bind(this)
-      this.send = (data: any) => {
+      const origSend = ws.send.bind(ws)
+      ws.send = (data: any) => {
         const size = data instanceof ArrayBuffer ? data.byteLength
           : data instanceof Blob ? data.size
           : new Blob([data]).size
         sentRef.value += size
         origSend(data)
       }
-    }
-  }
+      return ws
+    },
+  })
 
   try {
     rfb = new RFB(el, props.wsUrl)
