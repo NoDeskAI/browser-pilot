@@ -2,6 +2,7 @@
 import { ref, onMounted, onUnmounted } from 'vue'
 import { solutions, type Solution } from './solutions'
 import { useDocker } from './composables/useDocker'
+import { Play, Loader, Square, Sparkles, ChevronLeft, ChevronRight, Monitor } from 'lucide-vue-next'
 import SolutionCard from './components/SolutionCard.vue'
 import AiChat from './components/AiChat.vue'
 import DOMDiffViewer from './components/DOMDiffViewer.vue'
@@ -121,8 +122,8 @@ onUnmounted(stopPolling)
           :disabled="docker.globalLoading"
           class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-green-600/20 text-green-400 border border-green-600/30 hover:bg-green-600/30 transition-colors disabled:opacity-50 disabled:cursor-wait"
         >
-          <svg v-if="!docker.globalLoading" class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20"><path d="M6.3 2.841A1.5 1.5 0 004 4.11V15.89a1.5 1.5 0 002.3 1.269l9.344-5.89a1.5 1.5 0 000-2.538L6.3 2.84z"/></svg>
-          <svg v-else class="w-3.5 h-3.5 animate-spin" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 2v4m0 12v4m-7.07-3.93l2.83-2.83m8.49-8.49l2.83-2.83M2 12h4m12 0h4m-3.93 7.07l-2.83-2.83M7.76 7.76L4.93 4.93" /></svg>
+          <Play v-if="!docker.globalLoading" class="w-3.5 h-3.5" fill="currentColor" :stroke-width="0" />
+          <Loader v-else class="w-3.5 h-3.5 animate-spin" />
           全部启动
         </button>
         <button
@@ -130,7 +131,7 @@ onUnmounted(stopPolling)
           :disabled="docker.globalLoading"
           class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-red-600/20 text-red-400 border border-red-600/30 hover:bg-red-600/30 transition-colors disabled:opacity-50 disabled:cursor-wait"
         >
-          <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20"><rect x="4" y="4" width="12" height="12" rx="1.5"/></svg>
+          <Square class="w-3.5 h-3.5" fill="currentColor" :stroke-width="0" />
           全部停止
         </button>
         <div class="w-px h-5 bg-[var(--color-border)]" />
@@ -141,9 +142,7 @@ onUnmounted(stopPolling)
             ? 'bg-[var(--color-accent)]/20 text-[var(--color-accent)] border-[var(--color-accent)]/30 hover:bg-[var(--color-accent)]/30'
             : 'bg-[var(--color-surface-hover)] text-[var(--color-text-dim)] border-[var(--color-border)] hover:text-[var(--color-text)]'"
         >
-          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z" />
-          </svg>
+          <Sparkles class="w-3.5 h-3.5" />
           AI 助手
         </button>
       </div>
@@ -188,10 +187,8 @@ onUnmounted(stopPolling)
             class="shrink-0 w-6 h-6 flex items-center justify-center rounded text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-hover)] transition-colors"
             :title="sidebarOpen ? '收起侧边栏' : '展开侧边栏'"
           >
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-              <path v-if="sidebarOpen" stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
-              <path v-else stroke-linecap="round" stroke-linejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
-            </svg>
+            <ChevronLeft v-if="sidebarOpen" class="w-4 h-4" />
+            <ChevronRight v-else class="w-4 h-4" />
           </button>
           <div
             class="w-2.5 h-2.5 rounded-full shrink-0"
@@ -223,19 +220,14 @@ onUnmounted(stopPolling)
             class="absolute top-3 left-3 z-10 w-7 h-7 flex items-center justify-center rounded-lg bg-[var(--color-surface)] border border-[var(--color-border)] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:border-[var(--color-accent)]/50 transition-colors"
             title="展开侧边栏"
           >
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
-            </svg>
+            <ChevronRight class="w-4 h-4" />
           </button>
           <!-- Empty state -->
           <div
             v-if="!selected"
             class="absolute inset-0 flex flex-col items-center justify-center text-[var(--color-text-dim)]"
           >
-            <svg class="w-16 h-16 mb-4 opacity-20" fill="none" stroke="currentColor" stroke-width="1" viewBox="0 0 24 24">
-              <rect x="2" y="3" width="20" height="14" rx="2" />
-              <path d="M8 21h8M12 17v4" />
-            </svg>
+            <Monitor class="w-16 h-16 mb-4 opacity-20" :stroke-width="1" />
             <p class="text-lg mb-1">选择一个方案开始预览</p>
             <p class="text-sm">点击左侧任意方案卡片，右侧将展示远程浏览器的实时画面</p>
           </div>

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, nextTick, onMounted, onBeforeUnmount, computed, watch } from 'vue'
 import { marked } from 'marked'
+import { Sparkles, Trash2, Settings, X, Loader, ChevronDown, Check, ChevronRight, Square, Send } from 'lucide-vue-next'
 
 marked.setOptions({ breaks: true })
 
@@ -181,12 +182,12 @@ function startBufferDrain() {
       stopBufferDrain()
       return
     }
-    const charsPerTick = Math.max(2, Math.ceil(textBuffer.length / 6))
+    const charsPerTick = Math.max(1, Math.ceil(textBuffer.length / 8))
     const chunk = textBuffer.slice(0, charsPerTick)
     textBuffer = textBuffer.slice(charsPerTick)
     bufferTarget.content = (bufferTarget.content || '') + chunk
     scrollToBottom()
-  }, 30)
+  }, 40)
 }
 
 function stopBufferDrain() {
@@ -495,18 +496,16 @@ onBeforeUnmount(() => {
     <!-- Header -->
     <div class="shrink-0 flex items-center justify-between px-3 py-2.5 border-b border-[var(--color-border)]">
       <div class="flex items-center gap-2">
-        <svg class="w-4 h-4 text-[var(--color-accent)]" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z" />
-        </svg>
+        <Sparkles class="w-4 h-4 text-[var(--color-accent)]" />
         <span class="text-sm font-semibold">AI Agent</span>
         <span class="text-[9px] px-1.5 py-0.5 rounded-full bg-[var(--color-accent)]/15 text-[var(--color-accent)]">ReAct</span>
       </div>
       <div class="flex items-center gap-1">
         <button @click="clearChat" class="w-7 h-7 flex items-center justify-center rounded-md hover:bg-[var(--color-surface-hover)] text-[var(--color-text-dim)] transition-colors" title="清除对话">
-          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" /></svg>
+          <Trash2 class="w-3.5 h-3.5" />
         </button>
         <button @click="configOpen = !configOpen" class="w-7 h-7 flex items-center justify-center rounded-md hover:bg-[var(--color-surface-hover)] text-[var(--color-text-dim)] transition-colors" :class="configOpen ? 'bg-[var(--color-surface-hover)] text-[var(--color-accent)]' : ''" title="API 设置">
-          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.325.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.431l-1.003.827c-.293.241-.438.613-.43.992a7.723 7.723 0 010 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.955.26 1.43l-1.298 2.247a1.125 1.125 0 01-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.47 6.47 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.281c-.09.543-.56.94-1.11.94h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.431l1.004-.827c.292-.24.437-.613.43-.991a6.932 6.932 0 010-.255c.007-.38-.138-.751-.43-.992l-1.004-.827a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.28z" /><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+          <Settings class="w-3.5 h-3.5" />
         </button>
       </div>
     </div>
@@ -518,7 +517,7 @@ onBeforeUnmount(() => {
           <div class="flex items-center justify-between px-4 py-3 border-b border-[var(--color-border)]">
             <span class="text-sm font-semibold text-[var(--color-text)]">API 设置</span>
             <button @click="configOpen = false" class="w-6 h-6 flex items-center justify-center rounded-md hover:bg-[var(--color-surface-hover)] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors">
-              <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
+              <X class="w-4 h-4" />
             </button>
           </div>
           <div class="p-4 space-y-3">
@@ -552,8 +551,8 @@ onBeforeUnmount(() => {
                   class="w-full px-2.5 py-1.5 pr-7 rounded-md bg-[var(--color-bg)] border border-[var(--color-border)] text-xs text-[var(--color-text)] outline-none focus:border-[var(--color-accent)] transition-colors"
                   placeholder="gpt-4o-mini" />
                 <button @click.stop="modelDropdownOpen = !modelDropdownOpen" class="absolute right-1 top-1/2 -translate-y-1/2 w-5 h-5 flex items-center justify-center rounded hover:bg-[var(--color-surface-hover)] text-[var(--color-text-dim)] transition-colors">
-                  <svg v-if="modelLoading" class="w-3 h-3 animate-spin" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M12 2v4m0 12v4m-7.07-3.93l2.83-2.83m8.49-8.49l2.83-2.83M2 12h4m12 0h4m-3.93 7.07l-2.83-2.83M7.76 7.76L4.93 4.93" /></svg>
-                  <svg v-else class="w-3 h-3 transition-transform" :class="modelDropdownOpen ? 'rotate-180' : ''" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" /></svg>
+                  <Loader v-if="modelLoading" class="w-3 h-3 animate-spin" />
+                  <ChevronDown v-else class="w-3 h-3 transition-transform" :class="modelDropdownOpen ? 'rotate-180' : ''" />
                 </button>
               </div>
               <div v-if="modelDropdownOpen" class="absolute z-10 left-0 right-0 mt-1 max-h-48 overflow-y-auto rounded-md bg-[var(--color-bg)] border border-[var(--color-border)] shadow-lg">
@@ -563,7 +562,7 @@ onBeforeUnmount(() => {
                     class="w-full text-left px-2.5 py-1.5 text-xs hover:bg-[var(--color-surface-hover)] transition-colors flex items-center justify-between"
                     :class="m === model ? 'text-[var(--color-accent)]' : 'text-[var(--color-text)]'">
                     <span class="truncate">{{ m }}</span>
-                    <svg v-if="m === model" class="w-3 h-3 shrink-0 ml-1" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5" /></svg>
+                    <Check v-if="m === model" class="w-3 h-3 shrink-0 ml-1" />
                   </button>
                 </template>
                 <div v-else class="px-2.5 py-2 text-[10px] text-[var(--color-text-dim)] text-center">手动输入模型名称</div>
@@ -579,9 +578,7 @@ onBeforeUnmount(() => {
     <div ref="chatContainer" class="flex-1 overflow-y-auto p-3 space-y-2">
       <!-- Empty state -->
       <div v-if="messages.length === 0" class="h-full flex flex-col items-center justify-center text-[var(--color-text-dim)]">
-        <svg class="w-10 h-10 mb-3 opacity-20" fill="none" stroke="currentColor" stroke-width="1" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z" />
-        </svg>
+        <Sparkles class="w-10 h-10 mb-3 opacity-20" :stroke-width="1" />
         <p class="text-xs text-center leading-relaxed">
           ReAct Agent 已就绪<br />
           <span class="text-[10px] opacity-60">可操控远程浏览器、管理 Docker 服务</span>
@@ -604,9 +601,9 @@ onBeforeUnmount(() => {
                   @click="toggleThink(`${i}-${si}`)"
                   class="w-full flex items-center gap-1.5 px-2.5 py-1.5 text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors select-none"
                 >
-                  <svg class="w-2.5 h-2.5 shrink-0 transition-transform" :class="(seg.unclosed || expandedThinks.has(`${i}-${si}`)) ? 'rotate-90' : ''" fill="currentColor" viewBox="0 0 20 20"><path d="M6 4l8 6-8 6V4z" /></svg>
+                  <ChevronRight class="w-2.5 h-2.5 shrink-0 transition-transform" :class="(seg.unclosed || expandedThinks.has(`${i}-${si}`)) ? 'rotate-90' : ''" />
                   <span class="font-medium">思考过程</span>
-                  <svg v-if="seg.unclosed" class="w-2.5 h-2.5 ml-auto animate-spin text-[var(--color-text-dim)]" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M12 2v4m0 12v4m-7.07-3.93l2.83-2.83m8.49-8.49l2.83-2.83M2 12h4m12 0h4m-3.93 7.07l-2.83-2.83M7.76 7.76L4.93 4.93" /></svg>
+                  <Loader v-if="seg.unclosed" class="w-2.5 h-2.5 ml-auto animate-spin text-[var(--color-text-dim)]" />
                 </button>
                 <div v-if="seg.unclosed || expandedThinks.has(`${i}-${si}`)" class="px-2.5 pb-2 border-t border-dashed border-[var(--color-border)]">
                   <p class="pt-1.5 text-[10px] leading-relaxed text-[var(--color-text-dim)] italic whitespace-pre-wrap break-words">{{ seg.content }}</p>
@@ -623,8 +620,8 @@ onBeforeUnmount(() => {
         <div v-else-if="item.block.type === 'tool_call'" class="flex justify-start">
           <div class="max-w-[90%] rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] overflow-hidden">
             <div class="flex items-center gap-1.5 px-2.5 py-1.5 border-b border-[var(--color-border)] bg-[var(--color-surface)]">
-              <svg v-if="item.block.loading" class="w-3 h-3 animate-spin text-[var(--color-accent)]" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M12 2v4m0 12v4m-7.07-3.93l2.83-2.83m8.49-8.49l2.83-2.83M2 12h4m12 0h4m-3.93 7.07l-2.83-2.83M7.76 7.76L4.93 4.93" /></svg>
-              <svg v-else class="w-3 h-3 text-green-400" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5" /></svg>
+              <Loader v-if="item.block.loading" class="w-3 h-3 animate-spin text-[var(--color-accent)]" />
+              <Check v-else class="w-3 h-3 text-green-400" />
               <span class="text-[10px] font-medium text-[var(--color-text)]">{{ TOOL_LABELS[item.block.toolName || ''] || item.block.toolName }}</span>
               <span class="text-[9px] text-[var(--color-text-dim)] ml-auto font-mono">{{ item.block.toolName }}</span>
             </div>
@@ -676,11 +673,11 @@ onBeforeUnmount(() => {
         <button v-if="loading && !input.trim()" @click="stopGeneration"
           class="shrink-0 w-8 h-8 flex items-center justify-center rounded-lg bg-red-500/80 text-white hover:bg-red-500 transition-colors"
           title="停止生成">
-          <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2" /></svg>
+          <Square class="w-3.5 h-3.5" fill="currentColor" :stroke-width="0" />
         </button>
         <button v-else @click="send" :disabled="!input.trim()"
           class="shrink-0 w-8 h-8 flex items-center justify-center rounded-lg bg-[var(--color-accent)] text-white hover:bg-[var(--color-accent-dim)] transition-colors disabled:opacity-40">
-          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5" /></svg>
+          <Send class="w-3.5 h-3.5" />
         </button>
       </div>
       <p v-if="!apiKey" class="mt-1.5 text-[10px] text-yellow-400/80">请先点击右上角齿轮配置 API Key</p>
