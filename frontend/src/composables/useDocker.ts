@@ -35,7 +35,7 @@ async function startAll() {
   state.globalLoading = true
   state.lastError = ''
   try {
-    const res = await fetch('/api/docker/start-all', { method: 'POST' })
+    const res = await fetch('/api/docker/start-all', { method: 'POST', signal: AbortSignal.timeout(180_000) })
     const data = await res.json()
     if (!data.ok) state.lastError = data.error || 'Start failed'
   } catch (e: any) {
@@ -50,7 +50,7 @@ async function stopAll() {
   state.globalLoading = true
   state.lastError = ''
   try {
-    const res = await fetch('/api/docker/stop-all', { method: 'POST' })
+    const res = await fetch('/api/docker/stop-all', { method: 'POST', signal: AbortSignal.timeout(30_000) })
     const data = await res.json()
     if (!data.ok) state.lastError = data.error || 'Stop failed'
   } catch (e: any) {
@@ -65,7 +65,7 @@ async function startService(solutionId: string) {
   state.loading[solutionId] = true
   state.lastError = ''
   try {
-    const res = await fetch(`/api/docker/start/${solutionId}`, { method: 'POST' })
+    const res = await fetch(`/api/docker/start/${solutionId}`, { method: 'POST', signal: AbortSignal.timeout(180_000) })
     const data = await res.json()
     if (!data.ok) state.lastError = data.error || 'Start failed'
   } catch (e: any) {
@@ -80,7 +80,7 @@ async function stopService(solutionId: string) {
   state.loading[solutionId] = true
   state.lastError = ''
   try {
-    const res = await fetch(`/api/docker/stop/${solutionId}`, { method: 'POST' })
+    const res = await fetch(`/api/docker/stop/${solutionId}`, { method: 'POST', signal: AbortSignal.timeout(30_000) })
     const data = await res.json()
     if (!data.ok) state.lastError = data.error || 'Stop failed'
   } catch (e: any) {
