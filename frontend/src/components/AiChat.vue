@@ -1,5 +1,12 @@
 <script setup lang="ts">
 import { ref, nextTick, onMounted, onBeforeUnmount, computed, watch } from 'vue'
+import { marked } from 'marked'
+
+marked.setOptions({ breaks: true })
+
+function renderMarkdown(content: string): string {
+  return marked.parse(content, { async: false }) as string
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -45,7 +52,11 @@ const loading = ref(false)
 const chatContainer = ref<HTMLElement>()
 const configOpen = ref(false)
 const previewImage = ref<string | null>(null)
+const expandedThinks = ref(new Set<string>())
 let currentAbort: AbortController | null = null
+let textBuffer = ''
+let bufferTarget: ChatBlock | null = null
+let bufferTimer: ReturnType<typeof setInterval> | null = null
 
 const emit = defineEmits<{
   (e: 'browser-active'): void
@@ -163,6 +174,37 @@ async function scrollToBottom() {
   }
 }
 
+function startBufferDrain() {
+  if (bufferTimer) return
+  bufferTimer = setInterval(() => {
+    if (!bufferTarget || !textBuffer) {
+      stopBufferDrain()
+      return
+    }
+    const charsPerTick = Math.max(2, Math.ceil(textBuffer.length / 6))
+    const chunk = textBuffer.slice(0, charsPerTick)
+    textBuffer = textBuffer.slice(charsPerTick)
+    bufferTarget.content = (bufferTarget.content || '') + chunk
+    scrollToBottom()
+  }, 30)
+}
+
+function stopBufferDrain() {
+  if (bufferTimer) {
+    clearInterval(bufferTimer)
+    bufferTimer = null
+  }
+}
+
+function flushBuffer() {
+  stopBufferDrain()
+  if (bufferTarget && textBuffer) {
+    bufferTarget.content = (bufferTarget.content || '') + textBuffer
+  }
+  textBuffer = ''
+  bufferTarget = null
+}
+
 function toolArgsSummary(args: Record<string, any> | undefined): string {
   if (!args) return ''
   const entries = Object.entries(args)
@@ -198,11 +240,46 @@ function toolResultSummary(result: any): string {
   return JSON.stringify(result).slice(0, 80)
 }
 
+function parseThinkSegments(content: string): { type: 'think' | 'text'; content: string; unclosed?: boolean }[] {
+  const segments: { type: 'think' | 'text'; content: string; unclosed?: boolean }[] = []
+  const regex = /<think>([\s\S]*?)<\/think>/g
+  let lastIndex = 0
+  let match
+  while ((match = regex.exec(content)) !== null) {
+    if (match.index > lastIndex) {
+      const text = content.slice(lastIndex, match.index).trim()
+      if (text) segments.push({ type: 'text', content: text })
+    }
+    const think = match[1].trim()
+    if (think) segments.push({ type: 'think', content: think })
+    lastIndex = regex.lastIndex
+  }
+  const remaining = content.slice(lastIndex)
+  const unclosedMatch = remaining.match(/^(\s*)<think>([\s\S]*)$/)
+  if (unclosedMatch) {
+    const thinkContent = unclosedMatch[2].trim()
+    if (thinkContent) segments.push({ type: 'think', content: thinkContent, unclosed: true })
+  } else {
+    const text = remaining.trim()
+    if (text) segments.push({ type: 'text', content: text })
+  }
+  return segments
+}
+
+function toggleThink(key: string) {
+  if (expandedThinks.value.has(key)) {
+    expandedThinks.value.delete(key)
+  } else {
+    expandedThinks.value.add(key)
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Send message
 // ---------------------------------------------------------------------------
 
 function stopGeneration() {
+  flushBuffer()
   if (currentAbort) {
     currentAbort.abort()
     currentAbort = null
@@ -339,10 +416,14 @@ async function send() {
             case 'text': {
               const lastBlock = blocks[blocks.length - 1]
               if (lastBlock?.type === 'text') {
-                lastBlock.content = (lastBlock.content || '') + evt.content
+                bufferTarget = lastBlock
               } else {
-                blocks.push({ type: 'text', content: evt.content })
+                const newBlock: ChatBlock = { type: 'text', content: '' }
+                blocks.push(newBlock)
+                bufferTarget = newBlock
               }
+              textBuffer += evt.content
+              startBufferDrain()
               break
             }
             case 'tool_call':
@@ -383,6 +464,7 @@ async function send() {
     if (e.name === 'AbortError') return
     assistantEntry.blocks.push({ type: 'error', content: `请求失败: ${e.message}` })
   } finally {
+    flushBuffer()
     if (currentAbort === abort) {
       currentAbort = null
       loading.value = false
@@ -402,6 +484,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  flushBuffer()
   document.removeEventListener('click', handleComboboxClickOutside)
   if (fetchDebounceTimer) clearTimeout(fetchDebounceTimer)
 })
@@ -512,10 +595,29 @@ onBeforeUnmount(() => {
           <div class="max-w-[85%] px-3 py-2 rounded-lg text-xs leading-relaxed whitespace-pre-wrap break-words bg-[var(--color-accent)] text-white rounded-br-sm">{{ item.block.content }}</div>
         </div>
 
-        <!-- Assistant text -->
-        <div v-else-if="item.role === 'assistant' && item.block.type === 'text'" class="flex justify-start">
-          <div class="max-w-[85%] px-3 py-2 rounded-lg text-xs leading-relaxed whitespace-pre-wrap break-words bg-[var(--color-bg)] text-[var(--color-text)] border border-[var(--color-border)] rounded-bl-sm">{{ item.block.content }}</div>
-        </div>
+        <!-- Assistant text (with think block support) -->
+        <template v-else-if="item.role === 'assistant' && item.block.type === 'text'">
+          <template v-for="(seg, si) in parseThinkSegments(item.block.content || '')" :key="`${i}-${si}`">
+            <div v-if="seg.type === 'think'" class="flex justify-start">
+              <div class="max-w-[85%] rounded-lg border border-dashed border-[var(--color-border)] bg-[var(--color-surface)] overflow-hidden rounded-bl-sm">
+                <button
+                  @click="toggleThink(`${i}-${si}`)"
+                  class="w-full flex items-center gap-1.5 px-2.5 py-1.5 text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors select-none"
+                >
+                  <svg class="w-2.5 h-2.5 shrink-0 transition-transform" :class="(seg.unclosed || expandedThinks.has(`${i}-${si}`)) ? 'rotate-90' : ''" fill="currentColor" viewBox="0 0 20 20"><path d="M6 4l8 6-8 6V4z" /></svg>
+                  <span class="font-medium">思考过程</span>
+                  <svg v-if="seg.unclosed" class="w-2.5 h-2.5 ml-auto animate-spin text-[var(--color-text-dim)]" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M12 2v4m0 12v4m-7.07-3.93l2.83-2.83m8.49-8.49l2.83-2.83M2 12h4m12 0h4m-3.93 7.07l-2.83-2.83M7.76 7.76L4.93 4.93" /></svg>
+                </button>
+                <div v-if="seg.unclosed || expandedThinks.has(`${i}-${si}`)" class="px-2.5 pb-2 border-t border-dashed border-[var(--color-border)]">
+                  <p class="pt-1.5 text-[10px] leading-relaxed text-[var(--color-text-dim)] italic whitespace-pre-wrap break-words">{{ seg.content }}</p>
+                </div>
+              </div>
+            </div>
+            <div v-else class="flex justify-start">
+              <div class="max-w-[85%] px-3 py-2 rounded-lg text-xs leading-relaxed break-words bg-[var(--color-bg)] text-[var(--color-text)] border border-[var(--color-border)] rounded-bl-sm markdown-body" v-html="renderMarkdown(seg.content)"></div>
+            </div>
+          </template>
+        </template>
 
         <!-- Tool call -->
         <div v-else-if="item.block.type === 'tool_call'" class="flex justify-start">
@@ -538,14 +640,12 @@ onBeforeUnmount(() => {
             <div v-if="item.block.result" class="px-2.5 py-1.5 rounded-md bg-[var(--color-bg)] border border-[var(--color-border)] text-[10px] text-[var(--color-text-dim)] font-mono">
               {{ toolResultSummary(item.block.result) }}
             </div>
-            <button
+            <img
               v-if="item.block.screenshot"
+              :src="'data:image/png;base64,' + item.block.screenshot"
               @click="previewImage = item.block.screenshot"
-              class="inline-flex items-center gap-1 px-2 py-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:border-[var(--color-accent)]/50 transition-colors"
-              type="button"
-            >
-              预览截图
-            </button>
+              class="max-w-[200px] rounded border border-[var(--color-border)] cursor-pointer hover:opacity-80 hover:border-[var(--color-accent)]/50 transition-all"
+            />
           </div>
         </div>
 
