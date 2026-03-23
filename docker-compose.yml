@@ -1,4 +1,14 @@
 services:
+  agent-backend:
+    build: ./backend
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      SELENIUM_BASE_URL: http://selenium:4444
+    depends_on:
+      - selenium
+
   selenium:
     build: ./services/selenium-chrome
     restart: unless-stopped

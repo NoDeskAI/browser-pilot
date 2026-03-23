@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, nextTick, onMounted, computed } from 'vue'
+import { ref, nextTick, onMounted, onUnmounted, computed } from 'vue'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -47,7 +47,10 @@ const input = ref('')
 const loading = ref(false)
 const chatContainer = ref<HTMLElement>()
 const configOpen = ref(false)
-let currentAbort: AbortController | null = null
+const wsConnected = ref(false)
+let ws: WebSocket | null = null
+let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+let reconnectDelay = 1000
 
 const emit = defineEmits<{
   (e: 'browser-active'): void
@@ -143,9 +146,8 @@ function toolResultSummary(result: any): string {
 // ---------------------------------------------------------------------------
 
 function stopGeneration() {
-  if (currentAbort) {
-    currentAbort.abort()
-    currentAbort = null
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ action: 'abort' }))
   }
   loading.value = false
   const last = messages.value[messages.value.length - 1]
@@ -244,117 +246,30 @@ async function send() {
     await nextTick()
   }
 
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    messages.value.push({ role: 'user', blocks: [{ type: 'text', content: text }] })
+    messages.value.push({ role: 'assistant', blocks: [{ type: 'error', content: '后端未连接，请稍候重试' }] })
+    input.value = ''
+    return
+  }
+
   messages.value.push({ role: 'user', blocks: [{ type: 'text', content: text }] })
   input.value = ''
   loading.value = true
   await scrollToBottom()
 
-  const abort = new AbortController()
-  currentAbort = abort
-
   const fullMessages = buildApiMessages()
 
-  const assistantMsg: ChatMessage = { role: 'assistant', blocks: [] }
-  messages.value.push(assistantMsg)
-  const aIdx = messages.value.length - 1
-  const assistantEntry = messages.value[aIdx]!
+  messages.value.push({ role: 'assistant', blocks: [] })
 
-  try {
-    const resp = await fetch('/api/ai/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        messages: fullMessages,
-        apiKey: apiKey.value,
-        baseUrl: baseUrl.value,
-        model: model.value,
-        apiType: apiType.value,
-      }),
-      signal: abort.signal,
-    })
-
-    if (!resp.ok) {
-      const err = await resp.json()
-      assistantEntry.blocks.push({ type: 'error', content: err.error || resp.statusText })
-      return
-    }
-
-    const reader = resp.body?.getReader()
-    if (!reader) return
-
-    const decoder = new TextDecoder()
-    let buffer = ''
-
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      buffer += decoder.decode(value, { stream: true })
-
-      const lines = buffer.split('\n')
-      buffer = lines.pop() || ''
-
-      for (const line of lines) {
-        if (!line.startsWith('data: ')) continue
-        const raw = line.slice(6).trim()
-        if (!raw || raw === '[DONE]') continue
-
-        try {
-          const evt = JSON.parse(raw)
-          const blocks = assistantEntry.blocks
-
-          switch (evt.type) {
-            case 'text': {
-              const lastBlock = blocks[blocks.length - 1]
-              if (lastBlock?.type === 'text') {
-                lastBlock.content = (lastBlock.content || '') + evt.content
-              } else {
-                blocks.push({ type: 'text', content: evt.content })
-              }
-              break
-            }
-            case 'tool_call':
-              blocks.push({
-                type: 'tool_call',
-                id: evt.id,
-                toolName: evt.name,
-                args: evt.args,
-                loading: true,
-              })
-              if (evt.name?.startsWith('browser_')) {
-                emit('browser-active')
-              }
-              break
-            case 'tool_result': {
-              const callBlock = blocks.find(b => b.type === 'tool_call' && b.id === evt.id)
-              if (callBlock) callBlock.loading = false
-              blocks.push({
-                type: 'tool_result',
-                id: evt.id,
-                toolName: evt.name,
-                result: evt.result,
-              })
-              break
-            }
-            case 'error':
-              blocks.push({ type: 'error', content: evt.message })
-              break
-            case 'done':
-              break
-          }
-          await scrollToBottom()
-        } catch {}
-      }
-    }
-  } catch (e: any) {
-    if (e.name === 'AbortError') return
-    assistantEntry.blocks.push({ type: 'error', content: `请求失败: ${e.message}` })
-  } finally {
-    if (currentAbort === abort) {
-      currentAbort = null
-      loading.value = false
-    }
-    await scrollToBottom()
-  }
+  ws.send(JSON.stringify({
+    action: 'chat',
+    messages: fullMessages,
+    apiKey: apiKey.value,
+    baseUrl: baseUrl.value,
+    model: model.value,
+    apiType: apiType.value,
+  }))
 }
 
 function handleEnter(e: KeyboardEvent) {
@@ -387,8 +302,95 @@ function clearChat() {
   messages.value = []
 }
 
+function connectWs() {
+  if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return
+
+  const url = `ws://${location.hostname}:8080/ws/agent`
+  ws = new WebSocket(url)
+
+  ws.onopen = () => {
+    wsConnected.value = true
+    reconnectDelay = 1000
+  }
+
+  ws.onmessage = async (event) => {
+    try {
+      const evt = JSON.parse(event.data)
+      const last = messages.value[messages.value.length - 1]
+      if (!last || last.role !== 'assistant') return
+      const blocks = last.blocks
+
+      switch (evt.type) {
+        case 'text': {
+          const lastBlock = blocks[blocks.length - 1]
+          if (lastBlock?.type === 'text') {
+            lastBlock.content = (lastBlock.content || '') + evt.content
+          } else {
+            blocks.push({ type: 'text', content: evt.content })
+          }
+          break
+        }
+        case 'tool_call':
+          blocks.push({
+            type: 'tool_call',
+            id: evt.id,
+            toolName: evt.name,
+            args: evt.args,
+            loading: true,
+          })
+          if (evt.name?.startsWith('browser_')) {
+            emit('browser-active')
+          }
+          break
+        case 'tool_result': {
+          const callBlock = blocks.find(b => b.type === 'tool_call' && b.id === evt.id)
+          if (callBlock) callBlock.loading = false
+          blocks.push({
+            type: 'tool_result',
+            id: evt.id,
+            toolName: evt.name,
+            result: evt.result,
+          })
+          break
+        }
+        case 'error':
+          blocks.push({ type: 'error', content: evt.message })
+          break
+        case 'done':
+          loading.value = false
+          break
+      }
+      await scrollToBottom()
+    } catch {}
+  }
+
+  ws.onclose = () => {
+    wsConnected.value = false
+    ws = null
+    scheduleReconnect()
+  }
+
+  ws.onerror = () => {
+    wsConnected.value = false
+  }
+}
+
+function scheduleReconnect() {
+  if (reconnectTimer) clearTimeout(reconnectTimer)
+  reconnectTimer = setTimeout(() => {
+    connectWs()
+    reconnectDelay = Math.min(reconnectDelay * 2, 16000)
+  }, reconnectDelay)
+}
+
 onMounted(() => {
   if (!apiKey.value) configOpen.value = true
+  connectWs()
+})
+
+onUnmounted(() => {
+  if (reconnectTimer) clearTimeout(reconnectTimer)
+  if (ws) ws.close()
 })
 </script>
 
@@ -402,6 +404,7 @@ onMounted(() => {
         </svg>
         <span class="text-sm font-semibold">AI Agent</span>
         <span class="text-[9px] px-1.5 py-0.5 rounded-full bg-[var(--color-accent)]/15 text-[var(--color-accent)]">ReAct</span>
+        <span class="w-1.5 h-1.5 rounded-full" :class="wsConnected ? 'bg-green-400' : 'bg-red-400 animate-pulse'" :title="wsConnected ? '后端已连接' : '后端断开'"></span>
       </div>
       <div class="flex items-center gap-1">
         <button @click="clearChat" class="w-7 h-7 flex items-center justify-center rounded-md hover:bg-[var(--color-surface-hover)] text-[var(--color-text-dim)] transition-colors" title="清除对话">
