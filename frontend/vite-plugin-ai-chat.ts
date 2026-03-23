@@ -1098,6 +1098,7 @@ export function aiChatPlugin(): Plugin {
                 log(`error: ${errMsg}`)
                 sseWrite(res, { type: 'error', message: errMsg })
                 break
+              }
               case 'finish':
                 sseWrite(res, { type: 'done' })
                 break
