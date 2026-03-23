@@ -1031,7 +1031,7 @@ export function aiChatPlugin(): Plugin {
             tools: allTools,
             stopWhen: stepCountIs(15),
             abortSignal: requestAbort.signal,
-            timeout: 30_000,
+            timeout: { stepMs: 30_000 },
           })
 
           res.statusCode = 200
