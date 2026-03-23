@@ -18,15 +18,19 @@ function log(msg: string, ...args: unknown[]) {
 
 let sessionId: string | null = null
 let sessionLock: Promise<string> | null = null
+let activeRequestSignal: AbortSignal | null = null
 
 async function wdFetch(urlPath: string, init?: RequestInit, timeoutMs = 30_000): Promise<any> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
   try {
+    const signal = activeRequestSignal
+      ? AbortSignal.any([controller.signal, activeRequestSignal])
+      : controller.signal
     const resp = await fetch(`${SELENIUM_BASE}${urlPath}`, {
       ...init,
       headers: { 'Content-Type': 'application/json', ...init?.headers },
-      signal: controller.signal,
+      signal,
     })
     const data: any = await resp.json()
     if (data.value?.error) {
@@ -38,6 +42,14 @@ async function wdFetch(urlPath: string, init?: RequestInit, timeoutMs = 30_000):
     throw e
   } finally {
     clearTimeout(timer)
+  }
+}
+
+async function captureScreenshot(sid: string): Promise<string | null> {
+  try {
+    return await wdFetch(`/session/${sid}/screenshot`, undefined, 10_000)
+  } catch {
+    return null
   }
 }
 
@@ -97,7 +109,18 @@ async function ensureSessionImpl(): Promise<string> {
         capabilities: {
           alwaysMatch: {
             browserName: 'chrome',
-            'goog:chromeOptions': { args: ['--no-sandbox', '--disable-dev-shm-usage'] },
+            'goog:chromeOptions': {
+              args: [
+                '--no-sandbox',
+                '--disable-dev-shm-usage',
+                '--disable-blink-features=AutomationControlled',
+                '--disable-infobars',
+                '--window-size=1920,1080',
+                '--lang=zh-CN',
+              ],
+              excludeSwitches: ['enable-automation'],
+              useAutomationExtension: false,
+            },
           },
         },
       }),
@@ -106,6 +129,17 @@ async function ensureSessionImpl(): Promise<string> {
     const data: any = await resp.json()
     sessionId = data.value.sessionId
     log(`WebDriver session created: ${sessionId}`)
+
+    // Set window rect for consistent viewport
+    try {
+      await wdFetch(`/session/${sessionId}/window/rect`, {
+        method: 'POST',
+        body: JSON.stringify({ width: 1920, height: 1080 }),
+      }, 5000)
+    } catch {}
+
+    // Inject stealth anti-detection scripts
+    await injectStealth(sessionId)
   } catch (e: any) {
     if (e.name === 'AbortError') throw new Error('WebDriver session creation timed out (15s). Selenium might be busy.')
     throw e
@@ -209,35 +243,326 @@ selenium
 const OBSERVE_SCRIPT = `
 return (function() {
   var result = { url: location.href, title: document.title, elements: [] };
-  var sel = 'a, button, input, textarea, select, [role="button"], [onclick], [tabindex]';
-  var els = document.querySelectorAll(sel);
-  for (var i = 0; i < Math.min(els.length, 80); i++) {
-    var el = els[i];
+  var selector = [
+    'a',
+    'button',
+    'input',
+    'textarea',
+    'select',
+    'option',
+    'summary',
+    '[role="button"]',
+    '[role="link"]',
+    '[role="menuitem"]',
+    '[role="option"]',
+    '[role="checkbox"]',
+    '[role="radio"]',
+    '[role="switch"]',
+    '[contenteditable=""]',
+    '[contenteditable="true"]',
+    '[onclick]',
+    '[tabindex]'
+  ].join(', ');
+
+  function isVisible(el) {
+    if (!el || el.nodeType !== Node.ELEMENT_NODE) return false;
+    var style = window.getComputedStyle(el);
+    if (!style || style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse') return false;
     var rect = el.getBoundingClientRect();
-    if (rect.width === 0 || rect.height === 0) continue;
-    var tag = el.tagName.toLowerCase();
-    var text = (el.textContent || '').trim().substring(0, 60);
-    var attrs = {};
-    if (el.id) attrs.id = el.id;
-    if (el.name) attrs.name = el.name;
-    if (el.type) attrs.type = el.type;
-    if (el.placeholder) attrs.placeholder = el.placeholder;
-    if (el.href) attrs.href = el.href.substring(0, 100);
-    if (el.ariaLabel) attrs.ariaLabel = el.ariaLabel;
+    return rect.width > 0 && rect.height > 0;
+  }
+
+  function attrs(el) {
+    var out = {};
+    if (el.id) out.id = el.id;
+    if (el.name) out.name = el.name;
+    if (el.type) out.type = el.type;
+    if (el.placeholder) out.placeholder = el.placeholder;
+    if ('value' in el && el.value !== undefined && el.value !== null && String(el.value).length) {
+      out.value = String(el.value).substring(0, 100);
+    }
+    var href = el.getAttribute && el.getAttribute('href');
+    if (href) out.href = href.substring(0, 100);
+    var ariaLabel = el.getAttribute && el.getAttribute('aria-label');
+    if (ariaLabel) out.ariaLabel = ariaLabel;
+    var role = el.getAttribute && el.getAttribute('role');
+    if (role) out.role = role;
+    if (el.disabled) out.disabled = true;
+    if (el.checked !== undefined && el.checked !== null) out.checked = !!el.checked;
+    return out;
+  }
+
+  function pushElement(el, ox, oy, scope) {
+    if (!isVisible(el)) return;
+    var rect = el.getBoundingClientRect();
+    var text = (el.innerText || el.textContent || '').trim().replace(/\s+/g, ' ').substring(0, 80);
+    if (!text && 'value' in el && el.value !== undefined && el.value !== null) {
+      text = String(el.value).trim().replace(/\s+/g, ' ').substring(0, 80);
+    }
     result.elements.push({
-      index: i,
-      tag: tag,
+      tag: el.tagName.toLowerCase(),
       text: text,
-      attrs: attrs,
-      x: Math.round(rect.x + rect.width / 2),
-      y: Math.round(rect.y + rect.height / 2)
+      attrs: attrs(el),
+      x: Math.round(ox + rect.left + rect.width / 2),
+      y: Math.round(oy + rect.top + rect.height / 2),
+      scope: scope
     });
   }
-  var bodyText = document.body ? document.body.innerText : '';
-  result.visibleText = bodyText.substring(0, 2000);
+
+  function walk(root, ox, oy, scope, seenRoots) {
+    if (!root || seenRoots.has(root)) return;
+    seenRoots.add(root);
+
+    var matches = [];
+    try { matches = Array.from(root.querySelectorAll(selector)); } catch (e) {}
+    for (var i = 0; i < matches.length; i++) {
+      pushElement(matches[i], ox, oy, scope);
+    }
+
+    var all = [];
+    try { all = Array.from(root.querySelectorAll('*')); } catch (e) {}
+    for (var j = 0; j < all.length; j++) {
+      var host = all[j];
+      if (host.shadowRoot) {
+        var hostRect = host.getBoundingClientRect();
+        walk(host.shadowRoot, ox + hostRect.left, oy + hostRect.top, scope + ' > shadow<' + host.tagName.toLowerCase() + '>', seenRoots);
+      }
+      if (host.tagName === 'IFRAME') {
+        try {
+          var doc = host.contentDocument;
+          if (doc && doc.documentElement) {
+            var frameRect = host.getBoundingClientRect();
+            walk(doc, ox + frameRect.left, oy + frameRect.top, scope + ' > iframe<' + (host.id || host.name || host.src || 'frame') + '>', seenRoots);
+          }
+        } catch (e) {}
+      }
+    }
+  }
+
+  walk(document, 0, 0, 'document', new Set());
+  result.visibleText = document.body ? document.body.innerText.substring(0, 2000) : '';
   return result;
 })();
 `
+
+const CLICK_ELEMENT_SCRIPT = `
+return (function(selector) {
+  function search(root) {
+    var found = null;
+    try {
+      if (root.querySelector) {
+        found = root.querySelector(selector);
+        if (found) return found;
+      }
+    } catch (e) {}
+
+    var all = [];
+    try { all = Array.from(root.querySelectorAll('*')); } catch (e) {}
+    for (var i = 0; i < all.length; i++) {
+      var el = all[i];
+      if (el.shadowRoot) {
+        var shadowFound = search(el.shadowRoot);
+        if (shadowFound) return shadowFound;
+      }
+      if (el.tagName === 'IFRAME') {
+        try {
+          var doc = el.contentDocument;
+          if (doc && doc.documentElement) {
+            var frameFound = search(doc);
+            if (frameFound) return frameFound;
+          }
+        } catch (e) {}
+      }
+    }
+    return null;
+  }
+
+  var el = search(document);
+  if (!el) return { found: false };
+  if (el.scrollIntoView) el.scrollIntoView({ block: 'center', inline: 'center' });
+  if (el.focus) el.focus();
+  if (el.click) el.click();
+  var rect = el.getBoundingClientRect();
+  return {
+    found: true,
+    tag: el.tagName.toLowerCase(),
+    text: (el.innerText || el.textContent || '').trim().replace(/\\s+/g, ' ').substring(0, 80),
+    x: Math.round(rect.left + rect.width / 2),
+    y: Math.round(rect.top + rect.height / 2)
+  };
+})(arguments[0]);
+`
+
+// ---------------------------------------------------------------------------
+// Stealth: anti-bot evasion script (injected via CDP on every new document)
+// ---------------------------------------------------------------------------
+
+const STEALTH_SCRIPT = `(function(){
+  'use strict';
+  function mn(fn,name){fn.toString=function(){return 'function '+name+'() { [native code] }'};return fn;}
+
+  // 1. navigator.webdriver → undefined
+  try{Object.defineProperty(Object.getPrototypeOf(navigator),'webdriver',{get:mn(function(){return undefined},'get webdriver'),configurable:true})}catch(e){}
+
+  // 2. Remove ChromeDriver cdc_ indicators
+  try{
+    Object.getOwnPropertyNames(window).forEach(function(p){if(/^cdc_/.test(p))try{delete window[p]}catch(e){}});
+    Object.getOwnPropertyNames(document).forEach(function(p){if(/^\\$cdc_/.test(p))try{Object.defineProperty(document,p,{get:function(){return undefined},configurable:true})}catch(e){}});
+  }catch(e){}
+
+  // 3. chrome.runtime / csi / loadTimes
+  try{
+    if(!window.chrome)window.chrome={};
+    if(!window.chrome.runtime){
+      window.chrome.runtime={
+        connect:mn(function(){return{onDisconnect:{addListener:function(){}},onMessage:{addListener:function(){}},postMessage:function(){}};},'connect'),
+        sendMessage:mn(function(a,b,c){if(typeof c==='function')c();},'sendMessage'),
+      };
+    }
+    if(!window.chrome.csi)window.chrome.csi=mn(function(){return{}},'csi');
+    if(!window.chrome.loadTimes)window.chrome.loadTimes=mn(function(){return{}},'loadTimes');
+  }catch(e){}
+
+  // 4. navigator.plugins (realistic Chrome set)
+  try{Object.defineProperty(navigator,'plugins',{get:mn(function(){
+    return{0:{name:'Chrome PDF Plugin',filename:'internal-pdf-viewer',description:'Portable Document Format',length:1},1:{name:'Chrome PDF Viewer',filename:'mhjfbmdgcfjbbpaeojofohoefgiehjai',description:'',length:1},2:{name:'Native Client',filename:'internal-nacl-plugin',description:'',length:2},length:3,item:function(i){return this[i]||null},namedItem:function(n){for(var i=0;i<3;i++)if(this[i]&&this[i].name===n)return this[i];return null},refresh:function(){}};
+  },'get plugins'),configurable:true})}catch(e){}
+
+  // 5. navigator.languages
+  try{Object.defineProperty(Object.getPrototypeOf(navigator),'languages',{get:mn(function(){return['zh-CN','zh','en-US','en']},'get languages'),configurable:true})}catch(e){}
+
+  // 6. navigator.hardwareConcurrency → 8
+  try{Object.defineProperty(Object.getPrototypeOf(navigator),'hardwareConcurrency',{get:mn(function(){return 8},'get hardwareConcurrency'),configurable:true})}catch(e){}
+
+  // 7. navigator.deviceMemory → 8
+  try{Object.defineProperty(Object.getPrototypeOf(navigator),'deviceMemory',{get:mn(function(){return 8},'get deviceMemory'),configurable:true})}catch(e){}
+
+  // 8. WebGL vendor / renderer → Intel
+  try{
+    ['WebGLRenderingContext','WebGL2RenderingContext'].forEach(function(c){
+      if(!window[c])return;var orig=window[c].prototype.getParameter;
+      window[c].prototype.getParameter=mn(function(p){
+        if(p===0x9245)return'Intel Inc.';if(p===0x9246)return'Intel Iris OpenGL Engine';return orig.call(this,p);
+      },'getParameter');
+    });
+  }catch(e){}
+
+  // 9. Permissions API
+  try{
+    var oq=navigator.permissions.query.bind(navigator.permissions);
+    navigator.permissions.query=mn(function(d){
+      if(d.name==='notifications')return Promise.resolve({state:'prompt',onchange:null});return oq(d);
+    },'query');
+  }catch(e){}
+
+  // 10. Screen dimensions → 1920×1080
+  try{
+    var sv={width:1920,height:1080,availWidth:1920,availHeight:1040,colorDepth:24,pixelDepth:24};
+    Object.keys(sv).forEach(function(k){Object.defineProperty(screen,k,{get:function(){return sv[k]},configurable:true})});
+  }catch(e){}
+
+  // 11. window.outerWidth / outerHeight match inner
+  try{
+    Object.defineProperty(window,'outerWidth',{get:function(){return window.innerWidth},configurable:true});
+    Object.defineProperty(window,'outerHeight',{get:function(){return window.innerHeight+85},configurable:true});
+  }catch(e){}
+
+  // 12. Canvas toDataURL fingerprint noise (1-bit alpha flip on single pixel)
+  try{
+    var origTDU=HTMLCanvasElement.prototype.toDataURL;
+    HTMLCanvasElement.prototype.toDataURL=mn(function(){
+      try{var c=this.getContext('2d');if(c&&this.width>0&&this.height>0){var d=c.getImageData(0,0,1,1);d.data[3]=d.data[3]^1;c.putImageData(d,0,0)}}catch(e){}
+      return origTDU.apply(this,arguments);
+    },'toDataURL');
+  }catch(e){}
+})()`
+
+async function injectStealth(sid: string): Promise<void> {
+  // 1. CDP: inject on every future page load
+  try {
+    await wdFetch(`/session/${sid}/goog/cdp/execute`, {
+      method: 'POST',
+      body: JSON.stringify({
+        cmd: 'Page.addScriptToEvaluateOnNewDocument',
+        params: { source: STEALTH_SCRIPT },
+      }),
+    }, 5000)
+    log('Stealth: addScriptToEvaluateOnNewDocument OK')
+  } catch (e: any) {
+    log(`Stealth: CDP inject failed (${e.message}), will rely on execute_script`)
+  }
+
+  // 2. Apply to current page immediately
+  try {
+    await wdFetch(`/session/${sid}/execute/sync`, {
+      method: 'POST',
+      body: JSON.stringify({ script: `return ${STEALTH_SCRIPT}`, args: [] }),
+    }, 5000)
+  } catch {}
+
+  // 3. Set timezone to Asia/Shanghai via CDP
+  try {
+    await wdFetch(`/session/${sid}/goog/cdp/execute`, {
+      method: 'POST',
+      body: JSON.stringify({
+        cmd: 'Emulation.setTimezoneOverride',
+        params: { timezoneId: 'Asia/Shanghai' },
+      }),
+    }, 5000)
+    log('Stealth: timezone → Asia/Shanghai')
+  } catch {}
+}
+
+// ---------------------------------------------------------------------------
+// Humanized input helpers
+// ---------------------------------------------------------------------------
+
+function humanKeyActions(text: string): any[] {
+  const actions: any[] = []
+  for (const ch of text) {
+    if (actions.length > 0) {
+      actions.push({ type: 'pause', duration: 30 + Math.floor(Math.random() * 90) })
+    }
+    actions.push({ type: 'keyDown', value: ch })
+    actions.push({ type: 'pause', duration: 8 + Math.floor(Math.random() * 25) })
+    actions.push({ type: 'keyUp', value: ch })
+  }
+  return actions
+}
+
+function humanClickActions(x: number, y: number): any[] {
+  const steps = 3 + Math.floor(Math.random() * 4)
+  const startX = x + Math.floor(Math.random() * 120 - 60)
+  const startY = y + Math.floor(Math.random() * 120 - 60)
+  const cpX = (startX + x) / 2 + Math.floor(Math.random() * 40 - 20)
+  const cpY = (startY + y) / 2 + Math.floor(Math.random() * 40 - 20)
+
+  const actions: any[] = []
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps
+    const px = (1 - t) * (1 - t) * startX + 2 * (1 - t) * t * cpX + t * t * x
+    const py = (1 - t) * (1 - t) * startY + 2 * (1 - t) * t * cpY + t * t * y
+    actions.push({
+      type: 'pointerMove',
+      duration: 15 + Math.floor(Math.random() * 35),
+      x: Math.max(0, Math.round(px)),
+      y: Math.max(0, Math.round(py)),
+      origin: 'viewport',
+    })
+  }
+  // final precise position (±1px natural jitter)
+  actions.push({
+    type: 'pointerMove', duration: 10,
+    x: x + Math.floor(Math.random() * 3 - 1),
+    y: y + Math.floor(Math.random() * 3 - 1),
+    origin: 'viewport',
+  })
+  actions.push({ type: 'pause', duration: 15 + Math.floor(Math.random() * 50) })
+  actions.push({ type: 'pointerDown', button: 0 })
+  actions.push({ type: 'pause', duration: 30 + Math.floor(Math.random() * 60) })
+  actions.push({ type: 'pointerUp', button: 0 })
+  return actions
+}
 
 async function quickObserve(sid: string): Promise<{ url: string; title: string; elementCount: number }> {
   try {
@@ -253,15 +578,13 @@ async function quickObserve(sid: string): Promise<{ url: string; title: string; 
 
 const browserTools = {
   browser_navigate: tool({
-    description: '在远程浏览器中导航到指定 URL',
+    description: '在远程浏览器当前标签页中导航到指定 URL',
     inputSchema: z.object({
       url: z.string().describe('要访问的完整 URL'),
     }),
     execute: async ({ url }) => {
       try {
         const sid = await ensureSession()
-        await switchToLatestTab(sid)
-        await closeOtherTabs(sid)
         await wdFetch(`/session/${sid}/url`, {
           method: 'POST',
           body: JSON.stringify({ url }),
@@ -275,13 +598,72 @@ const browserTools = {
     },
   }),
 
-  browser_observe: tool({
-    description: '观察当前页面：获取 URL、标题、可见文本、所有可交互元素（链接/按钮/输入框等）及其坐标。用这个来"看"页面。',
+  browser_list_tabs: tool({
+    description: '列出远程浏览器当前打开的所有标签页，返回每个标签页的 handle 和基本信息',
     inputSchema: z.object({}),
     execute: async () => {
       try {
         const sid = await ensureSession()
-        await switchToLatestTab(sid)
+        const handles: string[] = await wdFetch(`/session/${sid}/window/handles`, undefined, 5000)
+        const currentHandle = await wdFetch(`/session/${sid}/window`, undefined, 5000)
+        const tabs: { handle: string; url: string; title: string; active: boolean }[] = []
+        for (const h of handles) {
+          await wdFetch(`/session/${sid}/window`, { method: 'POST', body: JSON.stringify({ handle: h }) }, 5000)
+          const url = await wdFetch(`/session/${sid}/url`, undefined, 5000)
+          const title = await wdFetch(`/session/${sid}/title`, undefined, 5000)
+          tabs.push({ handle: h, url, title, active: h === currentHandle })
+        }
+        await wdFetch(`/session/${sid}/window`, { method: 'POST', body: JSON.stringify({ handle: currentHandle }) }, 5000)
+        return { ok: true, tabs, count: tabs.length }
+      } catch (e: any) {
+        return { ok: false, error: e.message }
+      }
+    },
+  }),
+
+  browser_switch_tab: tool({
+    description: '切换到指定标签页（通过 handle 或索引）。可选关闭当前标签页后再切换。',
+    inputSchema: z.object({
+      handle: z.string().optional().describe('目标标签页的 handle（从 browser_list_tabs 获取）'),
+      index: z.number().optional().describe('目标标签页索引（0 为第一个，-1 为最后一个）'),
+      closeCurrent: z.boolean().optional().default(false).describe('切换前是否关闭当前标签页'),
+    }),
+    execute: async ({ handle, index, closeCurrent }) => {
+      try {
+        const sid = await ensureSession()
+        const handles: string[] = await wdFetch(`/session/${sid}/window/handles`, undefined, 5000)
+
+        let targetHandle: string
+        if (handle) {
+          if (!handles.includes(handle)) return { ok: false, error: `Handle "${handle}" not found` }
+          targetHandle = handle
+        } else if (index !== undefined) {
+          const idx = index < 0 ? handles.length + index : index
+          if (idx < 0 || idx >= handles.length) return { ok: false, error: `Index ${index} out of range (${handles.length} tabs)` }
+          targetHandle = handles[idx]
+        } else {
+          return { ok: false, error: 'Must provide handle or index' }
+        }
+
+        if (closeCurrent) {
+          await wdFetch(`/session/${sid}/window`, { method: 'DELETE' }, 5000)
+        }
+
+        await wdFetch(`/session/${sid}/window`, { method: 'POST', body: JSON.stringify({ handle: targetHandle }) }, 5000)
+        const page = await quickObserve(sid)
+        return { ok: true, switchedTo: targetHandle, currentPage: page }
+      } catch (e: any) {
+        return { ok: false, error: e.message }
+      }
+    },
+  }),
+
+  browser_observe: tool({
+    description: '观察当前页面：获取 URL、标题、可见文本、所有可见的交互元素（含 shadow DOM 和同源 iframe）及其坐标。用这个来"看"页面。',
+    inputSchema: z.object({}),
+    execute: async () => {
+      try {
+        const sid = await ensureSession()
         const result = await wdFetch(`/session/${sid}/execute/sync`, {
           method: 'POST',
           body: JSON.stringify({ script: OBSERVE_SCRIPT, args: [] }),
@@ -294,7 +676,7 @@ const browserTools = {
   }),
 
   browser_click: tool({
-    description: '在远程浏览器页面上点击指定坐标（可从 browser_observe 获取元素坐标）',
+    description: '在远程浏览器页面上点击指定坐标（可从 browser_observe 获取元素坐标）。如果点击导致新标签页打开，会在返回值中提示，你需要用 browser_list_tabs + browser_switch_tab 来决定是否切换。',
     inputSchema: z.object({
       x: z.number().describe('点击的 X 坐标'),
       y: z.number().describe('点击的 Y 坐标'),
@@ -302,7 +684,6 @@ const browserTools = {
     execute: async ({ x, y }) => {
       try {
         const sid = await ensureSession()
-        await switchToLatestTab(sid)
         const handlesBefore: string[] = await wdFetch(`/session/${sid}/window/handles`, undefined, 5000) || []
         await wdFetch(`/session/${sid}/actions`, {
           method: 'POST',
@@ -310,23 +691,17 @@ const browserTools = {
             actions: [{
               type: 'pointer', id: 'mouse',
               parameters: { pointerType: 'mouse' },
-              actions: [
-                { type: 'pointerMove', duration: 0, x, y, origin: 'viewport' },
-                { type: 'pointerDown', button: 0 },
-                { type: 'pointerUp', button: 0 },
-              ],
+              actions: humanClickActions(x, y),
             }],
           }),
         })
         await wdFetch(`/session/${sid}/actions`, { method: 'DELETE' })
         await new Promise(r => setTimeout(r, 800))
         const handlesAfter: string[] = await wdFetch(`/session/${sid}/window/handles`, undefined, 5000) || []
-        if (handlesAfter.length > handlesBefore.length) {
-          log(`Click opened new tab, switching to it`)
-          await switchToLatestTab(sid)
-        }
+        const newTabOpened = handlesAfter.length > handlesBefore.length
+        if (newTabOpened) log(`Click opened new tab (now ${handlesAfter.length} tabs)`)
         const page = await quickObserve(sid)
-        return { ok: true, clickedAt: { x, y }, currentPage: page }
+        return { ok: true, clickedAt: { x, y }, newTabOpened, tabCount: handlesAfter.length, currentPage: page }
       } catch (e: any) {
         return { ok: false, error: e.message }
       }
@@ -334,29 +709,27 @@ const browserTools = {
   }),
 
   browser_click_element: tool({
-    description: '通过 CSS 选择器查找并点击元素（比坐标更精确）',
+    description: '通过 CSS 选择器查找并点击元素，支持 shadow DOM 和同源 iframe。如果点击导致新标签页打开，会在返回值中提示。',
     inputSchema: z.object({
       selector: z.string().describe('CSS 选择器，如 "#search-btn", "input[name=q]", "a.nav-link"'),
     }),
     execute: async ({ selector }) => {
       try {
         const sid = await ensureSession()
-        await switchToLatestTab(sid)
         const handlesBefore: string[] = await wdFetch(`/session/${sid}/window/handles`, undefined, 5000) || []
-        const element = await wdFetch(`/session/${sid}/element`, {
+        const clickResult = await wdFetch(`/session/${sid}/execute/sync`, {
           method: 'POST',
-          body: JSON.stringify({ using: 'css selector', value: selector }),
+          body: JSON.stringify({ script: CLICK_ELEMENT_SCRIPT, args: [selector] }),
         })
-        const elementId = element.ELEMENT || element[Object.keys(element)[0]]
-        await wdFetch(`/session/${sid}/element/${elementId}/click`, { method: 'POST', body: '{}' })
+        if (!clickResult?.found) {
+          throw new Error(`Element "${selector}" not found`)
+        }
         await new Promise(r => setTimeout(r, 800))
         const handlesAfter: string[] = await wdFetch(`/session/${sid}/window/handles`, undefined, 5000) || []
-        if (handlesAfter.length > handlesBefore.length) {
-          log(`Click opened new tab, switching to it`)
-          await switchToLatestTab(sid)
-        }
+        const newTabOpened = handlesAfter.length > handlesBefore.length
+        if (newTabOpened) log(`Click opened new tab (now ${handlesAfter.length} tabs)`)
         const page = await quickObserve(sid)
-        return { ok: true, selector, currentPage: page }
+        return { ok: true, selector, clicked: clickResult, newTabOpened, tabCount: handlesAfter.length, currentPage: page }
       } catch (e: any) {
         return { ok: false, error: e.message, hint: `Element "${selector}" not found or not clickable` }
       }
@@ -371,15 +744,10 @@ const browserTools = {
     execute: async ({ text }) => {
       try {
         const sid = await ensureSession()
-        const keyActions: any[] = []
-        for (const ch of text) {
-          keyActions.push({ type: 'keyDown', value: ch })
-          keyActions.push({ type: 'keyUp', value: ch })
-        }
         await wdFetch(`/session/${sid}/actions`, {
           method: 'POST',
           body: JSON.stringify({
-            actions: [{ type: 'key', id: 'keyboard', actions: keyActions }],
+            actions: [{ type: 'key', id: 'keyboard', actions: humanKeyActions(text) }],
           }),
         })
         await wdFetch(`/session/${sid}/actions`, { method: 'DELETE' })
@@ -496,7 +864,7 @@ const dockerTools = {
       if (!services) return { ok: false, error: `未知方案: ${solutionId}` }
       try {
         log(`start [${solutionId}]: ${services.join(', ')}`)
-        await dockerCompose(`up -d --build ${services.join(' ')}`, 300_000)
+        await dockerCompose(`up -d --build ${services.join(' ')}`, 300_000, activeRequestSignal || undefined)
         return { ok: true, solutionId, services }
       } catch (e: any) {
         return { ok: false, error: e.message?.slice(0, 300) }
@@ -514,7 +882,7 @@ const dockerTools = {
       if (!services) return { ok: false, error: `未知方案: ${solutionId}` }
       try {
         log(`stop [${solutionId}]: ${services.join(', ')}`)
-        await dockerCompose(`stop ${services.join(' ')}`, 60_000)
+        await dockerCompose(`stop ${services.join(' ')}`, 60_000, activeRequestSignal || undefined)
         return { ok: true, solutionId, services }
       } catch (e: any) {
         return { ok: false, error: e.message?.slice(0, 300) }
@@ -580,6 +948,14 @@ export function aiChatPlugin(): Plugin {
       server.middlewares.use(async (req, res, next) => {
         if (req.url !== '/api/ai/chat' || req.method !== 'POST') return next()
 
+        const requestAbort = new AbortController()
+        const abortRequest = () => {
+          if (!requestAbort.signal.aborted) requestAbort.abort()
+        }
+        req.on('close', abortRequest)
+        res.on('close', abortRequest)
+        activeRequestSignal = requestAbort.signal
+
         try {
           const body = JSON.parse(await readBody(req))
           const { messages, apiKey, baseUrl, model: modelName, apiType } = body
@@ -609,6 +985,7 @@ export function aiChatPlugin(): Plugin {
             messages: coreMessages,
             tools: allTools,
             stopWhen: stepCountIs(15),
+            abortSignal: requestAbort.signal,
           })
 
           res.statusCode = 200
@@ -638,15 +1015,26 @@ export function aiChatPlugin(): Plugin {
                 if (part.toolName === 'browser_observe') {
                   resultForFrontend = { ok, url: output?.url, title: output?.title, elementCount: output?.elements?.length }
                 } else if (output?.currentPage) {
-                  resultForFrontend = { ...output, currentPage: { url: output.currentPage.url, title: output.currentPage.title } }
+                  resultForFrontend = {
+                    ...output,
+                    currentPage: {
+                      url: output.currentPage.url,
+                      title: output.currentPage.title,
+                      elementCount: output.currentPage.elementCount,
+                    },
+                  }
                 } else {
                   resultForFrontend = output
                 }
+                const screenshot = part.toolName?.startsWith('browser_') && sessionId
+                  ? await captureScreenshot(sessionId)
+                  : null
                 sseWrite(res, {
                   type: 'tool_result',
                   id: part.toolCallId,
                   name: part.toolName,
                   result: resultForFrontend,
+                  screenshot,
                 })
                 break
               }
@@ -662,11 +1050,18 @@ export function aiChatPlugin(): Plugin {
 
           res.end()
         } catch (e: any) {
+          if (requestAbort.signal.aborted) return
           log(`FATAL: ${e.message}`)
           if (!res.headersSent) {
             jsonError(res, 500, e.message || 'Internal error')
           } else {
             try { sseWrite(res, { type: 'error', message: e.message }); res.end() } catch {}
+          }
+        } finally {
+          req.off('close', abortRequest)
+          res.off('close', abortRequest)
+          if (activeRequestSignal === requestAbort.signal) {
+            activeRequestSignal = null
           }
         }
       })

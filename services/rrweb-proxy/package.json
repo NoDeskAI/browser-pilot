@@ -1,0 +1,12 @@
+{
+  "name": "rrweb-proxy",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "puppeteer-core": "^24.0.0",
+    "ws": "^8.18.0"
+  }
+}
