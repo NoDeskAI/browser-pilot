@@ -25,6 +25,7 @@ const clipboardOpen = ref(false)
 const clipBtnRef = ref<HTMLElement>()
 const clipPanelRef = ref<HTMLElement>()
 const clipPos = ref({ top: 0, left: 0 })
+const clipLoading = ref(false)
 const isFullscreen = ref(false)
 const totalRecv = ref(0)
 const totalSent = ref(0)
@@ -155,10 +156,32 @@ function sendCtrlAltDel() {
   rfb?.sendCtrlAltDel()
 }
 
-function pasteClipboard() {
-  if (rfb && clipboardText.value) {
-    rfb.clipboardPasteFrom(clipboardText.value)
-  }
+async function pasteClipboard() {
+  if (!clipboardText.value || clipLoading.value) return
+  clipLoading.value = true
+  try {
+    await fetch('/api/docker/clipboard', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ solutionId: props.solutionId, action: 'paste', text: clipboardText.value }),
+    })
+  } catch { /* ignore */ }
+  clipLoading.value = false
+}
+
+async function getRemoteClipboard() {
+  if (clipLoading.value) return
+  clipLoading.value = true
+  try {
+    const resp = await fetch('/api/docker/clipboard', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ solutionId: props.solutionId, action: 'get' }),
+    })
+    const data = await resp.json()
+    if (data.ok && data.text != null) clipboardText.value = data.text
+  } catch { /* ignore */ }
+  clipLoading.value = false
 }
 
 function toggleClipboard() {
@@ -337,8 +360,14 @@ watch(compressionLevel, applyQuality)
         <div class="flex gap-1.5 mt-1.5">
           <button
             @click="pasteClipboard"
-            class="flex-1 px-2 py-1 rounded text-[10px] font-medium bg-lime-600/20 text-lime-400 border border-lime-600/30 hover:bg-lime-600/30 transition-colors"
-          >发送到远程</button>
+            :disabled="clipLoading || !clipboardText"
+            class="flex-1 px-2 py-1 rounded text-[10px] font-medium bg-lime-600/20 text-lime-400 border border-lime-600/30 hover:bg-lime-600/30 transition-colors disabled:opacity-40"
+          >{{ clipLoading ? '...' : '发送到远程' }}</button>
+          <button
+            @click="getRemoteClipboard"
+            :disabled="clipLoading"
+            class="flex-1 px-2 py-1 rounded text-[10px] font-medium bg-sky-600/20 text-sky-400 border border-sky-600/30 hover:bg-sky-600/30 transition-colors disabled:opacity-40"
+          >{{ clipLoading ? '...' : '从远程获取' }}</button>
           <button
             @click="clipboardOpen = false"
             class="px-2 py-1 rounded text-[10px] font-medium bg-[var(--color-surface-hover)] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors"

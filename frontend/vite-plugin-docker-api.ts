@@ -60,6 +60,35 @@ async function navigateInBrowser(solutionId: string, url: string): Promise<{ ok:
   return { ok: false, error: `未知方案: ${solutionId}` }
 }
 
+async function clipboardOp(solutionId: string, action: 'paste' | 'get', text?: string): Promise<{ ok: boolean; text?: string; error?: string }> {
+  const target = XDOTOOL_TARGETS[solutionId]
+  if (!target) return { ok: false, error: `未知方案: ${solutionId}` }
+
+  if (action === 'paste') {
+    if (!text) return { ok: false, error: '缺少 text 参数' }
+    const b64 = Buffer.from(text, 'utf-8').toString('base64')
+    const cmd = [
+      `export DISPLAY=${target.display}`,
+      `echo "${b64}" | base64 -d | xclip -selection clipboard`,
+      `xdotool key --clearmodifiers ctrl+v`,
+    ].join(' && ')
+    try {
+      await dockerCompose(`exec -T ${target.service} bash -c '${cmd}'`, 10_000)
+      return { ok: true }
+    } catch (e: any) {
+      return { ok: false, error: e.message?.slice(0, 300) || 'clipboard paste failed' }
+    }
+  }
+
+  const cmd = `export DISPLAY=${target.display} && xclip -selection clipboard -o 2>/dev/null || true`
+  try {
+    const { stdout } = await dockerCompose(`exec -T ${target.service} bash -c '${cmd}'`, 10_000)
+    return { ok: true, text: stdout }
+  } catch (e: any) {
+    return { ok: false, error: e.message?.slice(0, 300) || 'clipboard get failed' }
+  }
+}
+
 export function dockerApiPlugin(): Plugin {
   return {
     name: 'docker-api',
@@ -126,6 +155,12 @@ export function dockerApiPlugin(): Plugin {
           if (url === '/api/docker/navigate' && req.method === 'POST') {
             const body = JSON.parse(await readBody(req))
             const result = await navigateInBrowser(body.solutionId, body.url)
+            return json(res, result.ok ? 200 : 400, result)
+          }
+
+          if (url === '/api/docker/clipboard' && req.method === 'POST') {
+            const body = JSON.parse(await readBody(req))
+            const result = await clipboardOp(body.solutionId, body.action, body.text)
             return json(res, result.ok ? 200 : 400, result)
           }
 

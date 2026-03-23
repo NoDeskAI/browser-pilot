@@ -1,6 +1,7 @@
 FROM seleniarm/standalone-chromium:latest
 USER root
-RUN apt-get update && apt-get install -y xdotool && rm -rf /var/lib/apt/lists/*
+ENV LANG=C.UTF-8
+RUN apt-get update && apt-get install -y xdotool xclip && rm -rf /var/lib/apt/lists/*
 RUN mkdir -p /etc/chromium/policies/managed && \
     echo '{"RestoreOnStartup":4,"RestoreOnStartupURLs":["https://www.baidu.com"]}' \
     > /etc/chromium/policies/managed/default_homepage.json
