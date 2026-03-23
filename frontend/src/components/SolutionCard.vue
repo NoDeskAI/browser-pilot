@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useDocker } from '../composables/useDocker'
+import { Loader, Square, Play } from 'lucide-vue-next'
 import type { Solution } from '../solutions'
 
 const props = defineProps<{
@@ -79,18 +80,9 @@ function toggleService(e: Event) {
             : 'text-green-400 hover:bg-green-500/20'"
           :title="containerState === 'running' ? '停止' : '启动'"
         >
-          <!-- Spinner -->
-          <svg v-if="isLoading" class="w-3.5 h-3.5 animate-spin" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-            <path d="M12 2v4m0 12v4m-7.07-3.93l2.83-2.83m8.49-8.49l2.83-2.83M2 12h4m12 0h4m-3.93 7.07l-2.83-2.83M7.76 7.76L4.93 4.93" />
-          </svg>
-          <!-- Stop icon -->
-          <svg v-else-if="containerState === 'running'" class="w-3 h-3" fill="currentColor" viewBox="0 0 16 16">
-            <rect x="3" y="3" width="10" height="10" rx="1" />
-          </svg>
-          <!-- Play icon -->
-          <svg v-else class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
-            <path d="M6.3 2.841A1.5 1.5 0 004 4.11V15.89a1.5 1.5 0 002.3 1.269l9.344-5.89a1.5 1.5 0 000-2.538L6.3 2.84z"/>
-          </svg>
+          <Loader v-if="isLoading" class="w-3.5 h-3.5 animate-spin" />
+          <Square v-else-if="containerState === 'running'" class="w-3 h-3" fill="currentColor" :stroke-width="0" />
+          <Play v-else class="w-3.5 h-3.5" fill="currentColor" :stroke-width="0" />
         </button>
       </div>
     </div>
