@@ -495,7 +495,6 @@ onBeforeUnmount(() => {
       <div class="flex items-center gap-2">
         <Sparkles class="w-4 h-4 text-[var(--color-accent)]" />
         <span class="text-sm font-semibold">NoDeskPane Agent</span>
-        <span class="text-[9px] px-1.5 py-0.5 rounded-full bg-[var(--color-accent)]/15 text-[var(--color-accent)]">ReAct</span>
       </div>
       <div class="flex items-center gap-1">
         <button @click="clearChat" class="w-7 h-7 flex items-center justify-center rounded-md hover:bg-[var(--color-surface-hover)] text-[var(--color-text-dim)] transition-colors" title="清除对话">
