@@ -8,3 +8,5 @@ services:
       - "7900:7900"
     environment:
       SE_VNC_NO_PASSWORD: 1
+      SE_SCREEN_WIDTH: 1366
+      SE_SCREEN_HEIGHT: 768

@@ -26,7 +26,7 @@ export const solutions: Solution[] = [
     port: 7900,
     services: ['selenium'],
     viewerType: 'iframe',
-    url: 'http://localhost:7900/?autoconnect=1&resize=scale',
+    url: 'http://localhost:7900/?autoconnect=1&resize=scale&quality=6&compression=2&reconnect=true&reconnect_delay=2000',
     tags: ['Selenium', 'noVNC', 'Testing', 'Java'],
     color: '#84cc16',
     latency: '100-300ms',

@@ -25,11 +25,15 @@ const TOOL_LABELS: Record<string, string> = {
   browser_navigate: '导航',
   browser_observe: '观察页面',
   browser_click: '点击坐标',
+  browser_click_text: '点击文字',
   browser_click_element: '点击元素',
+  browser_triple_like: '一键三连',
   browser_type: '输入文本',
   browser_key: '按键',
   browser_scroll: '滚动',
   browser_get_page_info: '页面信息',
+  browser_list_tabs: '标签页列表',
+  browser_switch_tab: '切换标签页',
   docker_status: '容器状态',
   docker_start: '启动服务',
   docker_stop: '停止服务',
@@ -156,10 +160,14 @@ function stopGeneration() {
   }
 }
 
-const MAX_RECENT_TURNS = 3
+const MAX_RECENT_TURNS = 5
 
 function buildApiMessages() {
   const all = messages.value.filter(m => m.blocks.some(b => (b.type === 'text' && b.content) || b.type === 'tool_call'))
+
+  // Always keep the first user message as the original task
+  const firstUserMsg = all.find(m => m.role === 'user')
+  const firstUserText = firstUserMsg?.blocks.filter(b => b.type === 'text' && b.content).map(b => b.content!).join('\n') || ''
 
   const recentStart = Math.max(0, all.length - MAX_RECENT_TURNS * 2)
   const oldMsgs = all.slice(0, recentStart)
@@ -178,8 +186,11 @@ function buildApiMessages() {
         lines.push(`助手: ${tools ? `[调用了 ${tools}] ` : ''}${text.slice(0, 60)}`)
       }
     }
-    result.push({ role: 'user', content: `[之前的对话摘要]\n${lines.join('\n')}\n[摘要结束]` })
-    result.push({ role: 'assistant', content: '好的，我了解之前的对话内容。请告诉我下一步需要做什么。' })
+    const summaryWithTask = firstUserText
+      ? `[原始任务] ${firstUserText}\n\n[之前的对话摘要]\n${lines.join('\n')}\n[摘要结束]\n\n请继续执行原始任务中尚未完成的步骤。必须调用工具来操作，不要只用文字描述。`
+      : `[之前的对话摘要]\n${lines.join('\n')}\n[摘要结束]`
+    result.push({ role: 'user', content: summaryWithTask })
+    result.push({ role: 'assistant', content: '好的，我了解之前的对话和原始任务。我会继续执行，现在调用工具操作。' })
   }
 
   for (const m of recentMsgs) {
@@ -329,6 +340,12 @@ async function send() {
   }
 }
 
+function handleEnter(e: KeyboardEvent) {
+  if (e.isComposing) return
+  e.preventDefault()
+  send()
+}
+
 function clearChat() {
   messages.value = []
 }
@@ -470,7 +487,7 @@ onMounted(() => {
     <!-- Input -->
     <div class="shrink-0 p-3 border-t border-[var(--color-border)]">
       <div class="flex gap-2">
-        <textarea v-model="input" @keydown.enter.exact.prevent="send" rows="1"
+        <textarea v-model="input" @keydown.enter.exact="handleEnter" rows="1"
           class="flex-1 px-3 py-2 rounded-lg bg-[var(--color-bg)] border border-[var(--color-border)] text-xs text-[var(--color-text)] outline-none focus:border-[var(--color-accent)] transition-colors resize-none"
           :placeholder="loading ? '输入新指令可中断当前任务... (Enter 发送)' : '输入指令... (Enter 发送)'" />
         <button v-if="loading && !input.trim()" @click="stopGeneration"

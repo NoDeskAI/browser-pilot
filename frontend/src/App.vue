@@ -10,7 +10,8 @@ const urlInput = ref('https://www.baidu.com')
 const navigating = ref(false)
 const { state: docker, startAll, stopAll, startPolling, stopPolling } = useDocker()
 
-const sidebarWidth = ref(288)
+const sidebarCollapsed = ref(true)
+const sidebarWidth = ref(200)
 const isResizing = ref(false)
 const aiPanelWidth = ref(340)
 const isResizingAi = ref(false)
@@ -88,7 +89,12 @@ async function navigate() {
   navigating.value = false
 }
 
-onMounted(startPolling)
+onMounted(() => {
+  startPolling()
+  if (solutions.length === 1) {
+    selected.value = solutions[0]
+  }
+})
 onUnmounted(stopPolling)
 </script>
 
@@ -137,8 +143,9 @@ onUnmounted(stopPolling)
 
     <!-- Main content -->
     <div class="flex-1 flex overflow-hidden">
-      <!-- Left sidebar (resizable) -->
+      <!-- Left sidebar (collapsible) -->
       <aside
+        v-if="!sidebarCollapsed"
         class="shrink-0 border-r border-[var(--color-border)] bg-[var(--color-surface)] overflow-y-auto"
         :style="{ width: sidebarWidth + 'px' }"
       >
@@ -153,12 +160,14 @@ onUnmounted(stopPolling)
         </div>
       </aside>
 
-      <!-- Resize handle -->
+      <!-- Sidebar toggle + resize handle -->
       <div
-        class="shrink-0 w-1 cursor-col-resize hover:bg-[var(--color-accent)]/30 active:bg-[var(--color-accent)]/50 transition-colors"
-        :class="isResizing ? 'bg-[var(--color-accent)]/50' : ''"
-        @mousedown="startResize"
-      />
+        class="shrink-0 w-5 flex items-center justify-center border-r border-[var(--color-border)] bg-[var(--color-surface)] cursor-pointer hover:bg-[var(--color-surface-hover)] transition-colors"
+        @click="sidebarCollapsed = !sidebarCollapsed"
+        :title="sidebarCollapsed ? '展开侧边栏' : '折叠侧边栏'"
+      >
+        <svg class="w-3 h-3 text-[var(--color-text-dim)] transition-transform" :class="sidebarCollapsed ? '' : 'rotate-180'" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
+      </div>
 
       <!-- Right viewer container -->
       <main class="flex-1 flex flex-col overflow-hidden">
