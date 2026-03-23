@@ -1039,7 +1039,15 @@ export function aiChatPlugin(): Plugin {
           res.setHeader('Cache-Control', 'no-cache')
           res.setHeader('Connection', 'keep-alive')
 
+          let timedOut = false
+          let firstChunkTimer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
+            timedOut = true
+            log('TIMEOUT: 30s no data from upstream API, aborting')
+            requestAbort.abort()
+          }, 30_000)
+
           for await (const part of result.fullStream) {
+            if (firstChunkTimer) { clearTimeout(firstChunkTimer); firstChunkTimer = null }
             switch (part.type) {
               case 'text-delta':
                 sseWrite(res, { type: 'text', content: part.text })
@@ -1096,7 +1104,24 @@ export function aiChatPlugin(): Plugin {
 
           res.end()
         } catch (e: any) {
-          if (requestAbort.signal.aborted) return
+          if (firstChunkTimer) { clearTimeout(firstChunkTimer); firstChunkTimer = null }
+          const isAborted = requestAbort.signal.aborted
+          log(`stream error: aborted=${isAborted}, timedOut=${timedOut}, msg=${e.message?.slice(0, 200)}`)
+
+          if (isAborted && !timedOut) return
+
+          if (timedOut) {
+            try {
+              if (!res.headersSent) {
+                jsonError(res, 504, '上游 API 响应超时，请检查 API 配置和网络连接')
+              } else {
+                sseWrite(res, { type: 'error', message: '上游 API 响应超时' })
+                res.end()
+              }
+            } catch {}
+            return
+          }
+
           log(`FATAL: ${e.message}`)
           if (!res.headersSent) {
             jsonError(res, 500, e.message || 'Internal error')
@@ -1104,6 +1129,7 @@ export function aiChatPlugin(): Plugin {
             try { sseWrite(res, { type: 'error', message: e.message }); res.end() } catch {}
           }
         } finally {
+          if (firstChunkTimer) { clearTimeout(firstChunkTimer); firstChunkTimer = null }
           req.off('close', abortRequest)
           res.off('close', abortRequest)
           if (activeRequestSignal === requestAbort.signal) {
