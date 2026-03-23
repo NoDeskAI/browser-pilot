@@ -1002,6 +1002,9 @@ export function aiChatPlugin(): Plugin {
         res.on('close', abortRequest)
         activeRequestSignal = requestAbort.signal
 
+        let timedOut = false
+        let firstChunkTimer: ReturnType<typeof setTimeout> | null = null
+
         try {
           const body = JSON.parse(await readBody(req))
           const { messages, apiKey, baseUrl, model: modelName, apiType } = body
@@ -1039,8 +1042,7 @@ export function aiChatPlugin(): Plugin {
           res.setHeader('Cache-Control', 'no-cache')
           res.setHeader('Connection', 'keep-alive')
 
-          let timedOut = false
-          let firstChunkTimer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
+          firstChunkTimer = setTimeout(() => {
             timedOut = true
             log('TIMEOUT: 30s no data from upstream API, aborting')
             requestAbort.abort()
