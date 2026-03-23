@@ -35,6 +35,7 @@ let rfb: RFB | null = null
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 let bytesWindow: number[] = []
 let rateTimer: ReturnType<typeof setInterval> | null = null
+let suppressRfbClipboard = false
 
 function fmtBytes(b: number): string {
   if (b < 1024) return b + ' B'
@@ -117,7 +118,7 @@ function connectRFB() {
   })
 
   rfb.addEventListener('clipboard', (e: CustomEvent<{ text: string }>) => {
-    clipboardText.value = e.detail.text
+    if (!suppressRfbClipboard) clipboardText.value = e.detail.text
   })
 
   rfb.addEventListener('desktopname', (e: CustomEvent<{ name: string }>) => {
@@ -159,6 +160,7 @@ function sendCtrlAltDel() {
 async function pasteClipboard() {
   if (!clipboardText.value || clipLoading.value) return
   clipLoading.value = true
+  suppressRfbClipboard = true
   try {
     await fetch('/api/docker/clipboard', {
       method: 'POST',
@@ -167,6 +169,7 @@ async function pasteClipboard() {
     })
   } catch { /* ignore */ }
   clipLoading.value = false
+  setTimeout(() => { suppressRfbClipboard = false }, 3000)
 }
 
 async function getRemoteClipboard() {
