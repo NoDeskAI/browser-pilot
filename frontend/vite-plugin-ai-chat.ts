@@ -1090,9 +1090,13 @@ export function aiChatPlugin(): Plugin {
                 })
                 break
               }
-              case 'error':
-                log(`error: ${part.error}`)
-                sseWrite(res, { type: 'error', message: String(part.error) })
+              case 'error': {
+                const errMsg = part.error instanceof Error ? part.error.message
+                  : typeof part.error === 'object' && part.error !== null
+                    ? (part.error as any).message || JSON.stringify(part.error)
+                    : String(part.error)
+                log(`error: ${errMsg}`)
+                sseWrite(res, { type: 'error', message: errMsg })
                 break
               case 'finish':
                 sseWrite(res, { type: 'done' })
