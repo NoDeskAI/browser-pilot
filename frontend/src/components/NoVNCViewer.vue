@@ -27,6 +27,18 @@ const clipPanelRef = ref<HTMLElement>()
 const clipPos = ref({ top: 0, left: 0 })
 const clipLoading = ref(false)
 const isFullscreen = ref(false)
+const browserLang = ref('zh-CN')
+const langLoading = ref(false)
+const LANG_OPTIONS = [
+  { value: 'zh-CN', label: '中文' },
+  { value: 'en-US', label: 'English' },
+  { value: 'ja', label: '日本語' },
+  { value: 'ko', label: '한국어' },
+  { value: 'fr', label: 'Français' },
+  { value: 'de', label: 'Deutsch' },
+  { value: 'es', label: 'Español' },
+  { value: 'ru', label: 'Русский' },
+]
 const totalRecv = ref(0)
 const totalSent = ref(0)
 const currentRate = ref(0)
@@ -237,6 +249,21 @@ function onFullscreenChange() {
   isFullscreen.value = !!document.fullscreenElement
 }
 
+async function changeLang(lang: string) {
+  if (langLoading.value) return
+  langLoading.value = true
+  try {
+    const resp = await fetch('/api/docker/browser-lang', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ solutionId: props.solutionId, lang }),
+    })
+    const data = await resp.json()
+    if (data.ok) browserLang.value = lang
+  } catch { /* ignore */ }
+  langLoading.value = false
+}
+
 defineExpose({ navigate })
 
 onMounted(() => {
@@ -340,6 +367,17 @@ watch(compressionLevel, applyQuality)
         :title="isFullscreen ? '退出全屏' : '全屏'"
       >{{ isFullscreen ? '退出' : '全屏' }}</button>
 
+      <!-- Language -->
+      <select
+        :value="browserLang"
+        @change="changeLang(($event.target as HTMLSelectElement).value)"
+        :disabled="langLoading"
+        class="px-1 py-0.5 rounded text-[10px] bg-[var(--color-surface-hover)] text-[var(--color-text-dim)] border border-[var(--color-border)] outline-none cursor-pointer shrink-0 disabled:opacity-40"
+        title="浏览器语言（切换后会重启浏览器）"
+      >
+        <option v-for="opt in LANG_OPTIONS" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+      </select>
+
       <span class="ml-auto text-lime-400/60 text-[10px] shrink-0">noVNC Mode</span>
     </div>
 
@@ -382,6 +420,18 @@ watch(compressionLevel, applyQuality)
 </template>
 
 <style scoped>
+select {
+  -webkit-appearance: none;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='8' viewBox='0 0 8 8'%3E%3Cpath fill='%23888' d='M0 2l4 4 4-4z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 4px center;
+  padding-right: 14px;
+}
+select option {
+  background: #1a1a2e;
+  color: #e0e0e0;
+}
 input[type="range"] {
   -webkit-appearance: none;
   appearance: none;
