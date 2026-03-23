@@ -9,6 +9,10 @@ export const PROJECT_ROOT = path.resolve(__dirname, '../..')
 
 export const SERVICE_MAP: Record<string, string[]> = {
   selenium: ['selenium'],
+  'cdp-screenshot': ['cdp-proxy'],
+  mjpeg: ['mjpeg-stream'],
+  'dom-diff': ['dom-diff-proxy'],
+  rrweb: ['rrweb-proxy'],
 }
 
 export function log(tag: string, msg: string, ...args: unknown[]) {
@@ -16,13 +20,14 @@ export function log(tag: string, msg: string, ...args: unknown[]) {
   console.log(`[${tag} ${ts}] ${msg}`, ...args)
 }
 
-export async function dockerCompose(args: string, timeout = 120_000) {
+export async function dockerCompose(args: string, timeout = 120_000, signal?: AbortSignal) {
   log('docker', `exec: docker compose ${args}`)
   const start = Date.now()
   try {
     const result = await execAsync(`docker compose ${args}`, {
       cwd: PROJECT_ROOT,
       timeout,
+      signal,
     })
     log('docker', `done (${((Date.now() - start) / 1000).toFixed(1)}s): docker compose ${args.slice(0, 60)}`)
     return result
