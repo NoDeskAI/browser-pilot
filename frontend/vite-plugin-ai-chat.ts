@@ -45,14 +45,6 @@ async function wdFetch(urlPath: string, init?: RequestInit, timeoutMs = 30_000):
   }
 }
 
-async function captureScreenshot(sid: string): Promise<string | null> {
-  try {
-    return await wdFetch(`/session/${sid}/screenshot`, undefined, 10_000)
-  } catch {
-    return null
-  }
-}
-
 async function cleanupStaleSession(existingId: string) {
   try {
     await fetch(`${SELENIUM_BASE}/session/${existingId}`, { method: 'DELETE' })
@@ -278,6 +270,7 @@ const SYSTEM_PROMPT = `你是 NoDeskPane 的 AI 助手，通过调用工具操�
 - 不要尝试用坐标点击验证码图片
 - 不要尝试自动识别或输入验证码
 - 短信验证码同样等用户回复验证码数字后再操作
+- 用户提供验证码后，你必须执行完整流程：browser_click_element 点击输入框 → browser_type 输入验证码 → browser_click_text 点击确认/登录按钮。不要只输入不点击确认。
 
 ### 多步任务
 用户给出多步指令时（如"登录后搜索XX并三连"），逐步执行。每步：操作 → observe 确认 → 下一步。不要跳步或编造。
@@ -1319,39 +1312,42 @@ function parseStrayToolCall(text: string): { toolName: string; args: Record<stri
 
   const block = blockMatch[1]
 
-  // 1) Try parsing hash/JSON object style first
+  // 1) Try parsing JSON-like object
   const objMatch = block.match(/\{[\s\S]*\}/)
   if (objMatch) {
     try {
       let normalized = objMatch[0]
-      // Normalize single quotes to double quotes for JSON
       normalized = normalized.replace(/'/g, '"')
       normalized = normalized.replace(/=>/g, ':')
+      // Fix broken quotes like "parameters: {" → "parameters": {
+      normalized = normalized.replace(/"(\w+)\s*:\s*\{/g, '"$1": {')
       normalized = normalized.replace(/([,{]\s*)([A-Za-z_]\w*)\s*:/g, '$1"$2":')
       const parsedObj = JSON.parse(normalized) as any
-      const toolName = parsedObj?.tool
+      // Accept "tool", "name", or "function" as the tool name field
+      const toolName = parsedObj?.tool || parsedObj?.name || parsedObj?.function
       if (typeof toolName === 'string' && toolName in allTools) {
-        // Extract args: either from nested "args" field, or all other top-level fields
         let args: Record<string, any>
-        if (parsedObj.args && typeof parsedObj.args === 'object') {
-          args = parsedObj.args
+        // Accept "args", "parameters", "params", or "input" as the arguments field
+        const argsField = parsedObj.args || parsedObj.parameters || parsedObj.params || parsedObj.input
+        if (argsField && typeof argsField === 'object') {
+          args = argsField
         } else {
           args = { ...parsedObj }
-          delete args.tool
+          delete args.tool; delete args.name; delete args.function
         }
         return { toolName, args }
       }
     } catch {}
   }
 
-  // 2) Fallback regex parse
-  const toolMatch = block.match(/["']?tool["']?\s*(?:=>|:)\s*["']([^"']+)["']/)
+  // 2) Fallback regex: extract tool name from common patterns
+  const toolMatch = block.match(/["']?(?:tool|name|function)["']?\s*(?:=>|:)\s*["']([^"']+)["']/)
   if (!toolMatch) return null
   const toolName = toolMatch[1]
   if (!(toolName in allTools)) return null
 
   const args: Record<string, any> = {}
-  const argsSection = block.match(/["']?args["']?\s*(?:=>|:)\s*\{([\s\S]*?)\}/)
+  const argsSection = block.match(/["']?(?:args|parameters|params)["']?\s*(?:=>|:)\s*\{([\s\S]*?)\}/)
   if (argsSection) {
     const argsText = argsSection[1].trim()
     if (argsText) {
@@ -1537,15 +1533,11 @@ export function aiChatPlugin(): Plugin {
                   } else {
                     resultForFrontend = output
                   }
-                  const screenshot = part.toolName?.startsWith('browser_') && sessionId
-                    ? await captureScreenshot(sessionId)
-                    : null
                   sseWrite(res, {
                     type: 'tool_result',
                     id: part.toolCallId,
                     name: part.toolName,
                     result: resultForFrontend,
-                    screenshot,
                   })
 
                   break
@@ -1580,8 +1572,7 @@ export function aiChatPlugin(): Plugin {
                           resultForFrontend = output
                           strayResultSummary = `[${parsed.toolName} 结果] ${JSON.stringify(resultForFrontend).slice(0, 300)}`
                         }
-                        const screenshot = parsed.toolName.startsWith('browser_') && sessionId ? await captureScreenshot(sessionId) : null
-                        sseWrite(res, { type: 'tool_result', id: callId, name: parsed.toolName, result: resultForFrontend, screenshot })
+                        sseWrite(res, { type: 'tool_result', id: callId, name: parsed.toolName, result: resultForFrontend })
                       } catch (e: any) {
                         sseWrite(res, { type: 'tool_result', id: callId, name: parsed.toolName, result: { ok: false, error: e.message } })
                         strayResultSummary = `[${parsed.toolName} 结果] 失败: ${e.message}`
@@ -1623,10 +1614,13 @@ export function aiChatPlugin(): Plugin {
             if (attempt < MAX_ATTEMPTS) {
               log(`WARNING: Agent finished without tool calls (attempt ${attempt}). Auto-retrying with forced prompt...`)
               sseWrite(res, { type: 'text', content: '\n\n🔄 Agent 未执行操作，自动重试中...\n' })
+              const retryHint = textAccumulator.includes('验证码')
+                ? '你刚才描述了验证码操作但没有调用工具。请立刻调用 browser_observe 观察当前页面，然后执行具体操作（如点击确认按钮）。'
+                : '你刚才没有调用任何工具。请立刻调用 browser_observe 观察当前页面状态，然后根据结果执行下一步操作。'
               runMessages = [
                 ...runMessages,
                 { role: 'assistant' as const, content: textAccumulator || '(无内容)' },
-                { role: 'user' as const, content: '你刚才没有调用任何工具，只输出了文字。这是不允许的。请立刻调用 browser_observe 观察当前页面状态，然后根据结果执行下一步操作。你必须调用工具。' },
+                { role: 'user' as const, content: retryHint },
               ]
             } else {
               log(`WARNING: Agent still no tool calls after ${attempt} attempts`)

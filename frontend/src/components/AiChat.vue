@@ -12,7 +12,6 @@ interface ChatBlock {
   toolName?: string
   args?: Record<string, any>
   result?: any
-  screenshot?: string
   loading?: boolean
 }
 
@@ -48,7 +47,6 @@ const input = ref('')
 const loading = ref(false)
 const chatContainer = ref<HTMLElement>()
 const configOpen = ref(false)
-const previewImage = ref<string | null>(null)
 let currentAbort: AbortController | null = null
 
 const emit = defineEmits<{
@@ -165,7 +163,6 @@ const MAX_RECENT_TURNS = 5
 function buildApiMessages() {
   const all = messages.value.filter(m => m.blocks.some(b => (b.type === 'text' && b.content) || b.type === 'tool_call'))
 
-  // Always keep the first user message as the original task
   const firstUserMsg = all.find(m => m.role === 'user')
   const firstUserText = firstUserMsg?.blocks.filter(b => b.type === 'text' && b.content).map(b => b.content!).join('\n') || ''
 
@@ -174,6 +171,24 @@ function buildApiMessages() {
   const recentMsgs = all.slice(recentStart)
 
   const result: { role: 'user' | 'assistant'; content: string }[] = []
+
+  // Inject previous session context if this is a fresh conversation
+  const prevSession = localStorage.getItem('ai_prev_session')
+  if (prevSession && all.length <= MAX_RECENT_TURNS * 2) {
+    const prefix = `[上一轮对话摘要]\n${prevSession}\n[摘要结束]\n\n以上是之前对话的记录，仅供参考。请根据用户当前指令执行操作。`
+    if (oldMsgs.length === 0 && recentMsgs.length > 0 && recentMsgs[0].role === 'user') {
+      const firstContent = recentMsgs[0].blocks.filter(b => b.type === 'text').map(b => b.content).join('\n')
+      result.push({ role: 'user', content: `${prefix}\n\n${firstContent}` })
+      for (const m of recentMsgs.slice(1)) {
+        if (m.role === 'user') {
+          result.push({ role: 'user', content: m.blocks.filter(b => b.type === 'text').map(b => b.content).join('\n') })
+        } else {
+          result.push({ role: 'assistant', content: summarizeAssistantMsg(m) })
+        }
+      }
+      return result
+    }
+  }
 
   if (oldMsgs.length > 0) {
     const lines: string[] = []
@@ -197,24 +212,27 @@ function buildApiMessages() {
     if (m.role === 'user') {
       result.push({ role: 'user', content: m.blocks.filter(b => b.type === 'text').map(b => b.content).join('\n') })
     } else {
-      const textParts = m.blocks.filter(b => b.type === 'text' && b.content).map(b => b.content!)
-      const toolCalls = m.blocks.filter(b => b.type === 'tool_call' && b.toolName)
-      const toolResults = m.blocks.filter(b => b.type === 'tool_result' && b.id)
-      if (toolCalls.length > 0) {
-        const summary = toolCalls.map((tc) => {
-          const tr = toolResults.find(r => r.id === tc.id)
-          const status = tr?.result?.ok === false ? `FAIL` : 'ok'
-          const page = tr?.result?.currentPage ? ` ${tr.result.currentPage.url}` : ''
-          return `${tc.toolName}=>${status}${page}`
-        }).join('; ')
-        result.push({ role: 'assistant', content: `[tools: ${summary}]\n${textParts.join('\n').slice(0, 200)}` })
-      } else {
-        result.push({ role: 'assistant', content: textParts.join('\n') || '(no content)' })
-      }
+      result.push({ role: 'assistant', content: summarizeAssistantMsg(m) })
     }
   }
 
   return result
+}
+
+function summarizeAssistantMsg(m: ChatMessage): string {
+  const textParts = m.blocks.filter(b => b.type === 'text' && b.content).map(b => b.content!)
+  const toolCalls = m.blocks.filter(b => b.type === 'tool_call' && b.toolName)
+  const toolResults = m.blocks.filter(b => b.type === 'tool_result' && b.id)
+  if (toolCalls.length > 0) {
+    const summary = toolCalls.map((tc) => {
+      const tr = toolResults.find(r => r.id === tc.id)
+      const status = tr?.result?.ok === false ? 'FAIL' : 'ok'
+      const page = tr?.result?.currentPage ? ` ${tr.result.currentPage.url}` : ''
+      return `${tc.toolName}=>${status}${page}`
+    }).join('; ')
+    return `[tools: ${summary}]\n${textParts.join('\n').slice(0, 200)}`
+  }
+  return textParts.join('\n') || '(no content)'
 }
 
 async function send() {
@@ -314,7 +332,6 @@ async function send() {
                 id: evt.id,
                 toolName: evt.name,
                 result: evt.result,
-                screenshot: evt.screenshot,
               })
               break
             }
@@ -346,7 +363,27 @@ function handleEnter(e: KeyboardEvent) {
   send()
 }
 
+function compressMessages(): string {
+  const all = messages.value
+  if (all.length === 0) return ''
+  const lines: string[] = []
+  for (const m of all) {
+    const text = m.blocks.filter(b => b.type === 'text' && b.content).map(b => b.content!).join(' ').slice(0, 120)
+    const tools = m.blocks.filter(b => b.type === 'tool_call').map(b => b.toolName).join(', ')
+    if (m.role === 'user') {
+      lines.push(`用户: ${text}`)
+    } else {
+      lines.push(`助手: ${tools ? `[${tools}] ` : ''}${text.slice(0, 80)}`)
+    }
+  }
+  return lines.join('\n').slice(0, 3000)
+}
+
 function clearChat() {
+  const summary = compressMessages()
+  if (summary) {
+    localStorage.setItem('ai_prev_session', summary)
+  }
   messages.value = []
 }
 
@@ -451,18 +488,10 @@ onMounted(() => {
 
         <!-- Tool result -->
         <div v-else-if="item.block.type === 'tool_result'" class="flex justify-start">
-          <div class="max-w-[90%] space-y-1">
+          <div class="max-w-[90%]">
             <div v-if="item.block.result" class="px-2.5 py-1.5 rounded-md bg-[var(--color-bg)] border border-[var(--color-border)] text-[10px] text-[var(--color-text-dim)] font-mono">
               {{ toolResultSummary(item.block.result) }}
             </div>
-            <button
-              v-if="item.block.screenshot"
-              @click="previewImage = item.block.screenshot"
-              class="inline-flex items-center gap-1 px-2 py-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:border-[var(--color-accent)]/50 transition-colors"
-              type="button"
-            >
-              预览截图
-            </button>
           </div>
         </div>
 
@@ -503,11 +532,5 @@ onMounted(() => {
       <p v-if="!apiKey" class="mt-1.5 text-[10px] text-yellow-400/80">请先点击右上角齿轮配置 API Key</p>
     </div>
 
-    <!-- Screenshot preview overlay -->
-    <Teleport to="body">
-      <div v-if="previewImage" class="fixed inset-0 z-[9999] bg-black/80 flex items-center justify-center cursor-pointer" @click="previewImage = null">
-        <img :src="'data:image/png;base64,' + previewImage" class="max-w-[90vw] max-h-[90vh] rounded-lg shadow-2xl" />
-      </div>
-    </Teleport>
   </div>
 </template>
