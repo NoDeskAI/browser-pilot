@@ -22,6 +22,9 @@ const scaleMode = ref<'scale' | 'resize'>('scale')
 const viewOnly = ref(false)
 const clipboardText = ref('')
 const clipboardOpen = ref(false)
+const clipBtnRef = ref<HTMLElement>()
+const clipPanelRef = ref<HTMLElement>()
+const clipPos = ref({ top: 0, left: 0 })
 const isFullscreen = ref(false)
 const totalRecv = ref(0)
 const totalSent = ref(0)
@@ -158,6 +161,22 @@ function pasteClipboard() {
   }
 }
 
+function toggleClipboard() {
+  if (!clipboardOpen.value && clipBtnRef.value) {
+    const rect = clipBtnRef.value.getBoundingClientRect()
+    clipPos.value = { top: rect.bottom + 4, left: rect.left }
+  }
+  clipboardOpen.value = !clipboardOpen.value
+}
+
+function handleClipClickOutside(e: MouseEvent) {
+  if (!clipboardOpen.value) return
+  const t = e.target as Node
+  if (clipBtnRef.value?.contains(t)) return
+  if (clipPanelRef.value?.contains(t)) return
+  clipboardOpen.value = false
+}
+
 function toggleScaleMode() {
   scaleMode.value = scaleMode.value === 'scale' ? 'resize' : 'scale'
   if (rfb) {
@@ -202,6 +221,7 @@ onMounted(() => {
   connectRFB()
   if (props.initialUrl) navigate(props.initialUrl)
   document.addEventListener('fullscreenchange', onFullscreenChange)
+  document.addEventListener('click', handleClipClickOutside)
 })
 
 onUnmounted(() => {
@@ -209,6 +229,7 @@ onUnmounted(() => {
   if (reconnectTimer) clearTimeout(reconnectTimer)
   if (rateTimer) clearInterval(rateTimer)
   document.removeEventListener('fullscreenchange', onFullscreenChange)
+  document.removeEventListener('click', handleClipClickOutside)
 })
 
 watch(() => props.wsUrl, () => {
@@ -241,35 +262,13 @@ watch(compressionLevel, applyQuality)
       <span class="w-px h-3.5 bg-[var(--color-border)] shrink-0" />
 
       <!-- Clipboard -->
-      <span class="relative shrink-0">
-        <button
-          @click="clipboardOpen = !clipboardOpen"
-          class="px-1.5 py-0.5 rounded text-[10px] transition-colors"
-          :class="clipboardOpen ? 'bg-lime-600/30 text-lime-300' : 'bg-[var(--color-surface-hover)] text-[var(--color-text-dim)] hover:text-[var(--color-text)]'"
-          title="剪贴板"
-        >Clip</button>
-        <div
-          v-if="clipboardOpen"
-          class="absolute top-full left-0 mt-1 w-64 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg shadow-xl z-50 p-2"
-        >
-          <textarea
-            v-model="clipboardText"
-            rows="4"
-            class="w-full bg-[var(--color-bg)] border border-[var(--color-border)] rounded text-xs text-[var(--color-text)] p-1.5 resize-none outline-none focus:border-[var(--color-accent)]"
-            placeholder="双向剪贴板..."
-          />
-          <div class="flex gap-1.5 mt-1.5">
-            <button
-              @click="pasteClipboard"
-              class="flex-1 px-2 py-1 rounded text-[10px] font-medium bg-lime-600/20 text-lime-400 border border-lime-600/30 hover:bg-lime-600/30 transition-colors"
-            >发送到远程</button>
-            <button
-              @click="clipboardOpen = false"
-              class="px-2 py-1 rounded text-[10px] font-medium bg-[var(--color-surface-hover)] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors"
-            >关闭</button>
-          </div>
-        </div>
-      </span>
+      <button
+        ref="clipBtnRef"
+        @click="toggleClipboard"
+        class="px-1.5 py-0.5 rounded text-[10px] transition-colors shrink-0"
+        :class="clipboardOpen ? 'bg-lime-600/30 text-lime-300' : 'bg-[var(--color-surface-hover)] text-[var(--color-text-dim)] hover:text-[var(--color-text)]'"
+        title="剪贴板"
+      >Clip</button>
 
       <!-- Ctrl+Alt+Del -->
       <button
@@ -320,6 +319,33 @@ watch(compressionLevel, applyQuality)
 
     <!-- VNC display area -->
     <div ref="vncContainer" class="flex-1 relative overflow-hidden bg-black" />
+
+    <!-- Clipboard floating panel -->
+    <Teleport to="body">
+      <div
+        v-if="clipboardOpen"
+        ref="clipPanelRef"
+        class="fixed z-[9990] w-64 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg shadow-xl p-2"
+        :style="{ top: clipPos.top + 'px', left: clipPos.left + 'px' }"
+      >
+        <textarea
+          v-model="clipboardText"
+          rows="4"
+          class="w-full bg-[var(--color-bg)] border border-[var(--color-border)] rounded text-xs text-[var(--color-text)] p-1.5 resize-none outline-none focus:border-[var(--color-accent)]"
+          placeholder="双向剪贴板..."
+        />
+        <div class="flex gap-1.5 mt-1.5">
+          <button
+            @click="pasteClipboard"
+            class="flex-1 px-2 py-1 rounded text-[10px] font-medium bg-lime-600/20 text-lime-400 border border-lime-600/30 hover:bg-lime-600/30 transition-colors"
+          >发送到远程</button>
+          <button
+            @click="clipboardOpen = false"
+            class="px-2 py-1 rounded text-[10px] font-medium bg-[var(--color-surface-hover)] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors"
+          >关闭</button>
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>
 
