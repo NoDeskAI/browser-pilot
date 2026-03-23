@@ -29,6 +29,7 @@ const clipLoading = ref(false)
 const isFullscreen = ref(false)
 const browserLang = ref('zh-CN')
 const langLoading = ref(false)
+const langError = ref('')
 const LANG_OPTIONS = [
   { value: 'zh-CN', label: '中文' },
   { value: 'en-US', label: 'English' },
@@ -160,10 +161,6 @@ async function navigate(url: string) {
   } catch { /* ignore */ }
 }
 
-function sendCtrlAltDel() {
-  rfb?.sendCtrlAltDel()
-}
-
 async function pasteClipboard() {
   if (!clipboardText.value || clipLoading.value) return
   clipLoading.value = true
@@ -246,16 +243,32 @@ function onFullscreenChange() {
 async function changeLang(lang: string) {
   if (langLoading.value) return
   langLoading.value = true
+  langError.value = ''
   try {
     const resp = await fetch('/api/docker/browser-lang', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ solutionId: props.solutionId, lang }),
     })
+    if (!resp.ok) {
+      const data = await resp.json().catch(() => null)
+      langError.value = data?.error || `请求失败 (${resp.status})`
+      setTimeout(() => { langError.value = '' }, 4000)
+      return
+    }
     const data = await resp.json()
-    if (data.ok) browserLang.value = lang
-  } catch { /* ignore */ }
-  langLoading.value = false
+    if (data.ok) {
+      browserLang.value = lang
+    } else {
+      langError.value = data.error || '切换失败'
+      setTimeout(() => { langError.value = '' }, 4000)
+    }
+  } catch {
+    langError.value = '网络错误，请检查服务是否运行'
+    setTimeout(() => { langError.value = '' }, 4000)
+  } finally {
+    langLoading.value = false
+  }
 }
 
 defineExpose({ navigate })
@@ -317,14 +330,6 @@ watch(compressionLevel, applyQuality)
         title="剪贴板"
       >Clip</button>
 
-      <!-- Ctrl+Alt+Del -->
-      <button
-        @click="sendCtrlAltDel"
-        :disabled="!connected"
-        class="px-1.5 py-0.5 rounded text-[10px] bg-[var(--color-surface-hover)] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors disabled:opacity-30 shrink-0"
-        title="发送 Ctrl+Alt+Del"
-      >C-A-D</button>
-
       <!-- Scale mode -->
       <button
         @click="toggleScaleMode"
@@ -371,6 +376,7 @@ watch(compressionLevel, applyQuality)
       >
         <option v-for="opt in LANG_OPTIONS" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
       </select>
+      <span v-if="langError" class="text-[10px] text-yellow-400 shrink-0 whitespace-nowrap max-w-40 truncate" :title="langError">{{ langError }}</span>
 
       <span class="ml-auto text-lime-400/60 text-[10px] shrink-0">noVNC Mode</span>
     </div>
