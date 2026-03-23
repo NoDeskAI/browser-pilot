@@ -18,6 +18,7 @@ const { state: docker, startAll, stopAll, startPolling, stopPolling } = useDocke
 
 const sidebarWidth = ref(288)
 const isResizing = ref(false)
+const sidebarOpen = ref(true)
 const aiPanelWidth = ref(340)
 const isResizingAi = ref(false)
 const aiPanelOpen = ref(true)
@@ -152,6 +153,7 @@ onUnmounted(stopPolling)
     <div class="flex-1 flex overflow-hidden">
       <!-- Left sidebar (resizable) -->
       <aside
+        v-if="sidebarOpen"
         class="shrink-0 border-r border-[var(--color-border)] bg-[var(--color-surface)] overflow-y-auto"
         :style="{ width: sidebarWidth + 'px' }"
       >
@@ -168,6 +170,7 @@ onUnmounted(stopPolling)
 
       <!-- Resize handle -->
       <div
+        v-if="sidebarOpen"
         class="shrink-0 w-1 cursor-col-resize hover:bg-[var(--color-accent)]/30 active:bg-[var(--color-accent)]/50 transition-colors"
         :class="isResizing ? 'bg-[var(--color-accent)]/50' : ''"
         @mousedown="startResize"
@@ -180,6 +183,16 @@ onUnmounted(stopPolling)
           v-if="selected"
           class="shrink-0 flex items-center gap-2 px-3 py-2 bg-[var(--color-surface)] border-b border-[var(--color-border)]"
         >
+          <button
+            @click="sidebarOpen = !sidebarOpen"
+            class="shrink-0 w-6 h-6 flex items-center justify-center rounded text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-hover)] transition-colors"
+            :title="sidebarOpen ? '收起侧边栏' : '展开侧边栏'"
+          >
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path v-if="sidebarOpen" stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
+              <path v-else stroke-linecap="round" stroke-linejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
+            </svg>
+          </button>
           <div
             class="w-2.5 h-2.5 rounded-full shrink-0"
             :style="{ backgroundColor: selected.color }"
@@ -203,6 +216,17 @@ onUnmounted(stopPolling)
 
         <!-- Viewer area -->
         <div class="flex-1 relative overflow-hidden">
+          <!-- Sidebar toggle when collapsed and no solution selected -->
+          <button
+            v-if="!selected && !sidebarOpen"
+            @click="sidebarOpen = true"
+            class="absolute top-3 left-3 z-10 w-7 h-7 flex items-center justify-center rounded-lg bg-[var(--color-surface)] border border-[var(--color-border)] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:border-[var(--color-accent)]/50 transition-colors"
+            title="展开侧边栏"
+          >
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
+            </svg>
+          </button>
           <!-- Empty state -->
           <div
             v-if="!selected"

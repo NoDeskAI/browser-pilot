@@ -941,10 +941,56 @@ function createModel(baseUrl: string, apiKey: string, modelName: string, apiType
 // Plugin
 // ---------------------------------------------------------------------------
 
+const ANTHROPIC_PRESET_MODELS = [
+  'claude-sonnet-4-20250514',
+  'claude-3-5-haiku-20241022',
+]
+
 export function aiChatPlugin(): Plugin {
   return {
     name: 'ai-chat',
     configureServer(server) {
+
+      // ---- /api/ai/models ----
+      server.middlewares.use(async (req, res, next) => {
+        if (req.url !== '/api/ai/models' || req.method !== 'POST') return next()
+        try {
+          const body = JSON.parse(await readBody(req))
+          const { baseUrl, apiKey, apiType } = body
+          if (!apiKey || !baseUrl) {
+            res.statusCode = 200
+            res.setHeader('Content-Type', 'application/json')
+            return res.end(JSON.stringify({ models: [] }))
+          }
+          if (apiType === 'anthropic') {
+            res.statusCode = 200
+            res.setHeader('Content-Type', 'application/json')
+            return res.end(JSON.stringify({ models: ANTHROPIC_PRESET_MODELS }))
+          }
+          const base = baseUrl.replace(/\/+$/, '')
+          const upstream = await fetch(`${base}/models`, {
+            headers: { Authorization: `Bearer ${apiKey}` },
+            signal: AbortSignal.timeout(8000),
+          })
+          if (!upstream.ok) {
+            res.statusCode = 200
+            res.setHeader('Content-Type', 'application/json')
+            return res.end(JSON.stringify({ models: [], error: `upstream ${upstream.status}` }))
+          }
+          const json = await upstream.json() as { data?: { id: string }[] }
+          const ids = (json.data || []).map(m => m.id).sort()
+          res.statusCode = 200
+          res.setHeader('Content-Type', 'application/json')
+          res.end(JSON.stringify({ models: ids }))
+        } catch (e: any) {
+          log(`/api/ai/models error: ${e.message}`)
+          res.statusCode = 200
+          res.setHeader('Content-Type', 'application/json')
+          res.end(JSON.stringify({ models: [], error: e.message }))
+        }
+      })
+
+      // ---- /api/ai/chat ----
       server.middlewares.use(async (req, res, next) => {
         if (req.url !== '/api/ai/chat' || req.method !== 'POST') return next()
 

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, nextTick, onMounted, computed } from 'vue'
+import { ref, nextTick, onMounted, onBeforeUnmount, computed, watch } from 'vue'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -58,18 +58,80 @@ const apiType = ref<'openai' | 'anthropic'>(
   (localStorage.getItem('ai_api_type') as 'openai' | 'anthropic') || 'openai'
 )
 
-const presets = [
-  { label: 'OpenAI', url: 'https://api.openai.com/v1', model: 'gpt-4o-mini', type: 'openai' as const },
-  { label: 'Anthropic', url: 'https://api.anthropic.com', model: 'claude-sonnet-4-20250514', type: 'anthropic' as const },
-  { label: 'DeepSeek', url: 'https://api.deepseek.com/v1', model: 'deepseek-chat', type: 'openai' as const },
-  { label: 'SiliconFlow', url: 'https://api.siliconflow.cn/v1', model: 'Qwen/Qwen2.5-7B-Instruct', type: 'openai' as const },
+const urlPresets = [
+  { label: 'OpenAI', url: 'https://api.openai.com/v1', type: 'openai' as const, defaultModel: 'gpt-4o-mini',
+    presetModels: ['gpt-4o', 'gpt-4o-mini', 'o1', 'o1-mini', 'o3-mini'] },
+  { label: 'Anthropic', url: 'https://api.anthropic.com', type: 'anthropic' as const, defaultModel: 'claude-sonnet-4-20250514',
+    presetModels: ['claude-sonnet-4-20250514', 'claude-3-5-haiku-20241022'] },
+  { label: 'DeepSeek', url: 'https://api.deepseek.com/v1', type: 'openai' as const, defaultModel: 'deepseek-chat',
+    presetModels: ['deepseek-chat', 'deepseek-reasoner'] },
+  { label: 'SiliconFlow', url: 'https://api.siliconflow.cn/v1', type: 'openai' as const, defaultModel: 'Qwen/Qwen2.5-7B-Instruct',
+    presetModels: ['Qwen/Qwen2.5-7B-Instruct'] },
+  { label: 'MiniMax', url: 'https://api.minimaxi.com/v1', type: 'openai' as const, defaultModel: 'MiniMax-M2.5',
+    presetModels: ['MiniMax-M2.7', 'MiniMax-M2.5', 'MiniMax-M2.1', 'MiniMax-M2'] },
 ]
 
-function applyPreset(p: typeof presets[number]) {
-  baseUrl.value = p.url
-  model.value = p.model
-  apiType.value = p.type
+const modelOptions = ref<string[]>([])
+const modelLoading = ref(false)
+const modelDropdownOpen = ref(false)
+const comboboxRef = ref<HTMLElement>()
+let fetchDebounceTimer: ReturnType<typeof setTimeout> | null = null
+
+function getPresetModels(): string[] {
+  const match = urlPresets.find(p => p.url === baseUrl.value)
+  return match ? match.presetModels : []
 }
+
+const filteredModels = computed(() => {
+  const q = model.value.trim().toLowerCase()
+  const list = modelOptions.value.length ? modelOptions.value : getPresetModels()
+  if (!q) return list
+  return list.filter(m => m.toLowerCase().includes(q))
+})
+
+async function fetchModels() {
+  if (!apiKey.value || !baseUrl.value) {
+    modelOptions.value = getPresetModels()
+    return
+  }
+  modelLoading.value = true
+  try {
+    const resp = await fetch('/api/ai/models', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ baseUrl: baseUrl.value, apiKey: apiKey.value, apiType: apiType.value }),
+    })
+    const data = await resp.json()
+    modelOptions.value = data.models?.length ? data.models : getPresetModels()
+  } catch {
+    modelOptions.value = getPresetModels()
+  } finally {
+    modelLoading.value = false
+  }
+}
+
+function applyUrlPreset(p: typeof urlPresets[number]) {
+  baseUrl.value = p.url
+  apiType.value = p.type
+  model.value = p.defaultModel
+  fetchModels()
+}
+
+function selectModel(m: string) {
+  model.value = m
+  modelDropdownOpen.value = false
+}
+
+function handleComboboxClickOutside(e: MouseEvent) {
+  if (comboboxRef.value && !comboboxRef.value.contains(e.target as Node)) {
+    modelDropdownOpen.value = false
+  }
+}
+
+watch([apiKey, baseUrl], () => {
+  if (fetchDebounceTimer) clearTimeout(fetchDebounceTimer)
+  fetchDebounceTimer = setTimeout(() => fetchModels(), 600)
+})
 
 function saveConfig() {
   localStorage.setItem('ai_api_key', apiKey.value)
@@ -335,6 +397,13 @@ function clearChat() {
 
 onMounted(() => {
   if (!apiKey.value) configOpen.value = true
+  document.addEventListener('click', handleComboboxClickOutside)
+  if (apiKey.value && baseUrl.value) fetchModels()
+})
+
+onBeforeUnmount(() => {
+  document.removeEventListener('click', handleComboboxClickOutside)
+  if (fetchDebounceTimer) clearTimeout(fetchDebounceTimer)
 })
 </script>
 
@@ -359,38 +428,69 @@ onMounted(() => {
       </div>
     </div>
 
-    <!-- Config panel -->
-    <div v-if="configOpen" class="shrink-0 p-3 border-b border-[var(--color-border)] space-y-2">
-      <div>
-        <label class="text-[10px] text-[var(--color-text-dim)] uppercase tracking-wider">快速选择</label>
-        <div class="flex flex-wrap gap-1 mt-1">
-          <button v-for="p in presets" :key="p.label" @click="applyPreset(p)"
-            class="px-2 py-0.5 rounded text-[10px] border transition-colors"
-            :class="baseUrl === p.url ? 'border-[var(--color-accent)] text-[var(--color-accent)] bg-[var(--color-accent)]/10' : 'border-[var(--color-border)] text-[var(--color-text-dim)] hover:border-[var(--color-text-dim)]'"
-          >{{ p.label }}</button>
+    <!-- Config dialog (teleported) -->
+    <Teleport to="body">
+      <div v-if="configOpen" class="fixed inset-0 z-[9998] bg-black/50 flex items-center justify-center" @click.self="configOpen = false" @keydown.escape.window="configOpen = false">
+        <div class="max-w-sm w-full mx-4 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-xl shadow-2xl">
+          <div class="flex items-center justify-between px-4 py-3 border-b border-[var(--color-border)]">
+            <span class="text-sm font-semibold text-[var(--color-text)]">API 设置</span>
+            <button @click="configOpen = false" class="w-6 h-6 flex items-center justify-center rounded-md hover:bg-[var(--color-surface-hover)] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
+            </button>
+          </div>
+          <div class="p-4 space-y-3">
+            <div>
+              <label class="text-[10px] text-[var(--color-text-dim)] uppercase tracking-wider">API 类型</label>
+              <div class="flex gap-1 mt-1">
+                <button @click="apiType = 'openai'" class="flex-1 py-1 rounded text-[10px] font-medium border transition-colors" :class="apiType === 'openai' ? 'border-[var(--color-accent)] text-[var(--color-accent)] bg-[var(--color-accent)]/10' : 'border-[var(--color-border)] text-[var(--color-text-dim)]'">OpenAI 兼容</button>
+                <button @click="apiType = 'anthropic'" class="flex-1 py-1 rounded text-[10px] font-medium border transition-colors" :class="apiType === 'anthropic' ? 'border-[var(--color-accent)] text-[var(--color-accent)] bg-[var(--color-accent)]/10' : 'border-[var(--color-border)] text-[var(--color-text-dim)]'">Anthropic</button>
+              </div>
+            </div>
+            <div>
+              <label class="text-[10px] text-[var(--color-text-dim)] uppercase tracking-wider">API Base URL</label>
+              <input v-model="baseUrl" class="w-full mt-0.5 px-2.5 py-1.5 rounded-md bg-[var(--color-bg)] border border-[var(--color-border)] text-xs text-[var(--color-text)] outline-none focus:border-[var(--color-accent)] transition-colors" :placeholder="apiType === 'anthropic' ? 'https://api.anthropic.com' : 'https://api.openai.com/v1'" />
+              <div class="flex flex-wrap gap-1 mt-1.5">
+                <button v-for="p in urlPresets" :key="p.label" @click="applyUrlPreset(p)"
+                  class="px-2 py-0.5 rounded text-[10px] border transition-colors"
+                  :class="baseUrl === p.url ? 'border-[var(--color-accent)] text-[var(--color-accent)] bg-[var(--color-accent)]/10' : 'border-[var(--color-border)] text-[var(--color-text-dim)] hover:border-[var(--color-text-dim)]'"
+                >{{ p.label }}</button>
+              </div>
+            </div>
+            <div>
+              <label class="text-[10px] text-[var(--color-text-dim)] uppercase tracking-wider">API Key</label>
+              <input v-model="apiKey" type="password" class="w-full mt-0.5 px-2.5 py-1.5 rounded-md bg-[var(--color-bg)] border border-[var(--color-border)] text-xs text-[var(--color-text)] outline-none focus:border-[var(--color-accent)] transition-colors" placeholder="sk-..." />
+            </div>
+            <div ref="comboboxRef" class="relative">
+              <label class="text-[10px] text-[var(--color-text-dim)] uppercase tracking-wider">Model</label>
+              <div class="relative mt-0.5">
+                <input v-model="model"
+                  @focus="modelDropdownOpen = true"
+                  @keydown.escape="modelDropdownOpen = false"
+                  class="w-full px-2.5 py-1.5 pr-7 rounded-md bg-[var(--color-bg)] border border-[var(--color-border)] text-xs text-[var(--color-text)] outline-none focus:border-[var(--color-accent)] transition-colors"
+                  placeholder="gpt-4o-mini" />
+                <button @click.stop="modelDropdownOpen = !modelDropdownOpen" class="absolute right-1 top-1/2 -translate-y-1/2 w-5 h-5 flex items-center justify-center rounded hover:bg-[var(--color-surface-hover)] text-[var(--color-text-dim)] transition-colors">
+                  <svg v-if="modelLoading" class="w-3 h-3 animate-spin" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M12 2v4m0 12v4m-7.07-3.93l2.83-2.83m8.49-8.49l2.83-2.83M2 12h4m12 0h4m-3.93 7.07l-2.83-2.83M7.76 7.76L4.93 4.93" /></svg>
+                  <svg v-else class="w-3 h-3 transition-transform" :class="modelDropdownOpen ? 'rotate-180' : ''" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" /></svg>
+                </button>
+              </div>
+              <div v-if="modelDropdownOpen" class="absolute z-10 left-0 right-0 mt-1 max-h-48 overflow-y-auto rounded-md bg-[var(--color-bg)] border border-[var(--color-border)] shadow-lg">
+                <div v-if="modelLoading" class="px-2.5 py-2 text-[10px] text-[var(--color-text-dim)] text-center">加载模型列表...</div>
+                <template v-else-if="filteredModels.length">
+                  <button v-for="m in filteredModels" :key="m" @click="selectModel(m)"
+                    class="w-full text-left px-2.5 py-1.5 text-xs hover:bg-[var(--color-surface-hover)] transition-colors flex items-center justify-between"
+                    :class="m === model ? 'text-[var(--color-accent)]' : 'text-[var(--color-text)]'">
+                    <span class="truncate">{{ m }}</span>
+                    <svg v-if="m === model" class="w-3 h-3 shrink-0 ml-1" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5" /></svg>
+                  </button>
+                </template>
+                <div v-else class="px-2.5 py-2 text-[10px] text-[var(--color-text-dim)] text-center">手动输入模型名称</div>
+              </div>
+            </div>
+            <button @click="saveConfig" class="w-full py-1.5 rounded-md text-xs font-medium bg-[var(--color-accent)] text-white hover:bg-[var(--color-accent-dim)] transition-colors">保存设置</button>
+          </div>
         </div>
       </div>
-      <div>
-        <label class="text-[10px] text-[var(--color-text-dim)] uppercase tracking-wider">API 类型</label>
-        <div class="flex gap-1 mt-1">
-          <button @click="apiType = 'openai'" class="flex-1 py-1 rounded text-[10px] font-medium border transition-colors" :class="apiType === 'openai' ? 'border-[var(--color-accent)] text-[var(--color-accent)] bg-[var(--color-accent)]/10' : 'border-[var(--color-border)] text-[var(--color-text-dim)]'">OpenAI 兼容</button>
-          <button @click="apiType = 'anthropic'" class="flex-1 py-1 rounded text-[10px] font-medium border transition-colors" :class="apiType === 'anthropic' ? 'border-[var(--color-accent)] text-[var(--color-accent)] bg-[var(--color-accent)]/10' : 'border-[var(--color-border)] text-[var(--color-text-dim)]'">Anthropic</button>
-        </div>
-      </div>
-      <div>
-        <label class="text-[10px] text-[var(--color-text-dim)] uppercase tracking-wider">API Base URL</label>
-        <input v-model="baseUrl" class="w-full mt-0.5 px-2.5 py-1.5 rounded-md bg-[var(--color-bg)] border border-[var(--color-border)] text-xs text-[var(--color-text)] outline-none focus:border-[var(--color-accent)] transition-colors" :placeholder="apiType === 'anthropic' ? 'https://api.anthropic.com' : 'https://api.openai.com/v1'" />
-      </div>
-      <div>
-        <label class="text-[10px] text-[var(--color-text-dim)] uppercase tracking-wider">API Key</label>
-        <input v-model="apiKey" type="password" class="w-full mt-0.5 px-2.5 py-1.5 rounded-md bg-[var(--color-bg)] border border-[var(--color-border)] text-xs text-[var(--color-text)] outline-none focus:border-[var(--color-accent)] transition-colors" placeholder="sk-..." />
-      </div>
-      <div>
-        <label class="text-[10px] text-[var(--color-text-dim)] uppercase tracking-wider">Model</label>
-        <input v-model="model" class="w-full mt-0.5 px-2.5 py-1.5 rounded-md bg-[var(--color-bg)] border border-[var(--color-border)] text-xs text-[var(--color-text)] outline-none focus:border-[var(--color-accent)] transition-colors" placeholder="gpt-4o-mini" />
-      </div>
-      <button @click="saveConfig" class="w-full py-1.5 rounded-md text-xs font-medium bg-[var(--color-accent)] text-white hover:bg-[var(--color-accent-dim)] transition-colors">保存设置</button>
-    </div>
+    </Teleport>
 
     <!-- Messages -->
     <div ref="chatContainer" class="flex-1 overflow-y-auto p-3 space-y-2">
