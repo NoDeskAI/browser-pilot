@@ -45,14 +45,6 @@ async function wdFetch(urlPath: string, init?: RequestInit, timeoutMs = 30_000):
   }
 }
 
-async function captureScreenshot(sid: string): Promise<string | null> {
-  try {
-    return await wdFetch(`/session/${sid}/screenshot`, undefined, 10_000)
-  } catch {
-    return null
-  }
-}
-
 async function cleanupStaleSession(existingId: string) {
   try {
     await fetch(`${SELENIUM_BASE}/session/${existingId}`, { method: 'DELETE' })
@@ -115,7 +107,7 @@ async function ensureSessionImpl(): Promise<string> {
                 '--disable-dev-shm-usage',
                 '--disable-blink-features=AutomationControlled',
                 '--disable-infobars',
-                '--window-size=1920,1080',
+                '--window-size=1280,800',
                 '--lang=zh-CN',
               ],
               excludeSwitches: ['enable-automation'],
@@ -134,7 +126,7 @@ async function ensureSessionImpl(): Promise<string> {
     try {
       await wdFetch(`/session/${sessionId}/window/rect`, {
         method: 'POST',
-        body: JSON.stringify({ width: 1920, height: 1080 }),
+        body: JSON.stringify({ width: 1280, height: 800 }),
       }, 5000)
     } catch {}
 
@@ -1078,15 +1070,11 @@ export function aiChatPlugin(): Plugin {
                 } else {
                   resultForFrontend = output
                 }
-                const screenshot = part.toolName?.startsWith('browser_') && sessionId
-                  ? await captureScreenshot(sessionId)
-                  : null
                 sseWrite(res, {
                   type: 'tool_result',
                   id: part.toolCallId,
                   name: part.toolName,
                   result: resultForFrontend,
-                  screenshot,
                 })
                 break
               }
