@@ -8,8 +8,8 @@ services:
       - "7900:7900"
     environment:
       SE_VNC_NO_PASSWORD: 1
-      SE_SCREEN_WIDTH: 1920
-      SE_SCREEN_HEIGHT: 1080
+      SE_SCREEN_WIDTH: 1280
+      SE_SCREEN_HEIGHT: 800
       SE_SCREEN_DEPTH: 24
 
   cdp-proxy:
