@@ -20,7 +20,6 @@ interface ChatBlock {
   toolName?: string
   args?: Record<string, any>
   result?: any
-  screenshot?: string
   loading?: boolean
 }
 
@@ -52,7 +51,6 @@ const input = ref('')
 const loading = ref(false)
 const chatContainer = ref<HTMLElement>()
 const configOpen = ref(false)
-const previewImage = ref<string | null>(null)
 const expandedThinks = ref(new Set<string>())
 let currentAbort: AbortController | null = null
 let textBuffer = ''
@@ -447,7 +445,6 @@ async function send() {
                 id: evt.id,
                 toolName: evt.name,
                 result: evt.result,
-                screenshot: evt.screenshot,
               })
               break
             }
@@ -633,16 +630,10 @@ onBeforeUnmount(() => {
 
         <!-- Tool result -->
         <div v-else-if="item.block.type === 'tool_result'" class="flex justify-start">
-          <div class="max-w-[90%] space-y-1">
+          <div class="max-w-[90%]">
             <div v-if="item.block.result" class="px-2.5 py-1.5 rounded-md bg-[var(--color-bg)] border border-[var(--color-border)] text-[10px] text-[var(--color-text-dim)] font-mono">
               {{ toolResultSummary(item.block.result) }}
             </div>
-            <img
-              v-if="item.block.screenshot"
-              :src="'data:image/png;base64,' + item.block.screenshot"
-              @click="previewImage = item.block.screenshot"
-              class="max-w-[200px] rounded border border-[var(--color-border)] cursor-pointer hover:opacity-80 hover:border-[var(--color-accent)]/50 transition-all"
-            />
           </div>
         </div>
 
@@ -683,11 +674,5 @@ onBeforeUnmount(() => {
       <p v-if="!apiKey" class="mt-1.5 text-[10px] text-yellow-400/80">请先点击右上角齿轮配置 API Key</p>
     </div>
 
-    <!-- Screenshot preview overlay -->
-    <Teleport to="body">
-      <div v-if="previewImage" class="fixed inset-0 z-[9999] bg-black/80 flex items-center justify-center cursor-pointer" @click="previewImage = null">
-        <img :src="'data:image/png;base64,' + previewImage" class="max-w-[90vw] max-h-[90vh] rounded-lg shadow-2xl" />
-      </div>
-    </Teleport>
   </div>
 </template>
