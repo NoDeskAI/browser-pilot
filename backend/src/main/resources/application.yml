@@ -3,3 +3,4 @@ server:
 
 app:
   selenium-base-url: ${SELENIUM_BASE_URL:http://localhost:4444}
+  ssl-trust-all: ${SSL_TRUST_ALL:false}

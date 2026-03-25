@@ -12,6 +12,7 @@ import org.apache.hc.client5.http.ssl.SSLConnectionSocketFactoryBuilder;
 import org.apache.hc.core5.util.Timeout;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import javax.net.ssl.SSLContext;
@@ -26,37 +27,48 @@ public class LlmFactory {
 
     private static final Logger log = LoggerFactory.getLogger(LlmFactory.class);
 
-    private final SSLContext sslContext;
+    private final boolean sslTrustAll;
+    private final SSLContext insecureSslContext;
 
-    public LlmFactory() {
-        try {
-            TrustManager[] trustAll = {new X509TrustManager() {
-                public X509Certificate[] getAcceptedIssuers() { return new X509Certificate[0]; }
-                public void checkClientTrusted(X509Certificate[] c, String t) {}
-                public void checkServerTrusted(X509Certificate[] c, String t) {}
-            }};
-            sslContext = SSLContext.getInstance("TLSv1.2");
-            sslContext.init(null, trustAll, new SecureRandom());
-            log.info("SSL context initialized with TLSv1.2");
-        } catch (Exception e) {
-            throw new RuntimeException("Failed to init SSL context", e);
+    public LlmFactory(@Value("${app.ssl-trust-all:false}") boolean sslTrustAll) {
+        this.sslTrustAll = sslTrustAll;
+        if (sslTrustAll) {
+            try {
+                TrustManager[] trustAll = {new X509TrustManager() {
+                    public X509Certificate[] getAcceptedIssuers() { return new X509Certificate[0]; }
+                    public void checkClientTrusted(X509Certificate[] c, String t) {}
+                    public void checkServerTrusted(X509Certificate[] c, String t) {}
+                }};
+                insecureSslContext = SSLContext.getInstance("TLSv1.2");
+                insecureSslContext.init(null, trustAll, new SecureRandom());
+                log.warn("SSL trust-all mode ENABLED (app.ssl-trust-all=true). Do NOT use in production!");
+            } catch (Exception e) {
+                throw new RuntimeException("Failed to init insecure SSL context", e);
+            }
+        } else {
+            insecureSslContext = null;
+            log.info("Using default JVM SSL/TLS trust store");
         }
     }
 
     private ApacheHttpClientBuilder apacheHttpClient() {
-        var sslSocketFactory = SSLConnectionSocketFactoryBuilder.create()
-                .setSslContext(sslContext)
-                .setHostnameVerifier(NoopHostnameVerifier.INSTANCE)
-                .build();
-        var connManager = PoolingHttpClientConnectionManagerBuilder.create()
-                .setSSLSocketFactory(sslSocketFactory)
+        var connManagerBuilder = PoolingHttpClientConnectionManagerBuilder.create()
                 .setDefaultConnectionConfig(org.apache.hc.client5.http.config.ConnectionConfig.custom()
                         .setConnectTimeout(Timeout.ofSeconds(30))
                         .setSocketTimeout(Timeout.ofSeconds(120))
                         .build())
                 .setMaxConnTotal(20)
-                .setMaxConnPerRoute(10)
-                .build();
+                .setMaxConnPerRoute(10);
+
+        if (sslTrustAll && insecureSslContext != null) {
+            var sslSocketFactory = SSLConnectionSocketFactoryBuilder.create()
+                    .setSslContext(insecureSslContext)
+                    .setHostnameVerifier(NoopHostnameVerifier.INSTANCE)
+                    .build();
+            connManagerBuilder.setSSLSocketFactory(sslSocketFactory);
+        }
+
+        var connManager = connManagerBuilder.build();
         var httpClientBuilder = HttpClientBuilder.create()
                 .setConnectionManager(connManager);
         return new ApacheHttpClientBuilder()

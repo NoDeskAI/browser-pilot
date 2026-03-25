@@ -130,9 +130,15 @@ export function dockerApiPlugin(): Plugin {
           }
 
           if (url === '/api/docker/zoom' && req.method === 'POST') {
-            const body = JSON.parse(await readBody(req))
-            const action = body.action as string
-            const solutionId = body.solutionId as string
+            let body: any
+            try {
+              body = JSON.parse(await readBody(req))
+            } catch {
+              return json(res, 400, { error: 'Invalid JSON body' })
+            }
+            const action = typeof body.action === 'string' ? body.action : ''
+            const solutionId = typeof body.solutionId === 'string' ? body.solutionId : ''
+            if (!solutionId) return json(res, 400, { error: 'Missing solutionId' })
             const target = XDOTOOL_TARGETS[solutionId]
             if (!target) return json(res, 404, { error: `Unknown solution: ${solutionId}` })
 

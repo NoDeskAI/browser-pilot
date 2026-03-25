@@ -29,14 +29,9 @@ const viewOnly = ref(false)
 const clipboardText = ref('')
 const clipboardOpen = ref(false)
 const isFullscreen = ref(false)
-const totalRecv = ref(0)
-const totalSent = ref(0)
-const currentRate = ref(0)
 
 let rfb: RFB | null = null
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null
-let bytesWindow: number[] = []
-let rateTimer: ReturnType<typeof setInterval> | null = null
 let resizeObserver: ResizeObserver | null = null
 
 function fitVncContainer() {
@@ -57,18 +52,6 @@ function fitVncContainer() {
   }
   inner.style.width = w + 'px'
   inner.style.height = h + 'px'
-}
-
-function fmtBytes(b: number): string {
-  if (b < 1024) return b + ' B'
-  if (b < 1048576) return (b / 1024).toFixed(1) + ' KB'
-  return (b / 1048576).toFixed(1) + ' MB'
-}
-
-function fmtRate(bps: number): string {
-  if (bps < 1024) return bps.toFixed(0) + ' B/s'
-  if (bps < 1048576) return (bps / 1024).toFixed(1) + ' KB/s'
-  return (bps / 1048576).toFixed(1) + ' MB/s'
 }
 
 function clearContainer() {
@@ -139,10 +122,6 @@ function scheduleReconnect() {
 }
 
 async function navigate(url: string) {
-  totalRecv.value = 0
-  totalSent.value = 0
-  currentRate.value = 0
-  bytesWindow = []
   try {
     const resp = await fetch('/api/docker/navigate', {
       method: 'POST',
@@ -214,11 +193,6 @@ function onFullscreenChange() {
 defineExpose({ navigate })
 
 onMounted(() => {
-  rateTimer = setInterval(() => {
-    currentRate.value = bytesWindow.reduce((a, b) => a + b, 0)
-    bytesWindow = []
-  }, 1000)
-
   if (vncOuter.value) {
     resizeObserver = new ResizeObserver(() => fitVncContainer())
     resizeObserver.observe(vncOuter.value)
@@ -233,7 +207,6 @@ onMounted(() => {
 onUnmounted(() => {
   if (rfb) { try { rfb.disconnect() } catch { /* noop */ } rfb = null }
   if (reconnectTimer) clearTimeout(reconnectTimer)
-  if (rateTimer) clearInterval(rateTimer)
   resizeObserver?.disconnect()
   document.removeEventListener('fullscreenchange', onFullscreenChange)
 })
@@ -258,12 +231,6 @@ watch(compressionLevel, applyQuality)
       </span>
 
       <span v-if="desktopName" class="text-[var(--color-text-dim)] shrink-0 truncate max-w-32" :title="desktopName">{{ desktopName }}</span>
-
-      <span class="w-px h-3.5 bg-[var(--color-border)] shrink-0" />
-
-      <span class="text-[var(--color-text-dim)] shrink-0">↓ {{ fmtBytes(totalRecv) }}</span>
-      <span class="text-[var(--color-text-dim)] shrink-0">↑ {{ fmtBytes(totalSent) }}</span>
-      <span class="text-[var(--color-text-dim)] shrink-0">{{ fmtRate(currentRate) }}</span>
 
       <span class="w-px h-3.5 bg-[var(--color-border)] shrink-0" />
 
