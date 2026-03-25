@@ -3,7 +3,7 @@ services:
     build: ./backend
     restart: unless-stopped
     ports:
-      - "8080:8080"
+      - "8180:8180"
     environment:
       SELENIUM_BASE_URL: http://selenium:4444
     depends_on:

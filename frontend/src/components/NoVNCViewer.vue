@@ -1,6 +1,10 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, watch } from 'vue'
-import RFB from '@novnc/novnc'
+import RFB from '@novnc/novnc/lib/rfb.js'
+
+const REMOTE_W = 1280
+const REMOTE_H = 800
+const REMOTE_RATIO = REMOTE_W / REMOTE_H
 
 const props = defineProps<{
   wsUrl: string
@@ -13,12 +17,14 @@ const emit = defineEmits<{
 }>()
 
 const vncContainer = ref<HTMLDivElement | null>(null)
+const vncOuter = ref<HTMLDivElement | null>(null)
 const viewerRoot = ref<HTMLDivElement | null>(null)
 const connected = ref(false)
 const desktopName = ref('')
 const qualityLevel = ref(6)
 const compressionLevel = ref(2)
 const scaleMode = ref<'scale' | 'resize'>('scale')
+const zoomBusy = ref(false)
 const viewOnly = ref(false)
 const clipboardText = ref('')
 const clipboardOpen = ref(false)
@@ -31,6 +37,27 @@ let rfb: RFB | null = null
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 let bytesWindow: number[] = []
 let rateTimer: ReturnType<typeof setInterval> | null = null
+let resizeObserver: ResizeObserver | null = null
+
+function fitVncContainer() {
+  const outer = vncOuter.value
+  const inner = vncContainer.value
+  if (!outer || !inner) return
+  const ow = outer.clientWidth
+  const oh = outer.clientHeight
+  if (ow <= 0 || oh <= 0) return
+
+  let w: number, h: number
+  if (ow / oh > REMOTE_RATIO) {
+    h = oh
+    w = Math.round(oh * REMOTE_RATIO)
+  } else {
+    w = ow
+    h = Math.round(ow / REMOTE_RATIO)
+  }
+  inner.style.width = w + 'px'
+  inner.style.height = h + 'px'
+}
 
 function fmtBytes(b: number): string {
   if (b < 1024) return b + ' B'
@@ -60,40 +87,17 @@ function connectRFB() {
   const el = vncContainer.value
   if (!el) return
 
-  const OrigWS = window.WebSocket
-  const recvRef = totalRecv
-  const sentRef = totalSent
-  const bw = bytesWindow
-  ;(window as any).WebSocket = class extends OrigWS {
-    constructor(...args: any[]) {
-      super(...(args as [string, string?]))
-      this.addEventListener('message', (e: MessageEvent) => {
-        const size = e.data instanceof ArrayBuffer ? e.data.byteLength
-          : e.data instanceof Blob ? e.data.size
-          : new Blob([e.data]).size
-        recvRef.value += size
-        bw.push(size)
-      })
-      const origSend = this.send.bind(this)
-      this.send = (data: any) => {
-        const size = data instanceof ArrayBuffer ? data.byteLength
-          : data instanceof Blob ? data.size
-          : new Blob([data]).size
-        sentRef.value += size
-        origSend(data)
-      }
-    }
-  }
+  console.log('[noVNC] connecting to', props.wsUrl)
 
   try {
     rfb = new RFB(el, props.wsUrl)
-  } catch {
-    window.WebSocket = OrigWS
+  } catch (err) {
+    console.error('[noVNC] RFB constructor failed:', err)
     scheduleReconnect()
     return
   }
 
-  window.WebSocket = OrigWS
+  console.log('[noVNC] RFB created successfully')
 
   rfb.scaleViewport = scaleMode.value === 'scale'
   rfb.resizeSession = scaleMode.value === 'resize'
@@ -103,10 +107,12 @@ function connectRFB() {
   rfb.focusOnClick = true
 
   rfb.addEventListener('connect', () => {
+    console.log('[noVNC] connected!')
     connected.value = true
   })
 
   rfb.addEventListener('disconnect', (e: CustomEvent<{ clean: boolean }>) => {
+    console.warn('[noVNC] disconnected, clean:', e.detail.clean)
     connected.value = false
     if (!e.detail.clean) scheduleReconnect()
   })
@@ -120,6 +126,7 @@ function connectRFB() {
   })
 
   rfb.addEventListener('credentialsrequired', () => {
+    console.log('[noVNC] credentials required, sending empty password')
     if (rfb) rfb.sendCredentials({ password: '' })
   })
 }
@@ -165,6 +172,19 @@ function toggleScaleMode() {
   }
 }
 
+async function browserZoom(action: 'in' | 'out' | 'reset') {
+  if (zoomBusy.value) return
+  zoomBusy.value = true
+  try {
+    await fetch('/api/docker/zoom', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ solutionId: props.solutionId, action }),
+    })
+  } catch { /* ignore */ }
+  zoomBusy.value = false
+}
+
 function toggleViewOnly() {
   viewOnly.value = !viewOnly.value
   if (rfb) rfb.viewOnly = viewOnly.value
@@ -198,6 +218,13 @@ onMounted(() => {
     currentRate.value = bytesWindow.reduce((a, b) => a + b, 0)
     bytesWindow = []
   }, 1000)
+
+  if (vncOuter.value) {
+    resizeObserver = new ResizeObserver(() => fitVncContainer())
+    resizeObserver.observe(vncOuter.value)
+    fitVncContainer()
+  }
+
   connectRFB()
   if (props.initialUrl) navigate(props.initialUrl)
   document.addEventListener('fullscreenchange', onFullscreenChange)
@@ -207,6 +234,7 @@ onUnmounted(() => {
   if (rfb) { try { rfb.disconnect() } catch { /* noop */ } rfb = null }
   if (reconnectTimer) clearTimeout(reconnectTimer)
   if (rateTimer) clearInterval(rateTimer)
+  resizeObserver?.disconnect()
   document.removeEventListener('fullscreenchange', onFullscreenChange)
 })
 
@@ -286,6 +314,28 @@ watch(compressionLevel, applyQuality)
         :title="scaleMode === 'scale' ? '缩放模式：适应容器' : '缩放模式：调整远程分辨率'"
       >{{ scaleMode === 'scale' ? '适应' : '原生' }}</button>
 
+      <!-- Browser zoom (remote Chromium) -->
+      <span class="flex items-center gap-0.5 shrink-0">
+        <button
+          @click="browserZoom('out')"
+          :disabled="zoomBusy || !connected"
+          class="w-5 h-5 flex items-center justify-center rounded text-[11px] font-bold bg-[var(--color-surface-hover)] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors disabled:opacity-30"
+          title="远程浏览器缩小 (Ctrl+-)"
+        >−</button>
+        <button
+          @click="browserZoom('reset')"
+          :disabled="zoomBusy || !connected"
+          class="px-1 h-5 flex items-center justify-center rounded text-[10px] bg-[var(--color-surface-hover)] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors disabled:opacity-30"
+          title="远程浏览器重置缩放 (Ctrl+0)"
+        >100%</button>
+        <button
+          @click="browserZoom('in')"
+          :disabled="zoomBusy || !connected"
+          class="w-5 h-5 flex items-center justify-center rounded text-[11px] font-bold bg-[var(--color-surface-hover)] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors disabled:opacity-30"
+          title="远程浏览器放大 (Ctrl++)"
+        >+</button>
+      </span>
+
       <!-- Quality -->
       <span class="flex items-center gap-1 shrink-0">
         <span class="text-[var(--color-text-dim)] text-[10px]">Q</span>
@@ -318,11 +368,17 @@ watch(compressionLevel, applyQuality)
     </div>
 
     <!-- VNC display area -->
-    <div ref="vncContainer" class="flex-1 relative overflow-hidden bg-black" />
+    <div ref="vncOuter" class="flex-1 relative overflow-hidden bg-black flex items-center justify-center">
+      <div ref="vncContainer" class="vnc-canvas-wrapper" />
+    </div>
   </div>
 </template>
 
 <style scoped>
+.vnc-canvas-wrapper {
+  overflow: hidden;
+  position: relative;
+}
 input[type="range"] {
   -webkit-appearance: none;
   appearance: none;

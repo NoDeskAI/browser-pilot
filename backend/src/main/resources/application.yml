@@ -1,5 +1,5 @@
 server:
-  port: 8080
+  port: 8180
 
 app:
   selenium-base-url: ${SELENIUM_BASE_URL:http://localhost:4444}

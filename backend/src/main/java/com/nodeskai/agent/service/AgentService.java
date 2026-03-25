@@ -28,7 +28,9 @@ import java.util.concurrent.atomic.AtomicInteger;
 public class AgentService {
 
     private static final Logger log = LoggerFactory.getLogger(AgentService.class);
-    private static final int MAX_ATTEMPTS = 3;
+    private static final int MAX_ATTEMPTS = 5;
+    private static final int MAX_THROTTLE_RETRIES = 4;
+    private static final long[] THROTTLE_BACKOFF_MS = {2_000, 4_000, 8_000, 15_000};
     private static final int MAX_STEPS = 25;
     private static final Set<String> KNOWN_TOOLS = Set.of(
             "browser_navigate", "browser_list_tabs", "browser_switch_tab",
@@ -137,7 +139,9 @@ public class AgentService {
             }
 
             int attempt = 0;
+            int throttleRetry = 0;
             boolean success = false;
+            boolean retryMsgSent = false;
 
             while (attempt < MAX_ATTEMPTS && !Thread.currentThread().isInterrupted()) {
                 attempt++;
@@ -146,6 +150,7 @@ public class AgentService {
                 StringBuilder textAccumulator = new StringBuilder();
                 CountDownLatch latch = new CountDownLatch(1);
                 AtomicBoolean hasError = new AtomicBoolean(false);
+                var errorMsg = new java.util.concurrent.atomic.AtomicReference<String>();
 
                 String msgToSend = lastUserMsg;
 
@@ -178,7 +183,7 @@ public class AgentService {
                             .onError(err -> {
                                 log.error("Agent stream error: {}", err.getMessage());
                                 hasError.set(true);
-                                sendEvent(sessionId, Map.of("type", "error", "message", err.getMessage()));
+                                errorMsg.set(err.getMessage() != null ? err.getMessage() : err.toString());
                                 latch.countDown();
                             })
                             .start();
@@ -190,6 +195,41 @@ public class AgentService {
                 } catch (Exception e) {
                     log.error("Agent execution error: {}", e.getMessage());
                     sendEvent(sessionId, Map.of("type", "error", "message", e.getMessage()));
+                    break;
+                }
+
+                if (hasError.get() && isRetriableError(errorMsg.get())) {
+                    if (throttleRetry < MAX_THROTTLE_RETRIES) {
+                        long waitMs = THROTTLE_BACKOFF_MS[Math.min(throttleRetry, THROTTLE_BACKOFF_MS.length - 1)];
+                        throttleRetry++;
+                        attempt--;
+                        log.warn("Retriable API error, retry {} after {}ms: {}", throttleRetry, waitMs,
+                                errorMsg.get() != null ? errorMsg.get().substring(0, Math.min(80, errorMsg.get().length())) : "null");
+                        if (!retryMsgSent) {
+                            sendEvent(sessionId, Map.of("type", "text", "content",
+                                    "\n\n⏳ API 连接异常，自动重试中...\n"));
+                            retryMsgSent = true;
+                        }
+                        try {
+                            Thread.sleep(waitMs);
+                        } catch (InterruptedException ie) {
+                            Thread.currentThread().interrupt();
+                            break;
+                        }
+                        lastUserMsg = "[SYSTEM] 之前的API调用因连接问题中断。请调用 browser_observe 获取当前页面状态,然后继续执行任务。";
+                        continue;
+                    }
+                    sendEvent(sessionId, Map.of("type", "error", "message",
+                            "API 连接持续异常，请稍后再试或更换模型。"));
+                    sendEvent(sessionId, Map.of("type", "done"));
+                    success = true;
+                    break;
+                }
+
+                if (hasError.get()) {
+                    sendEvent(sessionId, Map.of("type", "error", "message", errorMsg.get()));
+                    sendEvent(sessionId, Map.of("type", "done"));
+                    success = true;
                     break;
                 }
 
@@ -208,26 +248,33 @@ public class AgentService {
                     }
                 }
 
-                if (hadToolCalls.get() || hasError.get()) {
+                if (hadToolCalls.get()) {
                     sendEvent(sessionId, Map.of("type", "done"));
                     success = true;
                     break;
                 }
 
+                boolean hallucinating = isHallucinatingText(text);
+
                 if (attempt < MAX_ATTEMPTS) {
-                    log.warn("Agent finished without tool calls (attempt {}). Retrying...", attempt);
-                    sendEvent(sessionId, Map.of("type", "text", "content",
-                            "\n\n\uD83D\uDD04 Agent 未执行操作，自动重试中...\n"));
-                    String retryHint = text.contains("验证码")
-                            ? "你刚才描述了验证码操作但没有调用工具。请立刻调用 browser_observe 观察当前页面，然后执行具体操作。"
-                            : "你刚才没有调用任何工具。请立刻调用 browser_observe 观察当前页面状态，然后根据结果执行下一步操作。";
-                    lastUserMsg = retryHint;
+                    log.warn("Agent {} (attempt {}). Text length: {}",
+                            hallucinating ? "hallucinated" : "no tool calls", attempt, text.length());
+                    if (!retryMsgSent) {
+                        sendEvent(sessionId, Map.of("type", "text", "content",
+                                "\n\n🔄 Agent 未执行操作，自动重试中...\n"));
+                        retryMsgSent = true;
+                    }
+                    lastUserMsg = hallucinating
+                            ? "[SYSTEM] 你刚才产生了幻觉:在文字中描述了操作(如'已点击','已输入','让我观察'),但实际上没有调用任何工具。浏览器没有执行任何操作。现在请立刻调用 browser_observe 获取浏览器的真实状态,然后用工具执行操作。只说一句话,然后调用工具。"
+                            : "[SYSTEM] 你刚才没有调用任何工具。请立刻调用 browser_observe 观察当前页面状态,然后根据结果执行下一步操作。回复要简短,必须包含工具调用。";
                 }
             }
 
             if (!success) {
-                sendEvent(sessionId, Map.of("type", "text", "content",
-                        "\n\n💡 Agent 连续未执行操作。请尝试更明确的指令，或清除对话重新开始。"));
+                if (!retryMsgSent) {
+                    sendEvent(sessionId, Map.of("type", "text", "content",
+                            "\n\n⚠️ Agent 未能执行操作，请尝试更明确的指令。"));
+                }
                 sendEvent(sessionId, Map.of("type", "done"));
             }
 
@@ -294,6 +341,57 @@ public class AgentService {
             return trimmed;
         }
         return result;
+    }
+
+    private static final List<String> HALLUCINATION_PATTERNS = List.of(
+            "已输入", "已点击", "已提交", "密码已", "账号已", "账号密码已",
+            "让我观察", "让我点击", "让我再次", "让我尝试", "让我重新",
+            "登录按钮点击后", "登录按钮已", "观察登录结果", "观察结果",
+            "页面仍然", "登录框仍", "登录似乎", "登录可能",
+            "刷新页面", "重新输入", "再次尝试", "这次确保",
+            "登录成功", "搜索到了", "看到了", "进入了"
+    );
+
+    private static boolean isHallucinatingText(String text) {
+        if (text == null || text.length() < 20) return false;
+
+        int fakeToolLines = 0;
+        for (String line : text.split("\n")) {
+            String trimmed = line.trim();
+            if (trimmed.startsWith("[tools:") || trimmed.startsWith("[tool:") ||
+                    trimmed.startsWith("browser_") && trimmed.contains("=>")) {
+                fakeToolLines++;
+            }
+        }
+        if (fakeToolLines >= 2) return true;
+
+        int matches = 0;
+        for (String pattern : HALLUCINATION_PATTERNS) {
+            if (text.contains(pattern)) matches++;
+        }
+        return matches >= 2 || (text.length() > 150 && !text.contains("browser_observe"));
+    }
+
+    private static boolean isRetriableError(String msg) {
+        if (msg == null) return false;
+        String lower = msg.toLowerCase();
+        return lower.contains("throttl") || lower.contains("too many request")
+                || lower.contains("rate limit") || lower.contains("429")
+                || (lower.contains("503") && lower.contains("capacity"))
+                || lower.contains("status code must not be negative or zero")
+                || lower.contains("invalid status line")
+                || lower.contains("protocolexception")
+                || lower.contains("connection reset")
+                || lower.contains("connection closed")
+                || lower.contains("broken pipe")
+                || lower.contains("stream closed")
+                || lower.contains("unexpected end of stream")
+                || lower.contains("operation timed out")
+                || lower.contains("unknown error")
+                || lower.contains("api_error")
+                || lower.contains("internal_error")
+                || lower.contains("server_error")
+                || lower.contains("502") || lower.contains("500");
     }
 
     private Object parseJsonSafe(String json) {

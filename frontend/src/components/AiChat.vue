@@ -46,6 +46,7 @@ const messages = ref<ChatMessage[]>([])
 const input = ref('')
 const loading = ref(false)
 const chatContainer = ref<HTMLElement>()
+const textareaRef = ref<HTMLTextAreaElement>()
 const configOpen = ref(false)
 const wsConnected = ref(false)
 let ws: WebSocket | null = null
@@ -104,6 +105,13 @@ async function scrollToBottom() {
   if (chatContainer.value) {
     chatContainer.value.scrollTop = chatContainer.value.scrollHeight
   }
+}
+
+function autoResizeTextarea() {
+  const el = textareaRef.value
+  if (!el) return
+  el.style.height = 'auto'
+  el.style.height = Math.min(el.scrollHeight, 120) + 'px'
 }
 
 function toolArgsSummary(args: Record<string, any> | undefined): string {
@@ -174,7 +182,6 @@ function buildApiMessages() {
 
   const result: { role: 'user' | 'assistant'; content: string }[] = []
 
-  // Inject previous session context if this is a fresh conversation
   const prevSession = localStorage.getItem('ai_prev_session')
   if (prevSession && all.length <= MAX_RECENT_TURNS * 2) {
     const prefix = `[上一轮对话摘要]\n${prevSession}\n[摘要结束]\n\n以上是之前对话的记录，仅供参考。请根据用户当前指令执行操作。`
@@ -199,8 +206,8 @@ function buildApiMessages() {
       if (m.role === 'user') {
         lines.push(`用户: ${text}`)
       } else {
-        const tools = m.blocks.filter(b => b.type === 'tool_call').map(b => b.toolName).join(', ')
-        lines.push(`助手: ${tools ? `[调用了 ${tools}] ` : ''}${text.slice(0, 60)}`)
+        const tools = m.blocks.filter(b => b.type === 'tool_call').map(b => (b.toolName || '').replace('browser_', '')).join(',')
+        lines.push(`助手: ${tools ? `(did: ${tools}) ` : ''}${text.slice(0, 60)}`)
       }
     }
     const summaryWithTask = firstUserText
@@ -226,15 +233,16 @@ function summarizeAssistantMsg(m: ChatMessage): string {
   const toolCalls = m.blocks.filter(b => b.type === 'tool_call' && b.toolName)
   const toolResults = m.blocks.filter(b => b.type === 'tool_result' && b.id)
   if (toolCalls.length > 0) {
-    const summary = toolCalls.map((tc) => {
+    const ops = toolCalls.map(tc => {
       const tr = toolResults.find(r => r.id === tc.id)
-      const status = tr?.result?.ok === false ? 'FAIL' : 'ok'
-      const page = tr?.result?.currentPage ? ` ${tr.result.currentPage.url}` : ''
-      return `${tc.toolName}=>${status}${page}`
-    }).join('; ')
-    return `[tools: ${summary}]\n${textParts.join('\n').slice(0, 200)}`
+      const ok = tr?.result?.ok !== false
+      const name = (tc.toolName || '').replace('browser_', '')
+      return ok ? name : `${name}(failed)`
+    }).join(',')
+    const text = textParts.join(' ').slice(0, 80)
+    return `(did: ${ops})${text ? ' ' + text : ''}`
   }
-  return textParts.join('\n') || '(no content)'
+  return textParts.join('\n').slice(0, 120) || '(no output)'
 }
 
 async function send() {
@@ -256,6 +264,8 @@ async function send() {
   messages.value.push({ role: 'user', blocks: [{ type: 'text', content: text }] })
   input.value = ''
   loading.value = true
+  await nextTick()
+  autoResizeTextarea()
   await scrollToBottom()
 
   const fullMessages = buildApiMessages()
@@ -305,7 +315,7 @@ function clearChat() {
 function connectWs() {
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return
 
-  const url = `ws://${location.hostname}:8080/ws/agent`
+  const url = `ws://${location.hostname}:8180/ws/agent`
   ws = new WebSocket(url)
 
   ws.onopen = () => {
@@ -519,8 +529,8 @@ onUnmounted(() => {
     <!-- Input -->
     <div class="shrink-0 p-3 border-t border-[var(--color-border)]">
       <div class="flex gap-2">
-        <textarea v-model="input" @keydown.enter.exact="handleEnter" rows="1"
-          class="flex-1 px-3 py-2 rounded-lg bg-[var(--color-bg)] border border-[var(--color-border)] text-xs text-[var(--color-text)] outline-none focus:border-[var(--color-accent)] transition-colors resize-none"
+        <textarea ref="textareaRef" v-model="input" @keydown.enter.exact="handleEnter" @input="autoResizeTextarea" rows="1"
+          class="flex-1 px-3 py-2 rounded-lg bg-[var(--color-bg)] border border-[var(--color-border)] text-xs text-[var(--color-text)] outline-none focus:border-[var(--color-accent)] transition-colors resize-none leading-relaxed"
           :placeholder="loading ? '输入新指令可中断当前任务... (Enter 发送)' : '输入指令... (Enter 发送)'" />
         <button v-if="loading && !input.trim()" @click="stopGeneration"
           class="shrink-0 w-8 h-8 flex items-center justify-center rounded-lg bg-red-500/80 text-white hover:bg-red-500 transition-colors"

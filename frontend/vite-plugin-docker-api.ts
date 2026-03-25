@@ -129,6 +129,37 @@ export function dockerApiPlugin(): Plugin {
             return json(res, result.ok ? 200 : 400, result)
           }
 
+          if (url === '/api/docker/zoom' && req.method === 'POST') {
+            const body = JSON.parse(await readBody(req))
+            const action = body.action as string
+            const solutionId = body.solutionId as string
+            const target = XDOTOOL_TARGETS[solutionId]
+            if (!target) return json(res, 404, { error: `Unknown solution: ${solutionId}` })
+
+            const keyMap: Record<string, string> = {
+              in: 'ctrl+plus',
+              out: 'ctrl+minus',
+              reset: 'ctrl+0',
+            }
+            const key = keyMap[action]
+            if (!key) return json(res, 400, { error: `Invalid action: ${action}` })
+
+            log(`zoom: [${solutionId}] ${action} -> ${key}`)
+            const cmd = [
+              `export DISPLAY=${target.display}`,
+              `WID=$(xdotool search --class ${target.wmClass} 2>/dev/null | tail -1)`,
+              `[ -z "$WID" ] && exit 1`,
+              `xdotool windowactivate $WID`,
+              `xdotool key --clearmodifiers ${key}`,
+            ].join(' && ')
+            try {
+              await dockerCompose(`exec -T ${target.service} bash -c '${cmd}'`, 10_000)
+              return json(res, 200, { ok: true })
+            } catch (e: any) {
+              return json(res, 400, { ok: false, error: e.message?.slice(0, 200) })
+            }
+          }
+
           json(res, 404, { error: 'Not found' })
         } catch (e: any) {
           log(`ERROR on ${url}: ${e.message?.slice(0, 300)}`)
