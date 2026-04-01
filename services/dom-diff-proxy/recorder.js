@@ -140,6 +140,27 @@
     subtree: true,
   });
 
+  document.addEventListener('input', (e) => {
+    const el = e.target;
+    if (!el || !_ids.has(el)) return;
+    if ('value' in el) {
+      buf.push({ op: 'prop', id: _ids.get(el), k: 'value', v: el.value });
+    }
+    if ('checked' in el) {
+      buf.push({ op: 'prop', id: _ids.get(el), k: 'checked', v: el.checked });
+    }
+    if (!flushTimer) flushTimer = setTimeout(flush, 50);
+  }, true);
+
+  document.addEventListener('change', (e) => {
+    const el = e.target;
+    if (!el || !_ids.has(el)) return;
+    if (el.tagName === 'SELECT' && 'value' in el) {
+      buf.push({ op: 'prop', id: _ids.get(el), k: 'value', v: el.value });
+      if (!flushTimer) flushTimer = setTimeout(flush, 50);
+    }
+  }, true);
+
   let scrollTimer = null;
   window.addEventListener('scroll', () => {
     clearTimeout(scrollTimer);

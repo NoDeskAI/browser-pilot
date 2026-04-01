@@ -37,9 +37,27 @@ const TOOL_LABELS: Record<string, string> = {
   browser_key: '按键',
   browser_scroll: '滚动',
   browser_get_page_info: '页面信息',
+  browser_list_tabs: '标签页列表',
+  browser_switch_tab: '切换标签页',
   docker_status: '容器状态',
   docker_start: '启动服务',
   docker_stop: '停止服务',
+  bash: '执行命令',
+  file_read: '读取文件',
+  file_write: '写入文件',
+  file_edit: '编辑文件',
+  grep: '搜索内容',
+  glob: '搜索文件',
+}
+
+const TOOL_ICONS: Record<string, string> = {
+  browser_navigate: '🌐', browser_observe: '👁', browser_click: '🖱',
+  browser_click_element: '🖱', browser_type: '⌨', browser_key: '⌨',
+  browser_scroll: '📜', browser_get_page_info: 'ℹ',
+  browser_list_tabs: '📑', browser_switch_tab: '↔',
+  docker_status: '🐳', docker_start: '▶', docker_stop: '⏹',
+  bash: '💻', file_read: '📄', file_write: '📝',
+  file_edit: '✏', grep: '🔍', glob: '📂',
 }
 
 // ---------------------------------------------------------------------------
@@ -214,9 +232,10 @@ function toolArgsSummary(args: Record<string, any> | undefined): string {
   }).join(', ')
 }
 
-function toolResultSummary(result: any): string {
+function toolResultSummary(result: any, toolName?: string): string {
   if (!result) return ''
   if (result.error) return `错误: ${result.error}`
+
   if (result.currentPage?.url || result.currentPage?.title) {
     const title = result.currentPage.title || '(无标题)'
     const url = result.currentPage.url || ''
@@ -235,8 +254,41 @@ function toolResultSummary(result: any): string {
     const entries = Object.entries(result.statuses as Record<string, string>)
     return entries.map(([k, v]) => `${k}: ${v}`).join(', ')
   }
+  if (typeof result.exitCode === 'number') {
+    const status = result.exitCode === 0 ? '成功' : `退出码 ${result.exitCode}`
+    const preview = (result.stdout || result.stderr || '').slice(0, 120)
+    return `${status}${preview ? ': ' + preview : ''}`
+  }
+  if (result.path && result.totalLines) {
+    return `${result.path} (${result.totalLines} 行)`
+  }
+  if (result.path && typeof result.replacements === 'number') {
+    return `${result.path}: ${result.replacements} 处替换`
+  }
+  if (result.path && result.lines) {
+    return `${result.path} (${result.lines} 行, ${result.bytes} bytes)`
+  }
+  if (typeof result.matches === 'number') {
+    return `${result.matches} 个匹配`
+  }
+  if (result.files) {
+    return `${result.count || result.files.length} 个文件`
+  }
   if (result.ok === true) return '成功'
   return JSON.stringify(result).slice(0, 80)
+}
+
+function isCodeTool(name?: string): boolean {
+  return !!name && ['bash', 'file_read', 'file_write', 'file_edit', 'grep', 'glob'].includes(name)
+}
+
+function getToolResultContent(result: any, toolName?: string): string | null {
+  if (!result || !toolName) return null
+  if (toolName === 'bash') return result.stdout || result.stderr || null
+  if (toolName === 'file_read') return result.content || null
+  if (toolName === 'grep') return result.output || null
+  if (toolName === 'glob' && result.files?.length) return result.files.join('\n')
+  return null
 }
 
 function parseThinkSegments(content: string): { type: 'think' | 'text'; content: string; unclosed?: boolean }[] {
@@ -294,50 +346,16 @@ function stopGeneration() {
   }
 }
 
-const MAX_RECENT_TURNS = 3
-
 function buildApiMessages() {
-  const all = messages.value.filter(m => m.blocks.some(b => (b.type === 'text' && b.content) || b.type === 'tool_call'))
-
-  const recentStart = Math.max(0, all.length - MAX_RECENT_TURNS * 2)
-  const oldMsgs = all.slice(0, recentStart)
-  const recentMsgs = all.slice(recentStart)
-
   const result: { role: 'user' | 'assistant'; content: string }[] = []
 
-  if (oldMsgs.length > 0) {
-    const lines: string[] = []
-    for (const m of oldMsgs) {
-      const text = m.blocks.filter(b => b.type === 'text' && b.content).map(b => b.content!).join(' ').slice(0, 100)
-      if (m.role === 'user') {
-        lines.push(`用户: ${text}`)
-      } else {
-        const tools = m.blocks.filter(b => b.type === 'tool_call').map(b => b.toolName).join(', ')
-        lines.push(`助手: ${tools ? `[调用了 ${tools}] ` : ''}${text.slice(0, 60)}`)
-      }
-    }
-    result.push({ role: 'user', content: `[之前的对话摘要]\n${lines.join('\n')}\n[摘要结束]` })
-    result.push({ role: 'assistant', content: '好的，我了解之前的对话内容。请告诉我下一步需要做什么。' })
-  }
-
-  for (const m of recentMsgs) {
+  for (const m of messages.value) {
     if (m.role === 'user') {
-      result.push({ role: 'user', content: m.blocks.filter(b => b.type === 'text').map(b => b.content).join('\n') })
+      const text = m.blocks.filter(b => b.type === 'text' && b.content).map(b => b.content!).join('\n')
+      if (text) result.push({ role: 'user', content: text })
     } else {
-      const textParts = m.blocks.filter(b => b.type === 'text' && b.content).map(b => b.content!)
-      const toolCalls = m.blocks.filter(b => b.type === 'tool_call' && b.toolName)
-      const toolResults = m.blocks.filter(b => b.type === 'tool_result' && b.id)
-      if (toolCalls.length > 0) {
-        const summary = toolCalls.map((tc) => {
-          const tr = toolResults.find(r => r.id === tc.id)
-          const status = tr?.result?.ok === false ? `FAIL` : 'ok'
-          const page = tr?.result?.currentPage ? ` ${tr.result.currentPage.url}` : ''
-          return `${tc.toolName}=>${status}${page}`
-        }).join('; ')
-        result.push({ role: 'assistant', content: `[tools: ${summary}]\n${textParts.join('\n').slice(0, 200)}` })
-      } else {
-        result.push({ role: 'assistant', content: textParts.join('\n') || '(no content)' })
-      }
+      const text = m.blocks.filter(b => b.type === 'text' && b.content).map(b => b.content!).join('\n')
+      if (text) result.push({ role: 'assistant', content: text })
     }
   }
 
@@ -577,7 +595,7 @@ onBeforeUnmount(() => {
         <Sparkles class="w-10 h-10 mb-3 opacity-20" :stroke-width="1" />
         <p class="text-xs text-center leading-relaxed">
           NoDeskPane Agent 已就绪<br />
-          <span class="text-[10px] opacity-60">可操控远程浏览器、管理 Docker 服务</span>
+          <span class="text-[10px] opacity-60">浏览器操控 · Docker 管理 · 代码读写 · 命令执行</span>
         </p>
       </div>
 
@@ -618,6 +636,7 @@ onBeforeUnmount(() => {
             <div class="flex items-center gap-1.5 px-2.5 py-1.5 border-b border-[var(--color-border)] bg-[var(--color-surface)]">
               <Loader v-if="item.block.loading" class="w-3 h-3 animate-spin text-[var(--color-accent)]" />
               <Check v-else class="w-3 h-3 text-green-400" />
+              <span class="text-[11px] leading-none">{{ TOOL_ICONS[item.block.toolName || ''] || '🔧' }}</span>
               <span class="text-[10px] font-medium text-[var(--color-text)]">{{ TOOL_LABELS[item.block.toolName || ''] || item.block.toolName }}</span>
               <span class="text-[9px] text-[var(--color-text-dim)] ml-auto font-mono">{{ item.block.toolName }}</span>
             </div>
@@ -630,8 +649,16 @@ onBeforeUnmount(() => {
         <!-- Tool result -->
         <div v-else-if="item.block.type === 'tool_result'" class="flex justify-start">
           <div class="max-w-[90%]">
-            <div v-if="item.block.result" class="px-2.5 py-1.5 rounded-md bg-[var(--color-bg)] border border-[var(--color-border)] text-[10px] text-[var(--color-text-dim)] font-mono">
-              {{ toolResultSummary(item.block.result) }}
+            <!-- Code tool result with expandable output -->
+            <div v-if="isCodeTool(item.block.toolName) && getToolResultContent(item.block.result, item.block.toolName)" class="rounded-md border border-[var(--color-border)] overflow-hidden">
+              <div class="px-2.5 py-1 bg-[var(--color-surface)] text-[10px] text-[var(--color-text-dim)] font-mono border-b border-[var(--color-border)]">
+                {{ toolResultSummary(item.block.result, item.block.toolName) }}
+              </div>
+              <pre class="px-2.5 py-1.5 text-[10px] leading-relaxed text-[var(--color-text)] bg-[#0d1117] overflow-x-auto max-h-48 font-mono whitespace-pre">{{ getToolResultContent(item.block.result, item.block.toolName) }}</pre>
+            </div>
+            <!-- Default result summary -->
+            <div v-else-if="item.block.result" class="px-2.5 py-1.5 rounded-md bg-[var(--color-bg)] border border-[var(--color-border)] text-[10px] text-[var(--color-text-dim)] font-mono">
+              {{ toolResultSummary(item.block.result, item.block.toolName) }}
             </div>
           </div>
         </div>

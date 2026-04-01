@@ -6,8 +6,6 @@ import { Play, Loader, Square, Sparkles, ChevronLeft, ChevronRight, Monitor } fr
 import SolutionCard from './components/SolutionCard.vue'
 import AiChat from './components/AiChat.vue'
 import DOMDiffViewer from './components/DOMDiffViewer.vue'
-import CDPViewer from './components/CDPViewer.vue'
-import MJPEGViewer from './components/MJPEGViewer.vue'
 import RrwebViewer from './components/RrwebViewer.vue'
 import NoVNCViewer from './components/NoVNCViewer.vue'
 
@@ -232,22 +230,6 @@ onUnmounted(stopPolling)
             <p class="text-sm">点击左侧任意方案卡片，右侧将展示远程浏览器的实时画面</p>
           </div>
 
-          <CDPViewer
-            v-if="selected?.viewerType === 'cdp-screenshot'"
-            ref="viewerRef"
-            :key="selected.id"
-            :ws-url="selected.url"
-            :initial-url="urlInput"
-            @url-change="(url: string) => urlInput = url"
-          />
-          <MJPEGViewer
-            v-else-if="selected?.viewerType === 'mjpeg'"
-            ref="viewerRef"
-            :key="selected.id"
-            :service-url="selected.url"
-            :initial-url="urlInput"
-            @url-change="(url: string) => urlInput = url"
-          />
           <DOMDiffViewer
             v-else-if="selected?.viewerType === 'dom-diff'"
             ref="viewerRef"

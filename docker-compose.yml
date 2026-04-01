@@ -12,28 +12,6 @@ services:
       SE_SCREEN_HEIGHT: 800
       SE_SCREEN_DEPTH: 24
 
-  cdp-proxy:
-    build: ./services/cdp-proxy
-    restart: unless-stopped
-    shm_size: "2gb"
-    ports:
-      - "3100:3100"
-    environment:
-      PORT: 3100
-      FPS: 5
-      PUPPETEER_EXECUTABLE_PATH: /usr/bin/chromium
-
-  mjpeg-stream:
-    build: ./services/mjpeg-stream
-    restart: unless-stopped
-    shm_size: "2gb"
-    ports:
-      - "3200:3200"
-    environment:
-      PORT: 3200
-      FPS: 5
-      PUPPETEER_EXECUTABLE_PATH: /usr/bin/chromium
-
   dom-diff-proxy:
     build: ./services/dom-diff-proxy
     restart: unless-stopped

@@ -132,6 +132,13 @@ function applyMutations(ops: any[]) {
         if (node && 'data' in node) node.data = op.d ?? ''
         break
       }
+      case 'prop': {
+        const node = nodeMap.get(op.id) as HTMLElement
+        if (node && op.k in node) {
+          ;(node as any)[op.k] = op.v
+        }
+        break
+      }
     }
   }
 }
@@ -232,11 +239,10 @@ function sendResize() {
 
 function onMouseDown(e: MouseEvent) {
   ;(e.currentTarget as HTMLElement)?.focus()
-  send({ type: 'mousedown', x: e.offsetX, y: e.offsetY, button: e.button })
 }
 
-function onMouseUp(e: MouseEvent) {
-  send({ type: 'mouseup', x: e.offsetX, y: e.offsetY, button: e.button })
+function onClick(e: MouseEvent) {
+  send({ type: 'click', x: e.offsetX, y: e.offsetY, button: e.button })
 }
 
 function onMouseMove(e: MouseEvent) {
@@ -350,7 +356,7 @@ watch(() => props.wsUrl, () => {
       <div
         class="absolute inset-0 cursor-default"
         @mousedown="onMouseDown"
-        @mouseup="onMouseUp"
+        @click="onClick"
         @mousemove.passive="onMouseMove"
         @wheel.passive="onWheel"
         @keydown="onKeyDown"

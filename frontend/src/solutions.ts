@@ -6,7 +6,7 @@ export interface Solution {
   description: string
   port: number
   services: string[]
-  viewerType: 'iframe' | 'novnc' | 'dom-diff' | 'cdp-screenshot' | 'mjpeg' | 'rrweb'
+  viewerType: 'iframe' | 'novnc' | 'dom-diff' | 'rrweb'
   url: string
   tags: string[]
   color: string
@@ -33,36 +33,6 @@ export const solutions: Solution[] = [
     multiUser: false,
     github: 'https://github.com/SeleniumHQ/docker-selenium',
     stars: '8.3k',
-  },
-  {
-    id: 'cdp-screenshot',
-    name: 'CDP Screenshot',
-    tech: 'Page.captureScreenshot + Canvas',
-    protocol: 'WebSocket / Base64 JPEG',
-    description: '通过 CDP 截图接口定时抓取页面 JPEG 截图，WebSocket 推送 base64 帧到客户端 Canvas 渲染。',
-    port: 3100,
-    services: ['cdp-proxy'],
-    viewerType: 'cdp-screenshot',
-    url: 'ws://localhost:3100',
-    tags: ['CDP', 'Screenshot', 'JPEG', 'Canvas', 'Puppeteer'],
-    color: '#a855f7',
-    latency: '200-400ms',
-    multiUser: false,
-  },
-  {
-    id: 'mjpeg',
-    name: 'MJPEG Stream',
-    tech: 'HTTP Multipart JPEG',
-    protocol: 'HTTP / multipart/x-mixed-replace',
-    description: 'MJPEG 视频流方案：通过 HTTP multipart 持续推送 JPEG 帧，浏览器原生 img 标签直接渲染。',
-    port: 3200,
-    services: ['mjpeg-stream'],
-    viewerType: 'mjpeg',
-    url: 'http://localhost:3200',
-    tags: ['MJPEG', 'HTTP', 'Multipart', 'Puppeteer'],
-    color: '#f97316',
-    latency: '200-500ms',
-    multiUser: true,
   },
   {
     id: 'dom-diff',

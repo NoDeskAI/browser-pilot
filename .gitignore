@@ -9,3 +9,11 @@ dist-ssr/
 .cursor/
 cursor.md
 *.sw?
+
+# Python
+__pycache__/
+
+# Runtime
+logs/
+.env
+*.pid

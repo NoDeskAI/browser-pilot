@@ -9,15 +9,11 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@ai-sdk/anthropic": "^3.0.58",
-    "@ai-sdk/openai": "^3.0.41",
     "@novnc/novnc": "^1.7.0-beta",
-    "ai": "^6.0.116",
     "lucide-vue-next": "^0.577.0",
     "marked": "^17.0.5",
     "vue": "^3.5.25",
-    "vue-router": "^4.6.4",
-    "zod": "^4.3.6"
+    "vue-router": "^4.6.4"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.2.1",
