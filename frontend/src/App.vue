@@ -1,26 +1,39 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
-import { solutions, type Solution } from './solutions'
-import { useDocker } from './composables/useDocker'
-import { Play, Loader, Square, Sparkles, ChevronLeft, ChevronRight, Monitor } from 'lucide-vue-next'
-import SolutionCard from './components/SolutionCard.vue'
+import { ref, computed, onMounted } from 'vue'
+import { useSessions } from './composables/useSessions'
+import { Loader, Sparkles, PanelLeftClose, PanelLeft, Plus, Monitor, Play } from 'lucide-vue-next'
+import SessionItem from './components/SessionItem.vue'
 import AiChat from './components/AiChat.vue'
-import DOMDiffViewer from './components/DOMDiffViewer.vue'
-import RrwebViewer from './components/RrwebViewer.vue'
 import NoVNCViewer from './components/NoVNCViewer.vue'
+import BrowserLogPanel from './components/BrowserLogPanel.vue'
 
-const selected = ref<Solution | null>(null)
-const urlInput = ref('https://www.baidu.com')
-const navigating = ref(false)
-const viewerRef = ref<any>(null)
-const { state: docker, startAll, stopAll, startPolling, stopPolling } = useDocker()
+const {
+  state: sessions,
+  init: initSessions,
+  createSession,
+  switchSession,
+  deleteSession,
+  renameSession,
+  startContainer,
+  pauseContainer,
+  stopContainer,
+} = useSessions()
 
-const sidebarWidth = ref(288)
+const activeSession = computed(() =>
+  sessions.sessions.find(s => s.id === sessions.activeId)
+)
+
+const sidebarWidth = ref(260)
 const isResizing = ref(false)
 const sidebarOpen = ref(true)
 const aiPanelWidth = ref(340)
 const isResizingAi = ref(false)
 const aiPanelOpen = ref(true)
+
+const vncUrl = computed(() => {
+  if (!sessions.activePorts?.vncPort) return null
+  return `ws://localhost:${sessions.activePorts.vncPort}/websockify`
+})
 
 function startResize(e: MouseEvent) {
   e.preventDefault()
@@ -58,81 +71,43 @@ function startResizeAi(e: MouseEvent) {
   document.addEventListener('mouseup', onUp)
 }
 
-function select(s: Solution) {
-  selected.value = s
+async function onNewSession() {
+  await createSession()
 }
 
-function onBrowserActive() {
-  const selenium = solutions.find(s => s.id === 'selenium')
-  if (selenium && selected.value?.id !== 'selenium') {
-    selected.value = selenium
-  }
+const noVncRef = ref<InstanceType<typeof NoVNCViewer> | null>(null)
+
+function onSessionCreated(id: string) {
+  switchSession(id)
 }
 
-const navError = ref('')
-
-async function navigate() {
-  if (!selected.value) return
-  let url = urlInput.value.trim()
-  if (!url) return
-  if (!url.startsWith('http')) url = 'https://' + url
-  urlInput.value = url
-  navigating.value = true
-  navError.value = ''
-
-  if (selected.value.viewerType !== 'iframe') {
-    viewerRef.value?.navigate(url)
-    navigating.value = false
-    return
-  }
-
-  try {
-    const resp = await fetch('/api/docker/navigate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ solutionId: selected.value.id, url }),
-    })
-    const data = await resp.json()
-    if (!data.ok && data.error) {
-      navError.value = data.error
-      setTimeout(() => { navError.value = '' }, 4000)
-    }
-  } catch {}
-  navigating.value = false
+function onHighlightClick(coords: { x: number; y: number }) {
+  noVncRef.value?.highlightClick(coords.x, coords.y)
 }
 
-onMounted(startPolling)
-onUnmounted(stopPolling)
+onMounted(async () => {
+  await initSessions()
+})
 </script>
 
 <template>
   <div class="h-screen flex flex-col bg-[var(--color-bg)] overflow-hidden">
     <!-- Header -->
     <header class="shrink-0 flex items-center gap-3 px-5 py-2.5 border-b border-[var(--color-border)] bg-[var(--color-surface)]">
+      <button
+        @click="sidebarOpen = !sidebarOpen"
+        class="shrink-0 w-7 h-7 flex items-center justify-center rounded-md text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-hover)] transition-colors"
+        :title="sidebarOpen ? '收起侧边栏' : '展开侧边栏'"
+      >
+        <PanelLeftClose v-if="sidebarOpen" class="w-4 h-4" />
+        <PanelLeft v-else class="w-4 h-4" />
+      </button>
       <h1 class="text-lg font-bold tracking-tight whitespace-nowrap">
         Remote Browser
         <span class="text-[var(--color-accent)]">Playground</span>
       </h1>
 
       <div class="ml-auto flex items-center gap-2">
-        <button
-          @click="startAll"
-          :disabled="docker.globalLoading"
-          class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-green-600/20 text-green-400 border border-green-600/30 hover:bg-green-600/30 transition-colors disabled:opacity-50 disabled:cursor-wait"
-        >
-          <Play v-if="!docker.globalLoading" class="w-3.5 h-3.5" fill="currentColor" :stroke-width="0" />
-          <Loader v-else class="w-3.5 h-3.5 animate-spin" />
-          全部启动
-        </button>
-        <button
-          @click="stopAll"
-          :disabled="docker.globalLoading"
-          class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-red-600/20 text-red-400 border border-red-600/30 hover:bg-red-600/30 transition-colors disabled:opacity-50 disabled:cursor-wait"
-        >
-          <Square class="w-3.5 h-3.5" fill="currentColor" :stroke-width="0" />
-          全部停止
-        </button>
-        <div class="w-px h-5 bg-[var(--color-border)]" />
         <button
           @click="aiPanelOpen = !aiPanelOpen"
           class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors"
@@ -148,20 +123,37 @@ onUnmounted(stopPolling)
 
     <!-- Main content -->
     <div class="flex-1 flex overflow-hidden">
-      <!-- Left sidebar (resizable) -->
+      <!-- Left sidebar (sessions) -->
       <aside
         v-if="sidebarOpen"
-        class="shrink-0 border-r border-[var(--color-border)] bg-[var(--color-surface)] overflow-y-auto"
+        class="shrink-0 border-r border-[var(--color-border)] bg-[var(--color-surface)] flex flex-col overflow-hidden"
         :style="{ width: sidebarWidth + 'px' }"
       >
-        <div class="p-3 space-y-2">
-          <SolutionCard
-            v-for="s in solutions"
+        <div class="shrink-0 p-3 pb-2">
+          <button
+            @click="onNewSession"
+            class="w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium border border-dashed border-[var(--color-border)] text-[var(--color-text-dim)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] transition-colors"
+          >
+            <Plus class="w-3.5 h-3.5" />
+            新建会话
+          </button>
+        </div>
+        <div class="flex-1 overflow-y-auto px-2 pb-3 space-y-0.5">
+          <SessionItem
+            v-for="s in sessions.sessions"
             :key="s.id"
-            :solution="s"
-            :active="selected?.id === s.id"
-            @select="select(s)"
+            :session="s"
+            :active="sessions.activeId === s.id"
+            @select="switchSession(s.id)"
+            @delete="deleteSession(s.id)"
+            @rename="(name) => renameSession(s.id, name)"
+            @start="startContainer(s.id)"
+            @stop="stopContainer(s.id)"
+            @pause="pauseContainer(s.id)"
           />
+          <div v-if="!sessions.loading && sessions.sessions.length === 0" class="flex flex-col items-center justify-center py-12 text-[var(--color-text-dim)]">
+            <p class="text-xs text-center leading-relaxed">新建一个会话开始对话</p>
+          </div>
         </div>
       </aside>
 
@@ -175,95 +167,67 @@ onUnmounted(stopPolling)
 
       <!-- Right viewer container -->
       <main class="flex-1 flex flex-col overflow-hidden">
-        <!-- URL bar (shown when a solution is selected) -->
-        <div
-          v-if="selected"
-          class="shrink-0 flex items-center gap-2 px-3 py-2 bg-[var(--color-surface)] border-b border-[var(--color-border)]"
-        >
-          <button
-            @click="sidebarOpen = !sidebarOpen"
-            class="shrink-0 w-6 h-6 flex items-center justify-center rounded text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-hover)] transition-colors"
-            :title="sidebarOpen ? '收起侧边栏' : '展开侧边栏'"
-          >
-            <ChevronLeft v-if="sidebarOpen" class="w-4 h-4" />
-            <ChevronRight v-else class="w-4 h-4" />
-          </button>
-          <div
-            class="w-2.5 h-2.5 rounded-full shrink-0"
-            :style="{ backgroundColor: selected.color }"
-          />
-          <span class="text-xs text-[var(--color-text-dim)] shrink-0">{{ selected.protocol }}</span>
-          <input
-            v-model="urlInput"
-            @keydown.enter="navigate"
-            class="flex-1 px-3 py-1.5 rounded-lg bg-[var(--color-bg)] border border-[var(--color-border)] text-sm text-[var(--color-text)] outline-none focus:border-[var(--color-accent)] transition-colors"
-            placeholder="输入网址后回车导航..."
-          />
-          <button
-            @click="navigate"
-            :disabled="navigating"
-            class="px-3 py-1.5 rounded-lg text-xs font-medium bg-[var(--color-accent)] text-white hover:bg-[var(--color-accent-dim)] transition-colors disabled:opacity-50 shrink-0"
-          >
-            {{ navigating ? '前往中...' : '前往' }}
-          </button>
-          <span v-if="navError" class="text-[10px] text-yellow-400 shrink-0 whitespace-nowrap">{{ navError }}</span>
-        </div>
-
         <!-- Viewer area -->
-        <div class="flex-1 relative overflow-hidden">
-          <!-- Sidebar toggle when collapsed and no solution selected -->
-          <button
-            v-if="!selected && !sidebarOpen"
-            @click="sidebarOpen = true"
-            class="absolute top-3 left-3 z-10 w-7 h-7 flex items-center justify-center rounded-lg bg-[var(--color-surface)] border border-[var(--color-border)] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:border-[var(--color-accent)]/50 transition-colors"
-            title="展开侧边栏"
-          >
-            <ChevronRight class="w-4 h-4" />
-          </button>
-          <!-- Empty state -->
+        <div class="flex-1 relative overflow-hidden min-h-0">
+          <!-- No session selected -->
           <div
-            v-if="!selected"
+            v-if="!sessions.activeId"
             class="absolute inset-0 flex flex-col items-center justify-center text-[var(--color-text-dim)]"
           >
             <Monitor class="w-16 h-16 mb-4 opacity-20" :stroke-width="1" />
-            <p class="text-lg mb-1">选择一个方案开始预览</p>
-            <p class="text-sm">点击左侧任意方案卡片，右侧将展示远程浏览器的实时画面</p>
+            <p class="text-sm mb-1">新建一个会话开始使用</p>
+            <p class="text-xs opacity-60">浏览器会在创建会话后自动连接</p>
           </div>
 
-          <DOMDiffViewer
-            v-else-if="selected?.viewerType === 'dom-diff'"
-            ref="viewerRef"
-            :key="selected.id"
-            :ws-url="selected.url"
-            :initial-url="urlInput"
-            @url-change="(url: string) => urlInput = url"
-          />
-          <RrwebViewer
-            v-else-if="selected?.viewerType === 'rrweb'"
-            ref="viewerRef"
-            :key="selected.id"
-            :ws-url="selected.url"
-            :initial-url="urlInput"
-            @url-change="(url: string) => urlInput = url"
-          />
+          <!-- Container loading -->
+          <div
+            v-else-if="sessions.containerLoading"
+            class="absolute inset-0 flex flex-col items-center justify-center text-[var(--color-text-dim)]"
+          >
+            <Loader class="w-10 h-10 mb-4 animate-spin opacity-40" />
+            <p class="text-sm mb-1">正在启动浏览器...</p>
+            <p class="text-xs opacity-60">首次启动可能需要几秒钟</p>
+          </div>
+
+          <!-- VNC viewer -->
           <NoVNCViewer
-            v-else-if="selected?.viewerType === 'novnc'"
-            ref="viewerRef"
-            :key="selected.id"
-            :ws-url="selected.url"
-            :initial-url="urlInput"
-            :solution-id="selected.id"
-            @url-change="(url: string) => urlInput = url"
+            ref="noVncRef"
+            v-else-if="vncUrl && sessions.activeId"
+            :key="sessions.activeId"
+            :ws-url="vncUrl"
+            :session-id="sessions.activeId"
           />
-          <iframe
-            v-else-if="selected"
-            :key="selected.id"
-            :src="selected.url"
-            class="absolute inset-0 w-full h-full border-0"
-            allow="fullscreen; clipboard-read; clipboard-write; autoplay"
-            sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-modals"
-          />
+
+          <!-- Container paused (hibernated) -->
+          <div
+            v-else-if="sessions.activeId && activeSession?.containerStatus === 'paused'"
+            class="absolute inset-0 flex flex-col items-center justify-center text-[var(--color-text-dim)]"
+          >
+            <Monitor class="w-16 h-16 mb-4 opacity-20" :stroke-width="1" />
+            <p class="text-sm mb-1">浏览器已休眠</p>
+            <p class="text-xs opacity-60 mb-4">页面状态已冻结，恢复后与休眠前完全一致</p>
+            <button
+              @click="sessions.activeId && startContainer(sessions.activeId)"
+              class="flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-medium bg-amber-500/20 text-amber-400 border border-amber-500/30 hover:bg-amber-500/30 transition-colors"
+            >
+              <Play class="w-3.5 h-3.5" />
+              恢复浏览器
+            </button>
+          </div>
+
+          <!-- Container stopped -->
+          <div
+            v-else-if="sessions.activeId && !vncUrl"
+            class="absolute inset-0 flex flex-col items-center justify-center text-[var(--color-text-dim)]"
+          >
+            <Monitor class="w-16 h-16 mb-4 opacity-20" :stroke-width="1" />
+            <p class="text-sm mb-1">浏览器容器未运行</p>
+            <p class="text-xs opacity-60">点击侧边栏会话的播放按钮启动</p>
+          </div>
         </div>
+
+        <!-- Browser log panel -->
+        <BrowserLogPanel :session-id="sessions.activeId" />
       </main>
 
       <!-- AI Panel resize handle -->
@@ -280,31 +244,15 @@ onUnmounted(stopPolling)
         class="shrink-0 border-l border-[var(--color-border)] overflow-hidden"
         :style="{ width: aiPanelWidth + 'px' }"
       >
-        <AiChat @browser-active="onBrowserActive" />
+        <AiChat
+          :session-id="sessions.activeId"
+          @session-created="onSessionCreated"
+          @highlight-click="onHighlightClick"
+        />
       </aside>
     </div>
-
-    <!-- Error toast -->
-    <Transition name="slide">
-      <div
-        v-if="docker.lastError"
-        class="fixed bottom-4 left-1/2 -translate-x-1/2 px-4 py-2 rounded-lg bg-red-900/90 border border-red-700 text-red-200 text-sm max-w-lg truncate shadow-lg"
-      >
-        {{ docker.lastError }}
-      </div>
-    </Transition>
   </div>
 </template>
-
-<style>
-.slide-enter-active, .slide-leave-active {
-  transition: all 0.3s ease;
-}
-.slide-enter-from, .slide-leave-to {
-  opacity: 0;
-  transform: translate(-50%, 1rem);
-}
-</style>
 
 <style>
 body.resizing,
