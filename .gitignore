@@ -12,6 +12,7 @@ cursor.md
 
 # Python
 __pycache__/
+*.egg-info/
 
 # Runtime
 logs/

@@ -1,32 +1,21 @@
 <script setup lang="ts">
 import { ref, nextTick, onMounted, onBeforeUnmount, computed, watch } from 'vue'
 import { marked } from 'marked'
-import { Sparkles, Trash2, Settings, X, Loader, ChevronDown, Check, ChevronRight, Square, Send } from 'lucide-vue-next'
+import { Sparkles, Trash2, Settings, X, Loader, ChevronDown, Check, ChevronRight, Square, Send, Crosshair } from 'lucide-vue-next'
+import type { ChatBlock, ChatMessage } from '../types'
+import { useSessions } from '../composables/useSessions'
 
 marked.setOptions({ breaks: true })
+
+const { createSession, loadMessages, saveMessages, renameSession, getAppState, saveAppState } = useSessions()
 
 function renderMarkdown(content: string): string {
   return marked.parse(content, { async: false }) as string
 }
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
-interface ChatBlock {
-  type: 'text' | 'tool_call' | 'tool_result' | 'error'
-  content?: string
-  id?: string
-  toolName?: string
-  args?: Record<string, any>
-  result?: any
-  loading?: boolean
-}
-
-interface ChatMessage {
-  role: 'user' | 'assistant'
-  blocks: ChatBlock[]
-}
+const props = defineProps<{
+  sessionId: string | null
+}>()
 
 const TOOL_LABELS: Record<string, string> = {
   browser_navigate: '导航',
@@ -71,20 +60,70 @@ const chatContainer = ref<HTMLElement>()
 const configOpen = ref(false)
 const expandedThinks = ref(new Set<string>())
 let currentAbort: AbortController | null = null
-let textBuffer = ''
-let bufferTarget: ChatBlock | null = null
-let bufferTimer: ReturnType<typeof setInterval> | null = null
 
 const emit = defineEmits<{
   (e: 'browser-active'): void
+  (e: 'session-created', id: string): void
+  (e: 'highlight-click', coords: { x: number; y: number }): void
 }>()
 
-const apiKey = ref(localStorage.getItem('ai_api_key') || '')
-const baseUrl = ref(localStorage.getItem('ai_base_url') || 'https://api.openai.com/v1')
-const model = ref(localStorage.getItem('ai_model') || 'gpt-4o-mini')
-const apiType = ref<'openai' | 'anthropic'>(
-  (localStorage.getItem('ai_api_type') as 'openai' | 'anthropic') || 'openai'
-)
+let currentSessionId: string | null = null
+
+watch(() => props.sessionId, async (newId) => {
+  if (newId === currentSessionId) return
+  currentSessionId = newId
+  if (currentAbort) {
+    currentAbort.abort()
+    currentAbort = null
+    loading.value = false
+  }
+  if (newId) {
+    const loaded = await loadMessages(newId)
+    messages.value = loaded
+    await scrollToBottom()
+  } else {
+    messages.value = []
+  }
+}, { immediate: true })
+
+const apiKey = ref('')
+const baseUrl = ref('https://api.openai.com/v1')
+const model = ref('gpt-4o-mini')
+const apiType = ref<'openai' | 'anthropic'>('openai')
+
+async function loadConfig() {
+  const [key, url, m, t] = await Promise.all([
+    getAppState('ai_api_key'),
+    getAppState('ai_base_url'),
+    getAppState('ai_model'),
+    getAppState('ai_api_type'),
+  ])
+
+  if (key) {
+    apiKey.value = key
+    if (url) baseUrl.value = url
+    if (m) model.value = m
+    if (t) apiType.value = t as 'openai' | 'anthropic'
+  } else {
+    const lsKey = localStorage.getItem('ai_api_key')
+    if (lsKey) {
+      apiKey.value = lsKey
+      baseUrl.value = localStorage.getItem('ai_base_url') || baseUrl.value
+      model.value = localStorage.getItem('ai_model') || model.value
+      apiType.value = (localStorage.getItem('ai_api_type') as 'openai' | 'anthropic') || apiType.value
+      await Promise.all([
+        saveAppState('ai_api_key', apiKey.value),
+        saveAppState('ai_base_url', baseUrl.value),
+        saveAppState('ai_model', model.value),
+        saveAppState('ai_api_type', apiType.value),
+      ])
+      localStorage.removeItem('ai_api_key')
+      localStorage.removeItem('ai_base_url')
+      localStorage.removeItem('ai_model')
+      localStorage.removeItem('ai_api_type')
+    }
+  }
+}
 
 const urlPresets = [
   { label: 'OpenAI', url: 'https://api.openai.com/v1', type: 'openai' as const, defaultModel: 'gpt-4o-mini',
@@ -102,6 +141,7 @@ const urlPresets = [
 const modelOptions = ref<string[]>([])
 const modelLoading = ref(false)
 const modelDropdownOpen = ref(false)
+const modelFilterActive = ref(false)
 const comboboxRef = ref<HTMLElement>()
 let fetchDebounceTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -111,8 +151,9 @@ function getPresetModels(): string[] {
 }
 
 const filteredModels = computed(() => {
-  const q = model.value.trim().toLowerCase()
   const list = modelOptions.value.length ? modelOptions.value : getPresetModels()
+  if (!modelFilterActive.value) return list
+  const q = model.value.trim().toLowerCase()
   if (!q) return list
   return list.filter(m => m.toLowerCase().includes(q))
 })
@@ -142,17 +183,43 @@ function applyUrlPreset(p: typeof urlPresets[number]) {
   baseUrl.value = p.url
   apiType.value = p.type
   model.value = p.defaultModel
+  if (fetchDebounceTimer) clearTimeout(fetchDebounceTimer)
   fetchModels()
+}
+
+function closeModelDropdown() {
+  modelFilterActive.value = false
+  modelDropdownOpen.value = false
+}
+
+function onModelFocus(e: FocusEvent) {
+  modelFilterActive.value = false
+  modelDropdownOpen.value = true
+  ;(e.target as HTMLInputElement).select()
+}
+
+function onModelBlur() {
+  closeModelDropdown()
+}
+
+function onModelInput() {
+  modelFilterActive.value = true
+  if (!modelDropdownOpen.value) modelDropdownOpen.value = true
+}
+
+function onModelEnter(e: KeyboardEvent) {
+  closeModelDropdown()
+  ;(e.target as HTMLInputElement).blur()
 }
 
 function selectModel(m: string) {
   model.value = m
-  modelDropdownOpen.value = false
+  closeModelDropdown()
 }
 
 function handleComboboxClickOutside(e: MouseEvent) {
   if (comboboxRef.value && !comboboxRef.value.contains(e.target as Node)) {
-    modelDropdownOpen.value = false
+    closeModelDropdown()
   }
 }
 
@@ -161,11 +228,17 @@ watch([apiKey, baseUrl], () => {
   fetchDebounceTimer = setTimeout(() => fetchModels(), 600)
 })
 
-function saveConfig() {
-  localStorage.setItem('ai_api_key', apiKey.value)
-  localStorage.setItem('ai_base_url', baseUrl.value)
-  localStorage.setItem('ai_model', model.value)
-  localStorage.setItem('ai_api_type', apiType.value)
+watch(configOpen, (open) => {
+  if (!open) closeModelDropdown()
+})
+
+async function saveConfig() {
+  await Promise.all([
+    saveAppState('ai_api_key', apiKey.value),
+    saveAppState('ai_base_url', baseUrl.value),
+    saveAppState('ai_model', model.value),
+    saveAppState('ai_api_type', apiType.value),
+  ])
   configOpen.value = false
 }
 
@@ -189,37 +262,6 @@ async function scrollToBottom() {
   if (chatContainer.value) {
     chatContainer.value.scrollTop = chatContainer.value.scrollHeight
   }
-}
-
-function startBufferDrain() {
-  if (bufferTimer) return
-  bufferTimer = setInterval(() => {
-    if (!bufferTarget || !textBuffer) {
-      stopBufferDrain()
-      return
-    }
-    const charsPerTick = Math.max(1, Math.ceil(textBuffer.length / 8))
-    const chunk = textBuffer.slice(0, charsPerTick)
-    textBuffer = textBuffer.slice(charsPerTick)
-    bufferTarget.content = (bufferTarget.content || '') + chunk
-    scrollToBottom()
-  }, 40)
-}
-
-function stopBufferDrain() {
-  if (bufferTimer) {
-    clearInterval(bufferTimer)
-    bufferTimer = null
-  }
-}
-
-function flushBuffer() {
-  stopBufferDrain()
-  if (bufferTarget && textBuffer) {
-    bufferTarget.content = (bufferTarget.content || '') + textBuffer
-  }
-  textBuffer = ''
-  bufferTarget = null
 }
 
 function toolArgsSummary(args: Record<string, any> | undefined): string {
@@ -291,6 +333,16 @@ function getToolResultContent(result: any, toolName?: string): string | null {
   return null
 }
 
+function hasClickCoords(block: ChatBlock): boolean {
+  return block.toolName === 'browser_click' && block.args?.x != null && block.args?.y != null
+}
+
+function handleToolCallClick(block: ChatBlock) {
+  if (hasClickCoords(block)) {
+    emit('highlight-click', { x: block.args!.x, y: block.args!.y })
+  }
+}
+
 function parseThinkSegments(content: string): { type: 'think' | 'text'; content: string; unclosed?: boolean }[] {
   const segments: { type: 'think' | 'text'; content: string; unclosed?: boolean }[] = []
   const regex = /<think>([\s\S]*?)<\/think>/g
@@ -330,7 +382,6 @@ function toggleThink(key: string) {
 // ---------------------------------------------------------------------------
 
 function stopGeneration() {
-  flushBuffer()
   if (currentAbort) {
     currentAbort.abort()
     currentAbort = null
@@ -371,6 +422,18 @@ async function send() {
     await nextTick()
   }
 
+  if (!currentSessionId) {
+    const session = await createSession(text.slice(0, 20) || '新会话')
+    currentSessionId = session.id
+    emit('session-created', session.id)
+  } else {
+    const { state } = useSessions()
+    const s = state.sessions.find(s => s.id === currentSessionId)
+    if (s && s.name === '新会话' && messages.value.length === 0) {
+      await renameSession(currentSessionId, text.slice(0, 20))
+    }
+  }
+
   messages.value.push({ role: 'user', blocks: [{ type: 'text', content: text }] })
   input.value = ''
   loading.value = true
@@ -396,6 +459,7 @@ async function send() {
         baseUrl: baseUrl.value,
         model: model.value,
         apiType: apiType.value,
+        sessionId: currentSessionId,
       }),
       signal: abort.signal,
     })
@@ -433,14 +497,10 @@ async function send() {
             case 'text': {
               const lastBlock = blocks[blocks.length - 1]
               if (lastBlock?.type === 'text') {
-                bufferTarget = lastBlock
+                lastBlock.content = (lastBlock.content || '') + evt.content
               } else {
-                const newBlock: ChatBlock = { type: 'text', content: '' }
-                blocks.push(newBlock)
-                bufferTarget = newBlock
+                blocks.push({ type: 'text', content: evt.content })
               }
-              textBuffer += evt.content
-              startBufferDrain()
               break
             }
             case 'tool_call':
@@ -480,27 +540,39 @@ async function send() {
     if (e.name === 'AbortError') return
     assistantEntry.blocks.push({ type: 'error', content: `请求失败: ${e.message}` })
   } finally {
-    flushBuffer()
     if (currentAbort === abort) {
       currentAbort = null
       loading.value = false
     }
     await scrollToBottom()
+    if (currentSessionId) {
+      saveMessages(currentSessionId, messages.value)
+    }
   }
+}
+
+function handleEnter(e: KeyboardEvent) {
+  if (e.isComposing) return
+  e.preventDefault()
+  send()
 }
 
 function clearChat() {
   messages.value = []
+  if (currentSessionId) {
+    saveMessages(currentSessionId, [])
+  }
 }
 
-onMounted(() => {
+onMounted(async () => {
+  await loadConfig()
+  if (fetchDebounceTimer) clearTimeout(fetchDebounceTimer)
   if (!apiKey.value) configOpen.value = true
   document.addEventListener('click', handleComboboxClickOutside)
   if (apiKey.value && baseUrl.value) fetchModels()
 })
 
 onBeforeUnmount(() => {
-  flushBuffer()
   document.removeEventListener('click', handleComboboxClickOutside)
   if (fetchDebounceTimer) clearTimeout(fetchDebounceTimer)
 })
@@ -560,16 +632,19 @@ onBeforeUnmount(() => {
               <label class="text-[10px] text-[var(--color-text-dim)] uppercase tracking-wider">Model</label>
               <div class="relative mt-0.5">
                 <input v-model="model"
-                  @focus="modelDropdownOpen = true"
-                  @keydown.escape="modelDropdownOpen = false"
+                  @focus="onModelFocus"
+                  @blur="onModelBlur"
+                  @input="onModelInput"
+                  @keydown.enter.prevent="onModelEnter"
+                  @keydown.escape="closeModelDropdown"
                   class="w-full px-2.5 py-1.5 pr-7 rounded-md bg-[var(--color-bg)] border border-[var(--color-border)] text-xs text-[var(--color-text)] outline-none focus:border-[var(--color-accent)] transition-colors"
                   placeholder="gpt-4o-mini" />
-                <button @click.stop="modelDropdownOpen = !modelDropdownOpen" class="absolute right-1 top-1/2 -translate-y-1/2 w-5 h-5 flex items-center justify-center rounded hover:bg-[var(--color-surface-hover)] text-[var(--color-text-dim)] transition-colors">
+                <button @mousedown.prevent @click.stop="modelDropdownOpen = !modelDropdownOpen" class="absolute right-1 top-1/2 -translate-y-1/2 w-5 h-5 flex items-center justify-center rounded hover:bg-[var(--color-surface-hover)] text-[var(--color-text-dim)] transition-colors">
                   <Loader v-if="modelLoading" class="w-3 h-3 animate-spin" />
                   <ChevronDown v-else class="w-3 h-3 transition-transform" :class="modelDropdownOpen ? 'rotate-180' : ''" />
                 </button>
               </div>
-              <div v-if="modelDropdownOpen" class="absolute z-10 left-0 right-0 mt-1 max-h-48 overflow-y-auto rounded-md bg-[var(--color-bg)] border border-[var(--color-border)] shadow-lg">
+              <div v-if="modelDropdownOpen" @mousedown.prevent class="absolute z-10 left-0 right-0 mt-1 max-h-48 overflow-y-auto rounded-md bg-[var(--color-bg)] border border-[var(--color-border)] shadow-lg">
                 <div v-if="modelLoading" class="px-2.5 py-2 text-[10px] text-[var(--color-text-dim)] text-center">加载模型列表...</div>
                 <template v-else-if="filteredModels.length">
                   <button v-for="m in filteredModels" :key="m" @click="selectModel(m)"
@@ -632,13 +707,20 @@ onBeforeUnmount(() => {
 
         <!-- Tool call -->
         <div v-else-if="item.block.type === 'tool_call'" class="flex justify-start">
-          <div class="max-w-[90%] rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] overflow-hidden">
+          <div
+            class="max-w-[90%] rounded-md border bg-[var(--color-bg)] overflow-hidden transition-colors"
+            :class="hasClickCoords(item.block)
+              ? 'border-[var(--color-border)] hover:border-red-500/50 cursor-pointer'
+              : 'border-[var(--color-border)]'"
+            @click="handleToolCallClick(item.block)"
+          >
             <div class="flex items-center gap-1.5 px-2.5 py-1.5 border-b border-[var(--color-border)] bg-[var(--color-surface)]">
               <Loader v-if="item.block.loading" class="w-3 h-3 animate-spin text-[var(--color-accent)]" />
               <Check v-else class="w-3 h-3 text-green-400" />
               <span class="text-[11px] leading-none">{{ TOOL_ICONS[item.block.toolName || ''] || '🔧' }}</span>
               <span class="text-[10px] font-medium text-[var(--color-text)]">{{ TOOL_LABELS[item.block.toolName || ''] || item.block.toolName }}</span>
               <span class="text-[9px] text-[var(--color-text-dim)] ml-auto font-mono">{{ item.block.toolName }}</span>
+              <Crosshair v-if="hasClickCoords(item.block)" class="w-3 h-3 shrink-0 text-[var(--color-text-dim)]" title="点击定位到浏览器视窗" />
             </div>
             <div v-if="item.block.args && Object.keys(item.block.args).length" class="px-2.5 py-1.5 text-[10px] text-[var(--color-text-dim)] font-mono truncate">
               {{ toolArgsSummary(item.block.args) }}
@@ -684,7 +766,7 @@ onBeforeUnmount(() => {
     <!-- Input -->
     <div class="shrink-0 p-3 border-t border-[var(--color-border)]">
       <div class="flex gap-2">
-        <textarea v-model="input" @keydown.enter.exact.prevent="send" rows="1"
+        <textarea v-model="input" @keydown.enter.exact="handleEnter" rows="1"
           class="flex-1 px-3 py-2 rounded-lg bg-[var(--color-bg)] border border-[var(--color-border)] text-xs text-[var(--color-text)] outline-none focus:border-[var(--color-accent)] transition-colors resize-none"
           :placeholder="loading ? '输入新指令可中断当前任务... (Enter 发送)' : '输入指令... (Enter 发送)'" />
         <button v-if="loading && !input.trim()" @click="stopGeneration"

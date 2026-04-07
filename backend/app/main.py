@@ -2,19 +2,31 @@ from __future__ import annotations
 
 import logging
 import time
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
+from app import db
 from app.logging_config import setup_logging
 from app.routes.chat import router as chat_router
 from app.routes.docker import router as docker_router
 from app.routes.models import router as models_router
+from app.routes.browser import router as browser_router
+from app.routes.sessions import router as sessions_router
 
 setup_logging()
 logger = logging.getLogger("access")
 
-app = FastAPI(title="NoDeskPane Agent Backend")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await db.init_db()
+    yield
+    await db.close_db()
+
+
+app = FastAPI(title="NoDeskPane Agent Backend", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -45,6 +57,8 @@ async def request_logging(request: Request, call_next):
     return response
 
 
+app.include_router(browser_router)
 app.include_router(chat_router)
 app.include_router(docker_router)
 app.include_router(models_router)
+app.include_router(sessions_router)

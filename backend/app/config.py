@@ -3,12 +3,28 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-SELENIUM_BASE = os.getenv("SELENIUM_BASE", "http://localhost:4444")
-
 PROJECT_ROOT = Path(os.getenv("PROJECT_ROOT", str(Path(__file__).resolve().parents[2])))
+_ENV_FILE = PROJECT_ROOT / ".env"
 
-MAX_STEPS = int(os.getenv("MAX_STEPS", "15"))
 
+def _env(key: str, default: str) -> str:
+    """Read from .env file first (hot-reload), fall back to os env then default."""
+    if _ENV_FILE.is_file():
+        for line in _ENV_FILE.read_text().splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#") or "=" not in stripped:
+                continue
+            k, _, v = stripped.partition("=")
+            if k.strip() == key:
+                return v.strip()
+    return os.getenv(key, default)
+
+
+def get_max_steps() -> int:
+    return int(_env("MAX_STEPS", "100"))
+
+
+DATABASE_URL = _env("DATABASE_URL", "postgresql://nodeskpane:nodeskpane@localhost:5432/nodeskpane")
 MAX_OUTPUT_CHARS = 10_000
 BASH_DEFAULT_TIMEOUT_MS = 30_000
 BASH_MAX_TIMEOUT_MS = 120_000

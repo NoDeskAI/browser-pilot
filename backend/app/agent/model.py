@@ -105,7 +105,7 @@ async def _stream_openai(
 
     oai_messages: list[dict[str, Any]] = [{"role": "system", "content": system}]
     for m in messages:
-        oai_messages.append(_convert_message_to_openai(m))
+        oai_messages.extend(_convert_message_to_openai(m))
 
     kwargs: dict[str, Any] = {
         "model": model,
@@ -161,7 +161,7 @@ async def _stream_openai(
         yield StreamChunk(type="error", error_message=str(exc))
 
 
-def _convert_message_to_openai(msg: dict[str, Any]) -> dict[str, Any]:
+def _convert_message_to_openai(msg: dict[str, Any]) -> list[dict[str, Any]]:
     role = msg.get("role", "user")
     content = msg.get("content")
 
@@ -185,20 +185,22 @@ def _convert_message_to_openai(msg: dict[str, Any]) -> dict[str, Any]:
             result["content"] = "\n".join(text_parts)
         if tool_calls:
             result["tool_calls"] = tool_calls
-        return result
-
-    if role == "tool" and isinstance(content, list):
-        oai_msgs = []
-        for part in content:
-            oai_msgs.append({
-                "role": "tool",
-                "tool_call_id": part.get("tool_use_id", ""),
-                "content": json.dumps(part.get("content", ""), ensure_ascii=False) if not isinstance(part.get("content"), str) else part.get("content", ""),
-            })
-        return oai_msgs[0] if len(oai_msgs) == 1 else oai_msgs[0]
+        return [result]
 
     if isinstance(content, list):
+        tool_results = [p for p in content if p.get("type") == "tool_result"]
+        if tool_results:
+            return [
+                {
+                    "role": "tool",
+                    "tool_call_id": p.get("tool_use_id", ""),
+                    "content": json.dumps(p.get("content", ""), ensure_ascii=False)
+                    if not isinstance(p.get("content"), str)
+                    else p.get("content", ""),
+                }
+                for p in tool_results
+            ]
         texts = [p.get("text", "") for p in content if p.get("type") == "text"]
-        return {"role": role, "content": "\n".join(texts) if texts else ""}
+        return [{"role": role, "content": "\n".join(texts) if texts else ""}]
 
-    return {"role": role, "content": content or ""}
+    return [{"role": role, "content": content or ""}]

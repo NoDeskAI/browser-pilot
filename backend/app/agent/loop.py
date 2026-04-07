@@ -12,7 +12,7 @@ from app.agent.model import StreamChunk, stream_model
 from app.agent.orchestration import execute_tool_calls
 from app.agent.registry import build_anthropic_tools, build_openai_tools
 from app.agent.types import PendingToolCall, SSEEvent, Tool, ToolContext
-from app.config import MAX_STEPS
+from app.config import get_max_steps
 
 logger = logging.getLogger("agent.loop")
 
@@ -27,25 +27,31 @@ class AgentLoopParams:
     messages: list[dict[str, Any]]
     tools: list[Tool]
     cancel_event: asyncio.Event
+    session_id: str | None = None
 
 
 async def agent_loop(params: AgentLoopParams) -> AsyncGenerator[SSEEvent, None]:
     messages = list(params.messages)
     cancel = params.cancel_event
 
-    tool_ctx = ToolContext(cancel_event=cancel)
+    tool_ctx = ToolContext(cancel_event=cancel, session_id=params.session_id)
 
     loop_t0 = time.monotonic()
     total_tool_calls = 0
     completed_steps = 0
+    max_steps = get_max_steps()
+    _observed_urls: list[str] = []
+    _cycle_limit = 3
+    _cycle_hints_injected = 0
+    _max_cycle_hints = 2
 
-    for step in range(MAX_STEPS):
+    for step in range(max_steps):
         if cancel.is_set():
             logger.info("cancelled before step %d", step + 1)
             break
 
         completed_steps = step + 1
-        logger.info("step %d/%d", step + 1, MAX_STEPS)
+        logger.info("step %d/%d", step + 1, max_steps)
 
         prev_len = len(messages)
         messages = compact_if_needed(messages)
@@ -155,10 +161,43 @@ async def agent_loop(params: AgentLoopParams) -> AsyncGenerator[SSEEvent, None]:
                 "content": json.dumps(result.output, ensure_ascii=False) if not isinstance(result.output, str) else result.output,
             })
 
+            if result.tool_name == "browser_observe" and isinstance(result.output, dict):
+                obs_url = result.output.get("url", "")
+                if obs_url:
+                    _observed_urls.append(obs_url)
+
         messages.append({"role": "user", "content": tool_results})
+
+        if len(_observed_urls) >= _cycle_limit:
+            recent = _observed_urls[-_cycle_limit:]
+            if len(set(recent)) == 1:
+                cycle_url = recent[0]
+                _cycle_hints_injected += 1
+                logger.warning("cycle detected (%d/%d): %s observed %d times", _cycle_hints_injected, _max_cycle_hints, cycle_url, _cycle_limit)
+
+                if _cycle_hints_injected >= _max_cycle_hints:
+                    logger.warning("max cycle hints reached, force stopping agent loop")
+                    yield SSEEvent(type="text", content="\n\n操作未产生变化，已自动停止。请在浏览器中手动完成当前操作。")
+                    break
+
+                messages[-1]["content"].append({
+                    "type": "text",
+                    "text": (
+                        f"[系统提示] 你已经连续 {_cycle_limit} 次在同一页面 ({cycle_url}) 上操作但没有效果。"
+                        "立即停止，直接回复用户说明你无法完成这个操作，建议用户手动操作。不要再调用任何工具。"
+                    ),
+                })
+                _observed_urls.clear()
 
     elapsed = time.monotonic() - loop_t0
     logger.info("agent done: %d steps, %d tool calls, %.1fs", completed_steps, total_tool_calls, elapsed)
+
+    if params.session_id:
+        from app.tools.browser import _nav_history
+        _nav_history.pop(params.session_id, None)
+
+    if completed_steps >= max_steps:
+        yield SSEEvent(type="text", content=f"\n\n⚠️ 已达到最大步数限制（{max_steps} 步），任务被中断。你可以继续发送指令让我接着完成。")
 
     yield SSEEvent(type="done")
 

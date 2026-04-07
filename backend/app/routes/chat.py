@@ -26,6 +26,7 @@ class ChatRequest(BaseModel):
     baseUrl: str | None = None
     model: str | None = None
     apiType: str | None = None
+    sessionId: str | None = None
 
 
 @router.post("/api/ai/chat")
@@ -63,6 +64,7 @@ async def chat(body: ChatRequest, request: Request):
         messages=core_messages,
         tools=ALL_TOOLS,
         cancel_event=cancel_event,
+        session_id=body.sessionId,
     )
 
     async def event_stream():
@@ -76,6 +78,8 @@ async def chat(body: ChatRequest, request: Request):
             logger.exception("Agent loop fatal error")
             import json
             yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
+        finally:
+            pass
 
     return StreamingResponse(
         event_stream(),

@@ -12,11 +12,12 @@ logger = logging.getLogger("agent")
 
 
 class ToolContext:
-    __slots__ = ("cancel_event", "log")
+    __slots__ = ("cancel_event", "log", "session_id")
 
-    def __init__(self, cancel_event: asyncio.Event, log: Callable[..., None] = logger.info):
+    def __init__(self, cancel_event: asyncio.Event, log: Callable[..., None] = logger.info, session_id: str | None = None):
         self.cancel_event = cancel_event
         self.log = log
+        self.session_id = session_id
 
 
 @dataclass
