@@ -206,15 +206,8 @@ def session_stop(session_id: Optional[str] = typer.Argument(None)):
 @session_app.command("delete")
 def session_delete(session_id: str):
     """Delete a session and its container."""
-    data = client.get_request(f"/api/sessions/{session_id}", api_url=_api())
-    # Use DELETE method
-    import httpx
-    with httpx.Client(timeout=60.0) as c:
-        url = client._url(f"/api/sessions/{session_id}", api_url=_api())
-        r = c.delete(url)
-        r.raise_for_status()
-        result = r.json()
-    _out(result)
+    data = client.delete(f"/api/sessions/{session_id}", api_url=_api())
+    _out(data)
 
 
 # ── Browser commands ────────────────────────────────────────────────────

@@ -25,6 +25,7 @@ def get_max_steps() -> int:
 
 
 DATABASE_URL = _env("DATABASE_URL", "postgresql://nodeskpane:nodeskpane@localhost:5432/nodeskpane")
+DOCKER_HOST_ADDR = _env("DOCKER_HOST_ADDR", "localhost")
 MAX_OUTPUT_CHARS = 10_000
 BASH_DEFAULT_TIMEOUT_MS = 30_000
 BASH_MAX_TIMEOUT_MS = 120_000

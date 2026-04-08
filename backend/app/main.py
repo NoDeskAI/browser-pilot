@@ -3,9 +3,12 @@ from __future__ import annotations
 import logging
 import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from app import db
 from app.logging_config import setup_logging
@@ -62,3 +65,15 @@ app.include_router(chat_router)
 app.include_router(docker_router)
 app.include_router(models_router)
 app.include_router(sessions_router)
+
+_STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
+
+if _STATIC_DIR.is_dir():
+    app.mount("/assets", StaticFiles(directory=_STATIC_DIR / "assets"), name="assets")
+
+    @app.get("/{full_path:path}")
+    async def _spa_fallback(full_path: str):
+        file = _STATIC_DIR / full_path
+        if file.is_file():
+            return FileResponse(file)
+        return FileResponse(_STATIC_DIR / "index.html")

@@ -9,6 +9,7 @@ from typing import Any
 
 import httpx
 
+from app.config import DOCKER_HOST_ADDR
 from app.container import ensure_container_running
 from app.tools.browser.scripts import OBSERVE_SCRIPT
 
@@ -223,7 +224,7 @@ async def ensure_session(chat_session_id: str) -> tuple[str, str]:
     bs = _sessions[chat_session_id]
 
     ports = await ensure_container_running(chat_session_id)
-    bs.selenium_base = f"http://localhost:{ports['selenium_port']}"
+    bs.selenium_base = f"http://{DOCKER_HOST_ADDR}:{ports['selenium_port']}"
 
     async with bs.lock:
         sid = await _ensure_session_impl(bs)
@@ -284,36 +285,40 @@ def human_key_actions(text: str) -> list[dict]:
     return actions
 
 
-def human_click_actions(x: int, y: int) -> list[dict]:
+async def cdp_human_click(sid: str, x: int, y: int, *, base_url: str) -> None:
     steps = 3 + random.randint(0, 3)
     start_x = x + random.randint(-60, 60)
     start_y = y + random.randint(-60, 60)
     cp_x = (start_x + x) / 2 + random.randint(-20, 20)
     cp_y = (start_y + y) / 2 + random.randint(-20, 20)
 
-    actions: list[dict] = []
     for i in range(steps + 1):
         t = i / steps
-        px = (1 - t) ** 2 * start_x + 2 * (1 - t) * t * cp_x + t**2 * x
-        py = (1 - t) ** 2 * start_y + 2 * (1 - t) * t * cp_y + t**2 * y
-        actions.append({
-            "type": "pointerMove",
-            "duration": 15 + random.randint(0, 35),
+        px = (1 - t) ** 2 * start_x + 2 * (1 - t) * t * cp_x + t ** 2 * x
+        py = (1 - t) ** 2 * start_y + 2 * (1 - t) * t * cp_y + t ** 2 * y
+        await _cdp(sid, "Input.dispatchMouseEvent", {
+            "type": "mouseMoved",
             "x": max(0, round(px)),
             "y": max(0, round(py)),
-            "origin": "viewport",
-        })
-    actions.append({
-        "type": "pointerMove", "duration": 10,
+        }, base_url=base_url)
+        await asyncio.sleep((15 + random.randint(0, 35)) / 1000)
+
+    await _cdp(sid, "Input.dispatchMouseEvent", {
+        "type": "mouseMoved",
         "x": x + random.randint(-1, 1),
         "y": y + random.randint(-1, 1),
-        "origin": "viewport",
-    })
-    actions.append({"type": "pause", "duration": 15 + random.randint(0, 50)})
-    actions.append({"type": "pointerDown", "button": 0})
-    actions.append({"type": "pause", "duration": 30 + random.randint(0, 60)})
-    actions.append({"type": "pointerUp", "button": 0})
-    return actions
+    }, base_url=base_url)
+    await asyncio.sleep((15 + random.randint(0, 50)) / 1000)
+
+    await _cdp(sid, "Input.dispatchMouseEvent", {
+        "type": "mousePressed", "x": x, "y": y,
+        "button": "left", "clickCount": 1, "buttons": 1,
+    }, base_url=base_url)
+    await asyncio.sleep((30 + random.randint(0, 60)) / 1000)
+    await _cdp(sid, "Input.dispatchMouseEvent", {
+        "type": "mouseReleased", "x": x, "y": y,
+        "button": "left", "clickCount": 1, "buttons": 0,
+    }, base_url=base_url)
 
 
 async def cleanup_session(chat_session_id: str) -> None:

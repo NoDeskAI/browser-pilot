@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, nextTick } from 'vue'
-import { Trash2, Play, Pause } from 'lucide-vue-next'
+import { Trash2, Play, Pause, SquareTerminal, Check } from 'lucide-vue-next'
 import type { Session } from '../types'
 
 const props = defineProps<{
@@ -36,12 +36,20 @@ function commitEdit() {
 }
 
 const copied = ref(false)
+const cliCopied = ref(false)
 
 function copyId() {
   const short = props.session.id.slice(0, 8)
   navigator.clipboard.writeText(short).then(() => {
     copied.value = true
     setTimeout(() => { copied.value = false }, 1500)
+  })
+}
+
+function copyCli() {
+  navigator.clipboard.writeText(`nwb session use ${props.session.id}`).then(() => {
+    cliCopied.value = true
+    setTimeout(() => { cliCopied.value = false }, 1500)
   })
 }
 
@@ -105,6 +113,17 @@ function formatRelativeTime(iso: string): string {
           :title="session.containerStatus === 'paused' ? '从休眠恢复' : '启动容器'"
         >
           <Play class="w-3 h-3" />
+        </button>
+        <button
+          @click.stop="copyCli"
+          class="w-5 h-5 flex items-center justify-center rounded transition-colors"
+          :class="cliCopied
+            ? 'text-green-400 bg-green-400/10'
+            : 'text-[var(--color-text-dim)] hover:text-[var(--color-accent)] hover:bg-[var(--color-accent)]/10'"
+          title="复制 CLI 接入命令"
+        >
+          <Check v-if="cliCopied" class="w-3 h-3" />
+          <SquareTerminal v-else class="w-3 h-3" />
         </button>
         <button
           @click.stop="emit('delete')"

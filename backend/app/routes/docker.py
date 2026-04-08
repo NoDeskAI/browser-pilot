@@ -63,6 +63,8 @@ async def docker_navigate(body: NavigateRequest):
         "sleep 0.3",
         f'xdotool type --clearmodifiers --delay 12 "{safe_url}"',
         "xdotool key Return",
+        "sleep 1",
+        "xdotool key F6",
     ])
 
     stdout, stderr, rc = await _exec_in_container(cname, bash_cmd, timeout=15)

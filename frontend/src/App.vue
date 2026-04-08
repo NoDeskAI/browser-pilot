@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useSessions } from './composables/useSessions'
-import { Loader, Sparkles, PanelLeftClose, PanelLeft, Plus, Monitor, Play } from 'lucide-vue-next'
+import { Loader, Sparkles, PanelLeftClose, PanelLeft, Plus, Monitor, Play, SquareTerminal } from 'lucide-vue-next'
 import SessionItem from './components/SessionItem.vue'
 import AiChat from './components/AiChat.vue'
 import NoVNCViewer from './components/NoVNCViewer.vue'
 import BrowserLogPanel from './components/BrowserLogPanel.vue'
+import CliDocModal from './components/CliDocModal.vue'
 
 const {
   state: sessions,
@@ -29,10 +30,11 @@ const sidebarOpen = ref(true)
 const aiPanelWidth = ref(340)
 const isResizingAi = ref(false)
 const aiPanelOpen = ref(true)
+const cliDocOpen = ref(false)
 
 const vncUrl = computed(() => {
   if (!sessions.activePorts?.vncPort) return null
-  return `ws://localhost:${sessions.activePorts.vncPort}/websockify`
+  return `ws://${location.hostname}:${sessions.activePorts.vncPort}/websockify`
 })
 
 function startResize(e: MouseEvent) {
@@ -155,6 +157,15 @@ onMounted(async () => {
             <p class="text-xs text-center leading-relaxed">新建一个会话开始对话</p>
           </div>
         </div>
+        <div class="shrink-0 px-3 py-2 border-t border-[var(--color-border)]">
+          <button
+            @click="cliDocOpen = true"
+            class="w-full flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-[var(--color-text-dim)] hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-hover)] transition-colors"
+          >
+            <SquareTerminal class="w-3.5 h-3.5" />
+            CLI 接入
+          </button>
+        </div>
       </aside>
 
       <!-- Resize handle -->
@@ -251,6 +262,8 @@ onMounted(async () => {
         />
       </aside>
     </div>
+
+    <CliDocModal :open="cliDocOpen" @close="cliDocOpen = false" />
   </div>
 </template>
 

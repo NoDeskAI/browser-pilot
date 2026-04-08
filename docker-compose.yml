@@ -1,4 +1,19 @@
 services:
+  backend:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      DATABASE_URL: postgresql://nodeskpane:nodeskpane@postgres:5432/nodeskpane
+      DOCKER_HOST_ADDR: host.docker.internal
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
@@ -17,7 +32,11 @@ services:
       retries: 5
 
   selenium:
-    build: ./services/selenium-chrome
+    build:
+      context: ./services/selenium-chrome
+      args:
+        BASE_IMAGE: ${SELENIUM_BASE_IMAGE:-selenium/standalone-chrome:latest}
+    image: no-window-browser-selenium
     profiles: ["build"]
 
 volumes:

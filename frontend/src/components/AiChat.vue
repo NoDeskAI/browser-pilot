@@ -406,7 +406,12 @@ function buildApiMessages() {
       if (text) result.push({ role: 'user', content: text })
     } else {
       const text = m.blocks.filter(b => b.type === 'text' && b.content).map(b => b.content!).join('\n')
-      if (text) result.push({ role: 'assistant', content: text })
+      if (!text) continue
+      const hasError = m.blocks.some(b => b.type === 'error')
+      const content = hasError
+        ? text + '\n\n[系统提示：本轮回复生成过程中连接中断，上述工具调用可能未成功执行。不要信任上文中关于操作结果的描述，必须重新调用工具执行操作。]'
+        : text
+      result.push({ role: 'assistant', content })
     }
   }
 
@@ -664,7 +669,7 @@ onBeforeUnmount(() => {
     </Teleport>
 
     <!-- Messages -->
-    <div ref="chatContainer" class="flex-1 overflow-y-auto p-3 space-y-2">
+    <div ref="chatContainer" class="flex-1 overflow-y-auto overflow-x-hidden p-3 space-y-2">
       <!-- Empty state -->
       <div v-if="messages.length === 0" class="h-full flex flex-col items-center justify-center text-[var(--color-text-dim)]">
         <Sparkles class="w-10 h-10 mb-3 opacity-20" :stroke-width="1" />
@@ -700,7 +705,7 @@ onBeforeUnmount(() => {
               </div>
             </div>
             <div v-else class="flex justify-start">
-              <div class="max-w-[85%] px-3 py-2 rounded-lg text-xs leading-relaxed break-words bg-[var(--color-bg)] text-[var(--color-text)] border border-[var(--color-border)] rounded-bl-sm markdown-body" v-html="renderMarkdown(seg.content)"></div>
+              <div class="max-w-[85%] px-3 py-2 rounded-lg text-xs leading-relaxed break-words bg-[var(--color-bg)] text-[var(--color-text)] border border-[var(--color-border)] rounded-bl-sm markdown-body overflow-hidden" v-html="renderMarkdown(seg.content)"></div>
             </div>
           </template>
         </template>
@@ -733,13 +738,13 @@ onBeforeUnmount(() => {
           <div class="max-w-[90%]">
             <!-- Code tool result with expandable output -->
             <div v-if="isCodeTool(item.block.toolName) && getToolResultContent(item.block.result, item.block.toolName)" class="rounded-md border border-[var(--color-border)] overflow-hidden">
-              <div class="px-2.5 py-1 bg-[var(--color-surface)] text-[10px] text-[var(--color-text-dim)] font-mono border-b border-[var(--color-border)]">
+              <div class="px-2.5 py-1 bg-[var(--color-surface)] text-[10px] text-[var(--color-text-dim)] font-mono border-b border-[var(--color-border)] break-all">
                 {{ toolResultSummary(item.block.result, item.block.toolName) }}
               </div>
               <pre class="px-2.5 py-1.5 text-[10px] leading-relaxed text-[var(--color-text)] bg-[#0d1117] overflow-x-auto max-h-48 font-mono whitespace-pre">{{ getToolResultContent(item.block.result, item.block.toolName) }}</pre>
             </div>
             <!-- Default result summary -->
-            <div v-else-if="item.block.result" class="px-2.5 py-1.5 rounded-md bg-[var(--color-bg)] border border-[var(--color-border)] text-[10px] text-[var(--color-text-dim)] font-mono">
+            <div v-else-if="item.block.result" class="px-2.5 py-1.5 rounded-md bg-[var(--color-bg)] border border-[var(--color-border)] text-[10px] text-[var(--color-text-dim)] font-mono break-all">
               {{ toolResultSummary(item.block.result, item.block.toolName) }}
             </div>
           </div>
@@ -784,3 +789,28 @@ onBeforeUnmount(() => {
 
   </div>
 </template>
+
+<style scoped>
+.markdown-body :deep(pre) {
+  overflow-x: auto;
+  max-width: 100%;
+}
+.markdown-body :deep(code) {
+  word-break: break-all;
+}
+.markdown-body :deep(a) {
+  word-break: break-all;
+}
+.markdown-body :deep(p) {
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+.markdown-body :deep(img) {
+  max-width: 100%;
+}
+.markdown-body :deep(table) {
+  display: block;
+  overflow-x: auto;
+  max-width: 100%;
+}
+</style>

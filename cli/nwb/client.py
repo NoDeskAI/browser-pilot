@@ -30,3 +30,10 @@ def get_request(path: str, params: dict | None = None, *, api_url: str = "") -> 
         r = c.get(_url(path, api_url=api_url), params=params or {})
         r.raise_for_status()
         return r.json()
+
+
+def delete(path: str, *, api_url: str = "") -> dict:
+    with _client() as c:
+        r = c.delete(_url(path, api_url=api_url))
+        r.raise_for_status()
+        return r.json()

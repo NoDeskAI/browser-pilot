@@ -11,9 +11,10 @@ LOCALE_ID=$(echo "$LANG_CODE" | sed 's/-/_/')
 export LANGUAGE="${LOCALE_ID}"
 exec /usr/lib/chromium/chromium \
   --no-sandbox \
+  --test-type \
+  --no-default-browser-check \
   --disable-dev-shm-usage \
   --disable-blink-features=AutomationControlled \
-  --disable-infobars \
   --disable-component-update \
   --disable-features=AutomationControlled,TranslateUI \
   --disable-hang-monitor \

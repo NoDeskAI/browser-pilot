@@ -7,6 +7,8 @@ from typing import Any
 
 import httpx
 
+from app.config import DOCKER_HOST_ADDR
+
 logger = logging.getLogger("container")
 
 CONTAINER_PREFIX = "ndb-"
@@ -182,7 +184,7 @@ async def get_all_container_statuses() -> dict[str, str]:
 
 
 async def _wait_grid_ready(selenium_port: int) -> None:
-    url = f"http://localhost:{selenium_port}/status"
+    url = f"http://{DOCKER_HOST_ADDR}:{selenium_port}/status"
     elapsed = 0.0
     async with httpx.AsyncClient(timeout=3) as client:
         while elapsed < GRID_READY_TIMEOUT:

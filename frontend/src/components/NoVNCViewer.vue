@@ -38,7 +38,7 @@ const LANG_OPTIONS = [
 const totalRecv = ref(0)
 const totalSent = ref(0)
 const currentRate = ref(0)
-const clickIndicator = ref<{ x: number; y: number; screenX: number; screenY: number } | null>(null)
+const clickIndicator = ref<{ x: number; y: number; screenX: number; screenY: number; key: number } | null>(null)
 let clickIndicatorTimer: ReturnType<typeof setTimeout> | null = null
 
 let rfb: RFB | null = null
@@ -289,6 +289,7 @@ function highlightClick(x: number, y: number) {
     x, y,
     screenX: canvasOffsetX + x * scaleX,
     screenY: canvasOffsetY + y * scaleY,
+    key: Date.now(),
   }
 
   if (clickIndicatorTimer) clearTimeout(clickIndicatorTimer)
@@ -409,15 +410,13 @@ watch(compressionLevel, applyQuality)
     <!-- VNC display area -->
     <div class="flex-1 relative overflow-hidden bg-black">
       <div ref="vncContainer" class="absolute inset-0" />
-      <div v-if="clickIndicator" class="absolute inset-0 pointer-events-none z-10 click-indicator-lifecycle">
+      <div v-if="clickIndicator" :key="clickIndicator.key" class="absolute inset-0 pointer-events-none z-10 click-indicator-lifecycle">
         <div class="absolute bg-red-500/30 h-px" :style="{ left: 0, right: 0, top: clickIndicator.screenY + 'px' }" />
         <div class="absolute bg-red-500/30 w-px" :style="{ top: 0, bottom: 0, left: clickIndicator.screenX + 'px' }" />
-        <div class="absolute" :style="{ left: clickIndicator.screenX + 'px', top: clickIndicator.screenY + 'px', transform: 'translate(-50%, -50%)' }">
-          <div class="click-ring" />
-          <div class="click-ring" style="animation-delay: 0.4s" />
-          <div class="click-dot" />
-          <div class="click-label">{{ clickIndicator.x }}, {{ clickIndicator.y }}</div>
-        </div>
+        <div class="click-ring" :style="{ left: clickIndicator.screenX + 'px', top: clickIndicator.screenY + 'px' }" />
+        <div class="click-ring" :style="{ left: clickIndicator.screenX + 'px', top: clickIndicator.screenY + 'px' }" style="animation-delay: 0.4s" />
+        <div class="click-dot" :style="{ left: clickIndicator.screenX + 'px', top: clickIndicator.screenY + 'px' }" />
+        <div class="click-label" :style="{ left: (clickIndicator.screenX + 14) + 'px', top: (clickIndicator.screenY - 8) + 'px' }">{{ clickIndicator.x }}, {{ clickIndicator.y }}</div>
       </div>
     </div>
 
@@ -471,8 +470,6 @@ watch(compressionLevel, applyQuality)
   background: #ef4444;
   box-shadow: 0 0 8px rgba(239, 68, 68, 0.9);
   position: absolute;
-  top: 50%;
-  left: 50%;
   transform: translate(-50%, -50%);
 }
 .click-ring {
@@ -481,8 +478,7 @@ watch(compressionLevel, applyQuality)
   height: 40px;
   border-radius: 50%;
   border: 2px solid #ef4444;
-  top: 50%;
-  left: 50%;
+  transform: translate(-50%, -50%);
   animation: click-ring-pulse 1.2s ease-out infinite;
 }
 @keyframes click-ring-pulse {
@@ -491,8 +487,6 @@ watch(compressionLevel, applyQuality)
 }
 .click-label {
   position: absolute;
-  left: 14px;
-  top: -8px;
   font-size: 11px;
   font-family: monospace;
   font-weight: 600;

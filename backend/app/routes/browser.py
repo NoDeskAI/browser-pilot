@@ -10,7 +10,7 @@ from app.tools.browser.scripts import CLICK_ELEMENT_SCRIPT, OBSERVE_SCRIPT
 from app.tools.browser.session import (
     KEY_MAP,
     browser_session,
-    human_click_actions,
+    cdp_human_click,
     human_key_actions,
     quick_observe,
     wd_fetch,
@@ -130,14 +130,7 @@ async def api_click(body: ClickBody):
             handles_before = await wd_fetch(
                 f"/session/{sid}/window/handles", timeout=5, base_url=base,
             ) or []
-            await wd_fetch(f"/session/{sid}/actions", "POST", {
-                "actions": [{
-                    "type": "pointer", "id": "mouse",
-                    "parameters": {"pointerType": "mouse"},
-                    "actions": human_click_actions(x, y),
-                }],
-            }, base_url=base)
-            await wd_fetch(f"/session/{sid}/actions", "DELETE", base_url=base)
+            await cdp_human_click(sid, x, y, base_url=base)
             await asyncio.sleep(0.8)
             handles_after = await wd_fetch(
                 f"/session/{sid}/window/handles", timeout=5, base_url=base,
