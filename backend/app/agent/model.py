@@ -190,16 +190,50 @@ def _convert_message_to_openai(msg: dict[str, Any]) -> list[dict[str, Any]]:
     if isinstance(content, list):
         tool_results = [p for p in content if p.get("type") == "tool_result"]
         if tool_results:
-            return [
-                {
-                    "role": "tool",
-                    "tool_call_id": p.get("tool_use_id", ""),
-                    "content": json.dumps(p.get("content", ""), ensure_ascii=False)
-                    if not isinstance(p.get("content"), str)
-                    else p.get("content", ""),
-                }
-                for p in tool_results
-            ]
+            msgs: list[dict[str, Any]] = []
+            pending_images: list[dict] = []
+            pending_texts: list[str] = []
+
+            for p in tool_results:
+                raw = p.get("content", "")
+                if isinstance(raw, list):
+                    texts = [b["text"] for b in raw if b.get("type") == "text"]
+                    imgs = [b for b in raw if b.get("type") == "image"]
+                    msgs.append({
+                        "role": "tool",
+                        "tool_call_id": p.get("tool_use_id", ""),
+                        "content": "\n".join(texts),
+                    })
+                    pending_images.extend(imgs)
+                else:
+                    msgs.append({
+                        "role": "tool",
+                        "tool_call_id": p.get("tool_use_id", ""),
+                        "content": json.dumps(raw, ensure_ascii=False)
+                        if not isinstance(raw, str) else raw,
+                    })
+
+            for block in content:
+                if block.get("type") == "tool_result":
+                    continue
+                if block.get("type") == "image":
+                    pending_images.append(block)
+                elif block.get("type") == "text":
+                    pending_texts.append(block.get("text", ""))
+
+            if pending_images:
+                img_content: list[dict[str, Any]] = [
+                    {"type": "text", "text": "\n".join(pending_texts) if pending_texts else "以上工具返回的截图:"}
+                ]
+                for img in pending_images:
+                    url = img.get("source", {}).get("url", "")
+                    img_content.append({"type": "image_url", "image_url": {"url": url}})
+                msgs.append({"role": "user", "content": img_content})
+            elif pending_texts:
+                msgs.append({"role": "user", "content": "\n".join(pending_texts)})
+
+            return msgs
+
         texts = [p.get("text", "") for p in content if p.get("type") == "text"]
         return [{"role": role, "content": "\n".join(texts) if texts else ""}]
 

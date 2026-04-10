@@ -77,7 +77,7 @@ _ensure_postgres() {
     echo "[postgres] 确保 PostgreSQL 运行中..."
     docker compose up -d postgres
     local tries=0
-    until docker compose exec -T postgres pg_isready -U nodeskpane >/dev/null 2>&1; do
+    until docker compose exec -T postgres pg_isready -U ${POSTGRES_USER:-nodeskpane} >/dev/null 2>&1; do
         tries=$((tries + 1))
         if [[ $tries -ge 30 ]]; then
             echo "[postgres] 等待超时，继续启动（backend 会自行重试连接）"

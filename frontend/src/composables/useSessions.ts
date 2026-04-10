@@ -1,5 +1,36 @@
 import { reactive, readonly } from 'vue'
 import type { ChatMessage, Session } from '../types'
+import i18n from '../i18n'
+
+interface BrandConfig {
+  appTitle: string
+  agentName: string
+  cliCommandName: string
+  cliInstallCommand: string
+  cliPythonInstallCommand: string
+}
+
+const brand = reactive<BrandConfig>({
+  appTitle: 'Remote Browser Playground',
+  agentName: 'NoDeskPane Agent',
+  cliCommandName: 'nwb',
+  cliInstallCommand: 'pip install nwb-cli',
+  cliPythonInstallCommand: 'pip install nwb-cli',
+})
+
+async function fetchBrand(): Promise<void> {
+  try {
+    const res = await fetch('/api/site-info')
+    const data = await res.json()
+    if (data.appTitle) brand.appTitle = data.appTitle
+    if (data.agentName) brand.agentName = data.agentName
+    if (data.cliCommandName) brand.cliCommandName = data.cliCommandName
+    if (data.cliInstallCommand) brand.cliInstallCommand = data.cliInstallCommand
+    if (data.cliPythonInstallCommand) brand.cliPythonInstallCommand = data.cliPythonInstallCommand
+  } catch {
+    // keep defaults
+  }
+}
 
 interface SessionsState {
   sessions: Session[]
@@ -31,7 +62,8 @@ async function fetchSessions(): Promise<void> {
   }
 }
 
-async function createSession(name = '新会话'): Promise<Session> {
+async function createSession(name?: string): Promise<Session> {
+  if (!name) name = i18n.global.t('session.defaultName')
   const res = await fetch('/api/sessions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -228,7 +260,7 @@ async function saveAppState(key: string, value: string): Promise<void> {
 
 async function init(): Promise<void> {
   state.loading = true
-  await fetchSessions()
+  await Promise.all([fetchSessions(), fetchBrand()])
   const savedId = await getAppState('active_session_id')
   if (savedId && state.sessions.some(s => s.id === savedId)) {
     state.activeId = savedId
@@ -245,6 +277,7 @@ async function init(): Promise<void> {
 export function useSessions() {
   return {
     state: readonly(state),
+    brand: readonly(brand),
     init,
     fetchSessions,
     createSession,

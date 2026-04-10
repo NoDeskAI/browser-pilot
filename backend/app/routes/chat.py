@@ -9,7 +9,8 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.agent.loop import AgentLoopParams, agent_loop
-from app.agent.prompt import SYSTEM_PROMPT
+from app.agent.prompt import build_system_prompt
+from app.i18n import t
 from app.tools.browser import browser_tools
 from app.tools.code import code_tools
 from app.tools.docker import docker_tools
@@ -27,14 +28,16 @@ class ChatRequest(BaseModel):
     model: str | None = None
     apiType: str | None = None
     sessionId: str | None = None
+    locale: str = "zh"
 
 
 @router.post("/api/ai/chat")
 async def chat(body: ChatRequest, request: Request):
+    locale = body.locale or "zh"
     if not body.apiKey:
-        return {"error": "请先配置 API Key"}
+        return {"error": t("api_key_required", locale)}
     if not body.messages:
-        return {"error": "消息不能为空"}
+        return {"error": t("message_empty", locale)}
 
     provider = body.apiType or "openai"
     base_url = body.baseUrl or "https://api.openai.com/v1"
@@ -60,11 +63,12 @@ async def chat(body: ChatRequest, request: Request):
         base_url=base_url,
         api_key=body.apiKey,
         model=model_name,
-        system_prompt=SYSTEM_PROMPT,
+        system_prompt=build_system_prompt(locale),
         messages=core_messages,
         tools=ALL_TOOLS,
         cancel_event=cancel_event,
         session_id=body.sessionId,
+        locale=locale,
     )
 
     async def event_stream():

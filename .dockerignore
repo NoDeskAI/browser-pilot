@@ -15,7 +15,6 @@ __pycache__/
 *.egg-info/
 *.pyc
 
-cli/
 skills/
 services/
 .DS_Store

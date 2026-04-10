@@ -7,12 +7,12 @@ from typing import Any
 
 import httpx
 
-from app.config import DOCKER_HOST_ADDR
+from app.config import DOCKER_HOST_ADDR, CONTAINER_PREFIX as _PREFIX, SELENIUM_IMAGE_NAME
 
 logger = logging.getLogger("container")
 
-CONTAINER_PREFIX = "ndb-"
-IMAGE_NAME = "no-window-browser-selenium"
+CONTAINER_PREFIX = f"{_PREFIX}-"
+IMAGE_NAME = SELENIUM_IMAGE_NAME
 SHM_SIZE = "2g"
 
 CONTAINER_ENV = {
@@ -66,7 +66,7 @@ async def create_container(session_id: str) -> str:
     env_args = " ".join(f"-e {k}={v}" for k, v in CONTAINER_ENV.items())
     cmd = (
         f"docker run -d --name {name} "
-        f"--label ndb.session_id={session_id} "
+        f"--label {_PREFIX}.session_id={session_id} "
         f"-p 0:4444 -p 0:7900 "
         f"--shm-size={SHM_SIZE} "
         f"-v {vol_name}:/home/seluser/chrome-data "
@@ -168,7 +168,8 @@ async def stop_cdp_logger(session_id: str) -> None:
 async def get_all_container_statuses() -> dict[str, str]:
     """Batch query all ndb- containers. Returns {container_name: status}."""
     stdout, _, rc = await _run(
-        'docker ps -a --filter "name=ndb-" --format "{{.Names}}\\t{{.State}}"',
+        f'docker ps -a --filter "name={CONTAINER_PREFIX}" --format '
+        '"{{.Names}}\\t{{.State}}"',
         timeout=10,
     )
     if rc != 0:

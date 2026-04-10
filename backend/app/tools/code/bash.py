@@ -10,9 +10,9 @@ from app.config import BASH_DEFAULT_TIMEOUT_MS, BASH_MAX_TIMEOUT_MS, MAX_OUTPUT_
 
 
 class BashInput(BaseModel):
-    command: str = Field(description="要执行的 shell 命令")
-    timeout: int = Field(default=BASH_DEFAULT_TIMEOUT_MS, description="超时时间（毫秒），默认 30000")
-    cwd: str | None = Field(default=None, description="工作目录，默认为项目根目录")
+    command: str = Field(description="Shell command to execute")
+    timeout: int = Field(default=BASH_DEFAULT_TIMEOUT_MS, description="Timeout in milliseconds, default 30000")
+    cwd: str | None = Field(default=None, description="Working directory, defaults to project root")
 
 
 async def _execute(args: dict, ctx: ToolContext) -> dict:
@@ -56,7 +56,7 @@ async def _execute(args: dict, ctx: ToolContext) -> dict:
 
 bash_tool = build_tool(
     name="bash",
-    description="在服务器上执行 shell 命令。用于运行系统命令、安装依赖、查看进程状态等。输出超过 10000 字符会被截断。",
+    description="Execute a shell command on the server. Use for system commands, installing dependencies, checking process status, etc. Output is truncated after 10000 characters.",
     input_schema=BashInput,
     execute=_execute,
 )

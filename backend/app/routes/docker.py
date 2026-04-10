@@ -5,10 +5,18 @@ import base64
 import logging
 import re
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
 from app.container import container_name
+from app.i18n import t
+
+
+def _locale_from_request(request: Request) -> str:
+    accept = request.headers.get("accept-language", "")
+    if accept.startswith("en"):
+        return "en"
+    return "zh"
 
 logger = logging.getLogger("docker")
 router = APIRouter()
@@ -44,7 +52,7 @@ class NavigateRequest(BaseModel):
 
 
 @router.post("/api/docker/navigate")
-async def docker_navigate(body: NavigateRequest):
+async def docker_navigate(body: NavigateRequest, request: Request):
     cname = container_name(body.sessionId)
     logger.info("navigate [%s] -> %s", cname, body.url)
 
@@ -71,7 +79,7 @@ async def docker_navigate(body: NavigateRequest):
 
     if rc != 0:
         if "NO_WINDOW" in stdout or "NO_WINDOW" in stderr:
-            return {"ok": False, "error": "未找到浏览器窗口，请确认容器内浏览器已启动"}
+            return {"ok": False, "error": t("browser_window_not_found", _locale_from_request(request))}
         return {"ok": False, "error": (stderr or stdout)[:300]}
 
     return {"ok": True, "url": body.url}
@@ -84,12 +92,12 @@ class ClipboardRequest(BaseModel):
 
 
 @router.post("/api/docker/clipboard")
-async def docker_clipboard(body: ClipboardRequest):
+async def docker_clipboard(body: ClipboardRequest, request: Request):
     cname = container_name(body.sessionId)
 
     if body.action == "paste":
         if not body.text:
-            return {"ok": False, "error": "缺少 text 参数"}
+            return {"ok": False, "error": t("missing_text_param", _locale_from_request(request))}
         logger.info("clipboard [%s]: paste (%d chars)", cname, len(body.text))
         b64 = base64.b64encode(body.text.encode("utf-8")).decode("ascii")
         bash_cmd = " && ".join([

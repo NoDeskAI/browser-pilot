@@ -127,6 +127,7 @@ return (function() {
 
   walk(document, 0, 0, 'document', new Set());
   result.visibleText = document.body ? document.body.innerText.substring(0, 2000) : '';
+  result.viewportOffset = window.__nwb_vp_offset || { x: 0, y: 0 };
   return result;
 })();
 """
@@ -181,6 +182,10 @@ return (function(selector) {
 
 STEALTH_SCRIPT = r"""(function(){
   'use strict';
+  var _origSX=window.screenX||0,_origSY=window.screenY||0;
+  var _origOH=window.outerHeight||0,_origIH=window.innerHeight||0;
+  var _chromeH=(_origOH>_origIH)?(_origOH-_origIH):0;
+  try{Object.defineProperty(window,'__nwb_vp_offset',{value:{x:_origSX,y:_origSY+_chromeH},writable:false,configurable:false,enumerable:false})}catch(e){}
   var SEED=Date.now()^(Math.random()*4294967296>>>0);
   function xmur3(h){return function(){h=Math.imul(h^(h>>>16),2246822507);h=Math.imul(h^(h>>>13),3266489909);return((h^=(h>>>16))>>>0)/4294967296};}
   var rng=xmur3(SEED);

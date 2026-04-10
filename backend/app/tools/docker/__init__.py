@@ -70,8 +70,8 @@ async def _docker_pause(args: dict, ctx: ToolContext) -> dict:
 
 
 docker_tools: list[Tool] = [
-    build_tool(name="docker_status", description="查询当前会话的浏览器容器状态", input_schema=EmptyInput, execute=_docker_status, is_concurrency_safe=True),
-    build_tool(name="docker_start", description="启动当前会话的浏览器容器", input_schema=EmptyInput, execute=_docker_start),
-    build_tool(name="docker_stop", description="停止当前会话的浏览器容器", input_schema=EmptyInput, execute=_docker_stop),
-    build_tool(name="docker_pause", description="休眠当前会话的浏览器容器（冻结所有进程，保留完整状态）", input_schema=EmptyInput, execute=_docker_pause),
+    build_tool(name="docker_status", description="Query the browser container status for the current session", input_schema=EmptyInput, execute=_docker_status, is_concurrency_safe=True),
+    build_tool(name="docker_start", description="Start the browser container for the current session", input_schema=EmptyInput, execute=_docker_start),
+    build_tool(name="docker_stop", description="Stop the browser container for the current session", input_schema=EmptyInput, execute=_docker_stop),
+    build_tool(name="docker_pause", description="Hibernate the browser container (freeze all processes, preserve full state)", input_schema=EmptyInput, execute=_docker_pause),
 ]

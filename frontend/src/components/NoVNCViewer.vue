@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import RFB from '@novnc/novnc'
+
+const { t } = useI18n()
 
 const props = defineProps<{
   wsUrl: string
@@ -254,7 +257,7 @@ async function changeLang(lang: string) {
     })
     if (!resp.ok) {
       const data = await resp.json().catch(() => null)
-      langError.value = data?.error || `请求失败 (${resp.status})`
+      langError.value = data?.error || t('vnc.requestFailed', { status: resp.status })
       setTimeout(() => { langError.value = '' }, 4000)
       return
     }
@@ -262,18 +265,18 @@ async function changeLang(lang: string) {
     if (data.ok) {
       browserLang.value = lang
     } else {
-      langError.value = data.error || '切换失败'
+      langError.value = data.error || t('vnc.switchFailed')
       setTimeout(() => { langError.value = '' }, 4000)
     }
   } catch {
-    langError.value = '网络错误，请检查服务是否运行'
+    langError.value = t('vnc.networkError')
     setTimeout(() => { langError.value = '' }, 4000)
   } finally {
     langLoading.value = false
   }
 }
 
-function highlightClick(x: number, y: number) {
+function highlightClick(x: number, y: number, offsetX = 0, offsetY = 0) {
   const canvas = vncContainer.value?.querySelector('canvas')
   if (!canvas) return
 
@@ -287,8 +290,8 @@ function highlightClick(x: number, y: number) {
 
   clickIndicator.value = {
     x, y,
-    screenX: canvasOffsetX + x * scaleX,
-    screenY: canvasOffsetY + y * scaleY,
+    screenX: canvasOffsetX + (x + offsetX) * scaleX,
+    screenY: canvasOffsetY + (y + offsetY) * scaleY,
     key: Date.now(),
   }
 
@@ -353,7 +356,7 @@ watch(compressionLevel, applyQuality)
         @click="toggleClipboard"
         class="px-1.5 py-0.5 rounded text-[10px] transition-colors shrink-0"
         :class="clipboardOpen ? 'bg-lime-600/30 text-lime-300' : 'bg-[var(--color-surface-hover)] text-[var(--color-text-dim)] hover:text-[var(--color-text)]'"
-        title="剪贴板"
+        :title="t('vnc.clipboard')"
       >Clip</button>
 
       <!-- Scale mode -->
@@ -361,8 +364,8 @@ watch(compressionLevel, applyQuality)
         @click="toggleScaleMode"
         class="px-1.5 py-0.5 rounded text-[10px] transition-colors shrink-0"
         :class="scaleMode === 'scale' ? 'bg-blue-600/20 text-blue-400' : 'bg-cyan-600/20 text-cyan-400'"
-        :title="scaleMode === 'scale' ? '缩放模式：适应容器' : '缩放模式：调整远程分辨率'"
-      >{{ scaleMode === 'scale' ? '适应' : '原生' }}</button>
+        :title="scaleMode === 'scale' ? t('vnc.scaleFitTitle') : t('vnc.scaleNativeTitle')"
+      >{{ scaleMode === 'scale' ? t('vnc.scaleFit') : t('vnc.scaleNative') }}</button>
 
       <!-- Quality -->
       <span class="flex items-center gap-1 shrink-0">
@@ -372,7 +375,7 @@ watch(compressionLevel, applyQuality)
           v-model.number="qualityLevel"
           min="0" max="9" step="1"
           class="w-12 h-2 accent-lime-500"
-          title="画质 (0=低, 9=高)"
+          :title="t('vnc.quality')"
         />
         <span class="text-[var(--color-text-dim)] w-3 text-center">{{ qualityLevel }}</span>
       </span>
@@ -382,15 +385,15 @@ watch(compressionLevel, applyQuality)
         @click="toggleViewOnly"
         class="px-1.5 py-0.5 rounded text-[10px] transition-colors shrink-0"
         :class="viewOnly ? 'bg-amber-600/20 text-amber-400' : 'bg-[var(--color-surface-hover)] text-[var(--color-text-dim)] hover:text-[var(--color-text)]'"
-        :title="viewOnly ? '只读模式（点击切换为交互模式）' : '交互模式（点击切换为只读模式）'"
-      >{{ viewOnly ? '只读' : '交互' }}</button>
+        :title="viewOnly ? t('vnc.viewOnlyTitle') : t('vnc.interactiveTitle')"
+      >{{ viewOnly ? t('vnc.viewOnly') : t('vnc.interactive') }}</button>
 
       <!-- Fullscreen -->
       <button
         @click="toggleFullscreen"
         class="px-1.5 py-0.5 rounded text-[10px] bg-[var(--color-surface-hover)] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors shrink-0"
-        :title="isFullscreen ? '退出全屏' : '全屏'"
-      >{{ isFullscreen ? '退出' : '全屏' }}</button>
+        :title="isFullscreen ? t('vnc.exitFullscreenTitle') : t('vnc.fullscreenTitle')"
+      >{{ isFullscreen ? t('vnc.exitFullscreen') : t('vnc.fullscreen') }}</button>
 
       <!-- Language -->
       <select
@@ -398,7 +401,7 @@ watch(compressionLevel, applyQuality)
         @change="changeLang(($event.target as HTMLSelectElement).value)"
         :disabled="langLoading"
         class="px-1 py-0.5 rounded text-[10px] bg-[var(--color-surface-hover)] text-[var(--color-text-dim)] border border-[var(--color-border)] outline-none cursor-pointer shrink-0 disabled:opacity-40"
-        title="浏览器语言（切换后会重启浏览器）"
+        :title="t('vnc.browserLangTitle')"
       >
         <option v-for="opt in LANG_OPTIONS" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
       </select>
@@ -432,23 +435,23 @@ watch(compressionLevel, applyQuality)
           v-model="clipboardText"
           rows="4"
           class="w-full bg-[var(--color-bg)] border border-[var(--color-border)] rounded text-xs text-[var(--color-text)] p-1.5 resize-none outline-none focus:border-[var(--color-accent)]"
-          placeholder="双向剪贴板..."
+          :placeholder="t('vnc.clipPlaceholder')"
         />
         <div class="flex gap-1.5 mt-1.5">
           <button
             @click="pasteClipboard"
             :disabled="clipLoading || !clipboardText"
             class="flex-1 px-2 py-1 rounded text-[10px] font-medium bg-lime-600/20 text-lime-400 border border-lime-600/30 hover:bg-lime-600/30 transition-colors disabled:opacity-40"
-          >{{ clipLoading ? '...' : '发送到远程' }}</button>
+          >{{ clipLoading ? '...' : t('vnc.sendToRemote') }}</button>
           <button
             @click="getRemoteClipboard"
             :disabled="clipLoading"
             class="flex-1 px-2 py-1 rounded text-[10px] font-medium bg-sky-600/20 text-sky-400 border border-sky-600/30 hover:bg-sky-600/30 transition-colors disabled:opacity-40"
-          >{{ clipLoading ? '...' : '从远程获取' }}</button>
+          >{{ clipLoading ? '...' : t('vnc.getFromRemote') }}</button>
           <button
             @click="clipboardOpen = false"
             class="px-2 py-1 rounded text-[10px] font-medium bg-[var(--color-surface-hover)] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors"
-          >关闭</button>
+          >{{ t('vnc.close') }}</button>
         </div>
       </div>
     </Teleport>

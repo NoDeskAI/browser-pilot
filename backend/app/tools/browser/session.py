@@ -89,8 +89,8 @@ async def _find_existing_session(base: str) -> str | None:
     return None
 
 
-async def _cdp(sid: str, cmd: str, params: dict | None = None, *, base_url: str) -> None:
-    await wd_fetch(f"/session/{sid}/goog/cdp/execute", "POST", {
+async def _cdp(sid: str, cmd: str, params: dict | None = None, *, base_url: str) -> Any:
+    return await wd_fetch(f"/session/{sid}/goog/cdp/execute", "POST", {
         "cmd": cmd, "params": params or {},
     }, timeout=5, base_url=base_url)
 
@@ -259,16 +259,35 @@ async def close_other_tabs(sid: str, *, base_url: str) -> None:
         logger.warning("closeOtherTabs failed: %s", exc)
 
 
+async def get_viewport_offset(sid: str, *, base_url: str) -> dict:
+    """Pixel offset from VNC screen origin to browser viewport origin via CDP."""
+    try:
+        bounds_result = await _cdp(sid, "Browser.getWindowForTarget", {}, base_url=base_url)
+        bounds = (bounds_result or {}).get("bounds", {})
+        inner = await wd_fetch(f"/session/{sid}/execute/sync", "POST", {
+            "script": "return window.innerHeight", "args": [],
+        }, timeout=5, base_url=base_url)
+        win_top = bounds.get("top", 0)
+        win_height = bounds.get("height", 0)
+        inner_h = inner if isinstance(inner, (int, float)) else 0
+        offset_y = win_top + (win_height - inner_h) if win_height > inner_h else 0
+        return {"x": bounds.get("left", 0), "y": offset_y}
+    except Exception:
+        return {"x": 0, "y": 0}
+
+
 async def quick_observe(sid: str, *, base_url: str) -> dict:
     try:
         result = await wd_fetch(f"/session/{sid}/execute/sync", "POST", {
             "script": OBSERVE_SCRIPT,
             "args": [],
         }, timeout=10, base_url=base_url)
+        vp_offset = await get_viewport_offset(sid, base_url=base_url)
         return {
             "url": (result or {}).get("url", ""),
             "title": (result or {}).get("title", ""),
             "elementCount": len((result or {}).get("elements", [])),
+            "viewportOffset": vp_offset,
         }
     except Exception:
         return {"url": "(observe failed)", "title": "", "elementCount": 0}

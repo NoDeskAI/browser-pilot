@@ -13,6 +13,7 @@ from app.agent.orchestration import execute_tool_calls
 from app.agent.registry import build_anthropic_tools, build_openai_tools
 from app.agent.types import PendingToolCall, SSEEvent, Tool, ToolContext
 from app.config import get_max_steps
+from app.i18n import t
 
 logger = logging.getLogger("agent.loop")
 
@@ -28,6 +29,7 @@ class AgentLoopParams:
     tools: list[Tool]
     cancel_event: asyncio.Event
     session_id: str | None = None
+    locale: str = "zh"
 
 
 async def agent_loop(params: AgentLoopParams) -> AsyncGenerator[SSEEvent, None]:
@@ -155,11 +157,29 @@ async def agent_loop(params: AgentLoopParams) -> AsyncGenerator[SSEEvent, None]:
                 result=_sanitize_for_sse(result.tool_name, result.output),
             )
 
-            tool_results.append({
-                "type": "tool_result",
-                "tool_use_id": result.tool_call_id,
-                "content": json.dumps(result.output, ensure_ascii=False) if not isinstance(result.output, str) else result.output,
-            })
+            output_for_model = result.output
+            image_block = None
+            if isinstance(output_for_model, dict) and "_image" in output_for_model:
+                img = output_for_model.pop("_image")
+                image_block = {"type": "image", "source": {"type": "url", "url": img["url"]}}
+
+            text_content = (
+                json.dumps(output_for_model, ensure_ascii=False)
+                if not isinstance(output_for_model, str)
+                else output_for_model
+            )
+            if image_block:
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": result.tool_call_id,
+                    "content": [image_block, {"type": "text", "text": text_content}],
+                })
+            else:
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": result.tool_call_id,
+                    "content": text_content,
+                })
 
             if result.tool_name == "browser_observe" and isinstance(result.output, dict):
                 obs_url = result.output.get("url", "")
@@ -177,16 +197,37 @@ async def agent_loop(params: AgentLoopParams) -> AsyncGenerator[SSEEvent, None]:
 
                 if _cycle_hints_injected >= _max_cycle_hints:
                     logger.warning("max cycle hints reached, force stopping agent loop")
-                    yield SSEEvent(type="text", content="\n\n操作未产生变化，已自动停止。请在浏览器中手动完成当前操作。")
+                    yield SSEEvent(type="text", content="\n\n" + t("cycle_stop", params.locale))
                     break
 
-                messages[-1]["content"].append({
-                    "type": "text",
-                    "text": (
+                cycle_image = None
+                if params.session_id:
+                    try:
+                        from app.tools.browser.session import browser_session as _bs, wd_fetch as _wf
+                        from app.file_store import get_store
+
+                        async with _bs(params.session_id) as (sid, base):
+                            b64 = await _wf(f"/session/{sid}/screenshot", base_url=base)
+                        store = await get_store()
+                        img_ref = await store.save(b64, params.session_id)
+                        cycle_image = {"type": "image", "source": {"type": "url", "url": img_ref["url"]}}
+                    except Exception:
+                        cycle_image = None
+
+                if cycle_image:
+                    messages[-1]["content"].extend([
+                        cycle_image,
+                        {"type": "text", "text": (
+                            f"[系统提示] 你已经连续 {_cycle_limit} 次在同一页面 ({cycle_url}) 上操作但没有效果。"
+                            "这是当前页面的截图。请仔细观察截图中的视觉元素（弹窗、遮罩、验证码等），"
+                            "尝试找到不同的操作方式。如果确实无法操作，告知用户并建议手动操作。"
+                        )},
+                    ])
+                else:
+                    messages[-1]["content"].append({"type": "text", "text": (
                         f"[系统提示] 你已经连续 {_cycle_limit} 次在同一页面 ({cycle_url}) 上操作但没有效果。"
                         "立即停止，直接回复用户说明你无法完成这个操作，建议用户手动操作。不要再调用任何工具。"
-                    ),
-                })
+                    )})
                 _observed_urls.clear()
 
     elapsed = time.monotonic() - loop_t0
@@ -197,7 +238,7 @@ async def agent_loop(params: AgentLoopParams) -> AsyncGenerator[SSEEvent, None]:
         _nav_history.pop(params.session_id, None)
 
     if completed_steps >= max_steps:
-        yield SSEEvent(type="text", content=f"\n\n⚠️ 已达到最大步数限制（{max_steps} 步），任务被中断。你可以继续发送指令让我接着完成。")
+        yield SSEEvent(type="text", content="\n\n" + t("max_steps", params.locale, max_steps=max_steps))
 
     yield SSEEvent(type="done")
 
@@ -206,12 +247,33 @@ def _sanitize_for_sse(tool_name: str, output: Any) -> Any:
     if not output or not isinstance(output, dict):
         return output
 
+    if tool_name == "browser_screenshot" and "_image" in output:
+        output = {k: v for k, v in output.items() if k != "_image"}
+
     if tool_name == "browser_observe":
+        raw_elements = output.get("elements") if isinstance(output.get("elements"), list) else []
+        compact = []
+        for el in raw_elements:
+            item: dict[str, Any] = {
+                "tag": el.get("tag", ""),
+                "text": (el.get("text", "") or "")[:40],
+                "x": el.get("x", 0),
+                "y": el.get("y", 0),
+            }
+            attrs = el.get("attrs") or {}
+            if attrs.get("id"):
+                item["id"] = attrs["id"]
+            if attrs.get("href"):
+                item["href"] = attrs["href"][:60]
+            if attrs.get("role"):
+                item["role"] = attrs["role"]
+            compact.append(item)
         return {
             "ok": True,
             "url": output.get("url"),
             "title": output.get("title"),
-            "elementCount": len(output["elements"]) if isinstance(output.get("elements"), list) else None,
+            "elementCount": len(raw_elements),
+            "elements": compact,
         }
 
     if "currentPage" in output and isinstance(output["currentPage"], dict):

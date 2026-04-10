@@ -11,8 +11,8 @@ MAX_FILES = 200
 
 
 class GlobInput(BaseModel):
-    pattern: str = Field(description='glob 模式，如 "*.ts"、"**/test_*.py"、"src/**/*.vue"')
-    path: str | None = Field(default=None, description="搜索起始路径，默认为项目根目录")
+    pattern: str = Field(description='Glob pattern, e.g. "*.ts", "**/test_*.py", "src/**/*.vue"')
+    path: str | None = Field(default=None, description="Search root path, defaults to project root")
 
 
 async def _execute(args: dict, ctx: ToolContext) -> dict:
@@ -48,7 +48,7 @@ async def _execute(args: dict, ctx: ToolContext) -> dict:
 
 glob_tool = build_tool(
     name="glob",
-    description="按文件名模式搜索文件。使用 find 搜索匹配的文件路径。路径相对于项目根目录。",
+    description="Search for files by name pattern using find. Path is relative to project root.",
     input_schema=GlobInput,
     execute=_execute,
     is_concurrency_safe=True,

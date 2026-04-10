@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { ref, watch, onUnmounted, nextTick, computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { ChevronUp, ChevronDown, Trash2 } from 'lucide-vue-next'
+
+const { t, locale } = useI18n()
 
 interface LogEntry {
   ts: string
@@ -21,13 +24,15 @@ const isResizingPanel = ref(false)
 const logContainer = ref<HTMLElement | null>(null)
 let pollTimer: ReturnType<typeof setInterval> | null = null
 
-const FILTERS = [
-  { key: null, label: '全部' },
-  { key: 'console', label: '控制台' },
-  { key: 'network', label: '网络' },
-  { key: 'navigation', label: '导航' },
-  { key: 'error', label: '错误' },
-] as const
+const FILTER_KEYS = [null, 'console', 'network', 'navigation', 'error'] as const
+
+const FILTERS = computed(() => [
+  { key: null, label: t('logs.all') },
+  { key: 'console', label: t('logs.console') },
+  { key: 'network', label: t('logs.network') },
+  { key: 'navigation', label: t('logs.navigation') },
+  { key: 'error', label: t('logs.error') },
+])
 
 const filteredLogs = computed(() => {
   if (!activeFilter.value) return logs.value
@@ -57,7 +62,8 @@ function typeLabel(type: string): string {
 function formatTime(ts: string): string {
   try {
     const d = new Date(ts)
-    return d.toLocaleTimeString('en-GB', { hour12: false })
+    const loc = locale.value === 'zh' ? 'zh-CN' : 'en-GB'
+    return d.toLocaleTimeString(loc, { hour12: false })
   } catch {
     return ts
   }
@@ -155,7 +161,7 @@ onUnmounted(() => {
       @click="toggleExpanded"
     >
       <component :is="expanded ? ChevronDown : ChevronUp" class="w-3.5 h-3.5 text-[var(--color-text-dim)]" />
-      <span class="text-[11px] font-medium text-[var(--color-text-dim)]">浏览器日志</span>
+      <span class="text-[11px] font-medium text-[var(--color-text-dim)]">{{ t('logs.title') }}</span>
 
       <template v-if="expanded">
         <div class="flex items-center gap-1 ml-2" @click.stop>
@@ -178,7 +184,7 @@ onUnmounted(() => {
         <button
           @click="clearLogs"
           class="p-0.5 rounded text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors"
-          title="清空"
+          :title="t('logs.clear')"
         >
           <Trash2 class="w-3 h-3" />
         </button>
@@ -193,7 +199,7 @@ onUnmounted(() => {
       :style="{ height: panelHeight + 'px' }"
     >
       <div v-if="filteredLogs.length === 0" class="flex items-center justify-center h-full text-[var(--color-text-dim)] text-xs">
-        暂无日志
+        {{ t('logs.empty') }}
       </div>
       <div
         v-for="(entry, i) in filteredLogs"

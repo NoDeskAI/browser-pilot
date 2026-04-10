@@ -11,6 +11,7 @@ from app.tools.browser.session import (
     KEY_MAP,
     browser_session,
     cdp_human_click,
+    get_viewport_offset,
     human_key_actions,
     quick_observe,
     wd_fetch,
@@ -42,34 +43,34 @@ def _maybe_add_login_hint(page: dict) -> dict:
 
 
 class NavigateInput(BaseModel):
-    url: str = Field(description="要访问的完整 URL")
+    url: str = Field(description="The full URL to navigate to")
 
 class EmptyInput(BaseModel):
     pass
 
 class SwitchTabInput(BaseModel):
-    handle: str | None = Field(default=None, description="目标标签页的 handle（从 browser_list_tabs 获取）")
-    index: int | None = Field(default=None, description="目标标签页索引（0 为第一个，-1 为最后一个）")
-    closeCurrent: bool = Field(default=False, description="切换前是否关闭当前标签页")
+    handle: str | None = Field(default=None, description="Target tab handle (from browser_list_tabs)")
+    index: int | None = Field(default=None, description="Target tab index (0 = first, -1 = last)")
+    closeCurrent: bool = Field(default=False, description="Whether to close the current tab before switching")
 
 class ClickInput(BaseModel):
-    x: int = Field(description="点击的 X 坐标")
-    y: int = Field(description="点击的 Y 坐标")
+    x: int = Field(description="X coordinate to click")
+    y: int = Field(description="Y coordinate to click")
 
 class ClickElementInput(BaseModel):
-    selector: str = Field(description='CSS 选择器，如 "#search-btn", "input[name=q]", "a.nav-link"')
+    selector: str = Field(description='CSS selector, e.g. "#search-btn", "input[name=q]", "a.nav-link"')
 
 class TypeInput(BaseModel):
-    text: str = Field(description="要输入的文本")
+    text: str = Field(description="Text to type")
 
 class KeyInput(BaseModel):
-    key: str = Field(description="按键名称，如 Enter、Tab、Escape")
+    key: str = Field(description="Key name, e.g. Enter, Tab, Escape")
 
 class ScrollInput(BaseModel):
-    x: int = Field(default=640, description="滚动起始 X 坐标")
-    y: int = Field(default=360, description="滚动起始 Y 坐标")
-    deltaX: int = Field(default=0, description="水平滚动量")
-    deltaY: int = Field(description="垂直滚动量（正值向下）")
+    x: int = Field(default=640, description="Scroll origin X coordinate")
+    y: int = Field(default=360, description="Scroll origin Y coordinate")
+    deltaX: int = Field(default=0, description="Horizontal scroll amount")
+    deltaY: int = Field(description="Vertical scroll amount (positive = down)")
 
 
 async def _navigate(args: dict, ctx: ToolContext) -> dict:
@@ -162,6 +163,9 @@ async def _observe(args: dict, ctx: ToolContext) -> dict:
             result = await wd_fetch(f"/session/{sid}/execute/sync", "POST", {
                 "script": OBSERVE_SCRIPT, "args": [],
             }, base_url=base)
+            vp_offset = await get_viewport_offset(sid, base_url=base)
+        if isinstance(result, dict):
+            result["viewportOffset"] = vp_offset
         return _maybe_add_login_hint(result)
     except Exception as exc:
         return {"error": str(exc)}
@@ -284,15 +288,38 @@ async def _get_page_info(args: dict, ctx: ToolContext) -> dict:
         return {"error": str(exc)}
 
 
+async def _screenshot(args: dict, ctx: ToolContext) -> dict:
+    if not ctx.session_id:
+        return _NO_SESSION
+    try:
+        async with browser_session(ctx.session_id) as (sid, base):
+            b64 = await wd_fetch(f"/session/{sid}/screenshot", base_url=base)
+            page = await quick_observe(sid, base_url=base)
+        from app.file_store import get_store
+
+        store = await get_store()
+        image_ref = await store.save(b64, ctx.session_id)
+        return {"ok": True, "_image": image_ref, "currentPage": _maybe_add_login_hint(page)}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
 browser_tools: list[Tool] = [
-    build_tool(name="browser_navigate", description="在远程浏览器当前标签页中导航到指定 URL", input_schema=NavigateInput, execute=_navigate),
-    build_tool(name="browser_list_tabs", description="列出远程浏览器当前打开的所有标签页，返回每个标签页的 handle 和基本信息", input_schema=EmptyInput, execute=_list_tabs, is_concurrency_safe=True),
-    build_tool(name="browser_switch_tab", description="切换到指定标签页（通过 handle 或索引）。可选关闭当前标签页后再切换。", input_schema=SwitchTabInput, execute=_switch_tab),
-    build_tool(name="browser_observe", description='观察当前页面：获取 URL、标题、可见文本、所有可见的交互元素（含 shadow DOM 和同源 iframe）及其坐标。用这个来"看"页面。', input_schema=EmptyInput, execute=_observe, is_concurrency_safe=True),
-    build_tool(name="browser_click", description="在远程浏览器页面上点击指定坐标（可从 browser_observe 获取元素坐标）。如果点击导致新标签页打开，会在返回值中提示。", input_schema=ClickInput, execute=_click),
-    build_tool(name="browser_click_element", description="通过 CSS 选择器查找并点击元素，支持 shadow DOM 和同源 iframe。如果点击导致新标签页打开，会在返回值中提示。", input_schema=ClickElementInput, execute=_click_element),
-    build_tool(name="browser_type", description="在远程浏览器中输入文本（在当前聚焦的输入框中）", input_schema=TypeInput, execute=_type),
-    build_tool(name="browser_key", description="在远程浏览器中按下键盘按键，如 Enter、Tab、Escape、Backspace 等", input_schema=KeyInput, execute=_key),
-    build_tool(name="browser_scroll", description="在远程浏览器页面上滚动", input_schema=ScrollInput, execute=_scroll),
-    build_tool(name="browser_get_page_info", description="获取远程浏览器当前页面的 URL 和标题", input_schema=EmptyInput, execute=_get_page_info, is_concurrency_safe=True),
+    build_tool(name="browser_navigate", description="Navigate to a URL in the current tab of the remote browser", input_schema=NavigateInput, execute=_navigate),
+    build_tool(name="browser_list_tabs", description="List all open tabs in the remote browser with handle and basic info for each", input_schema=EmptyInput, execute=_list_tabs, is_concurrency_safe=True),
+    build_tool(name="browser_switch_tab", description="Switch to a tab by handle or index. Optionally close the current tab before switching.", input_schema=SwitchTabInput, execute=_switch_tab),
+    build_tool(name="browser_observe", description='Observe the current page: get URL, title, visible text, and all visible interactive elements (including shadow DOM and same-origin iframes) with coordinates. Use this to "see" the page.', input_schema=EmptyInput, execute=_observe, is_concurrency_safe=True),
+    build_tool(name="browser_click", description="Click at specific coordinates on the remote browser page (coordinates available from browser_observe). Reports if a new tab was opened.", input_schema=ClickInput, execute=_click),
+    build_tool(name="browser_click_element", description="Find and click an element by CSS selector, supporting shadow DOM and same-origin iframes. Reports if a new tab was opened.", input_schema=ClickElementInput, execute=_click_element),
+    build_tool(name="browser_type", description="Type text into the currently focused input field in the remote browser", input_schema=TypeInput, execute=_type),
+    build_tool(name="browser_key", description="Press a keyboard key in the remote browser, e.g. Enter, Tab, Escape, Backspace", input_schema=KeyInput, execute=_key),
+    build_tool(name="browser_scroll", description="Scroll the remote browser page", input_schema=ScrollInput, execute=_scroll),
+    build_tool(name="browser_get_page_info", description="Get the current page URL and title of the remote browser", input_schema=EmptyInput, execute=_get_page_info, is_concurrency_safe=True),
+    build_tool(
+        name="browser_screenshot",
+        description="Take a screenshot of the current browser page. Returns a visual image of what the user sees. Use as a fallback when observe-based actions fail or when you need to understand visual elements (images, charts, captchas, complex layouts) that DOM observation cannot capture.",
+        input_schema=EmptyInput,
+        execute=_screenshot,
+        is_concurrency_safe=True,
+    ),
 ]

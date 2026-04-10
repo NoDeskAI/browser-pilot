@@ -9,10 +9,10 @@ from app.config import PROJECT_ROOT
 
 
 class FileEditInput(BaseModel):
-    path: str = Field(description="文件路径")
-    old_string: str = Field(description="要被替换的原始字符串（必须精确匹配）")
-    new_string: str = Field(description="替换后的新字符串")
-    replace_all: bool = Field(default=False, description="是否替换所有匹配项")
+    path: str = Field(description="File path")
+    old_string: str = Field(description="Original string to replace (must match exactly)")
+    new_string: str = Field(description="New string to replace with")
+    replace_all: bool = Field(default=False, description="Whether to replace all occurrences")
 
 
 async def _execute(args: dict, ctx: ToolContext) -> dict:
@@ -44,7 +44,7 @@ async def _execute(args: dict, ctx: ToolContext) -> dict:
 
 file_edit_tool = build_tool(
     name="file_edit",
-    description="通过精确字符串匹配替换来编辑文件。old_string 必须在文件中唯一匹配（除非设置 replace_all）。路径相对于项目根目录。",
+    description="Edit a file by exact string replacement. old_string must be unique in the file (unless replace_all is set). Path is relative to project root.",
     input_schema=FileEditInput,
     execute=_execute,
 )

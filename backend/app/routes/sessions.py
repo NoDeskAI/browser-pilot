@@ -4,7 +4,7 @@ import json
 import logging
 import uuid
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
 from app.container import (
@@ -234,6 +234,25 @@ async def save_messages(session_id: str, body: SaveMessagesBody):
 
 
 # -----------------------------------------------------------------------
+# Site info (deployment config exposed to frontend)
+# -----------------------------------------------------------------------
+
+@router.get("/api/site-info")
+async def get_site_info(request: Request):
+    from ..config import APP_TITLE, APP_AGENT_NAME, CLI_COMMAND_NAME
+    from .cli import get_cli_install_info
+
+    base = str(request.base_url).rstrip("/")
+    cli_info = get_cli_install_info(base)
+    return {
+        "appTitle": APP_TITLE,
+        "agentName": APP_AGENT_NAME,
+        "cliCommandName": CLI_COMMAND_NAME,
+        "cliInstallCommand": cli_info["shell"],
+        "cliPythonInstallCommand": cli_info["python"],
+    }
+
+
 # App state (key-value)
 # -----------------------------------------------------------------------
 

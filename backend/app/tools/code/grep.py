@@ -11,12 +11,12 @@ MAX_OUTPUT_LINES = 200
 
 
 class GrepInput(BaseModel):
-    pattern: str = Field(description="搜索模式（正则表达式）")
-    path: str | None = Field(default=None, description="搜索路径（文件或目录），默认为项目根目录")
-    glob: str | None = Field(default=None, description='文件 glob 过滤，如 "*.ts"、"*.{ts,tsx}"')
-    context: int = Field(default=0, description="显示匹配行的上下文行数")
-    ignore_case: bool = Field(default=False, description="是否忽略大小写")
-    max_results: int = Field(default=50, description="最大匹配数")
+    pattern: str = Field(description="Search pattern (regular expression)")
+    path: str | None = Field(default=None, description="Search path (file or directory), defaults to project root")
+    glob: str | None = Field(default=None, description='File glob filter, e.g. "*.ts", "*.{ts,tsx}"')
+    context: int = Field(default=0, description="Number of context lines around each match")
+    ignore_case: bool = Field(default=False, description="Case-insensitive search")
+    max_results: int = Field(default=50, description="Maximum number of matches")
 
 
 async def _execute(args: dict, ctx: ToolContext) -> dict:
@@ -73,7 +73,7 @@ async def _execute(args: dict, ctx: ToolContext) -> dict:
 
 grep_tool = build_tool(
     name="grep",
-    description="使用 ripgrep 搜索文件内容。支持正则表达式、上下文行、文件类型过滤。路径相对于项目根目录。",
+    description="Search file contents using ripgrep. Supports regex, context lines, and file type filtering. Path is relative to project root.",
     input_schema=GrepInput,
     execute=_execute,
     is_concurrency_safe=True,

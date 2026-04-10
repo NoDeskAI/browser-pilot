@@ -25,8 +25,22 @@ def _estimate_message_tokens(msg: dict[str, Any]) -> int:
                 total += estimate_tokens(part.get("text", ""))
             elif ptype == "tool_use":
                 total += estimate_tokens(json.dumps(part.get("input", {}))) + 20
+            elif ptype == "image":
+                total += 1600
             elif ptype == "tool_result":
-                total += estimate_tokens(json.dumps(part.get("content", ""))) + 10
+                raw = part.get("content", "")
+                if isinstance(raw, list):
+                    for sub in raw:
+                        if sub.get("type") == "image":
+                            total += 1600
+                        elif sub.get("type") == "text":
+                            total += estimate_tokens(sub.get("text", ""))
+                    total += 10
+                else:
+                    total += estimate_tokens(
+                        json.dumps(raw, ensure_ascii=False)
+                        if not isinstance(raw, str) else raw
+                    ) + 10
             else:
                 total += 20
         return total
@@ -53,6 +67,12 @@ def _summarize_tool_result(tool_name: str, result: Any) -> Any:
             "title": result.get("title"),
             "elementCount": len(elements) if isinstance(elements, list) else None,
             "visibleTextPreview": (result.get("visibleText") or "")[:200],
+        }
+    if tool_name == "browser_screenshot":
+        return {
+            "ok": result.get("ok"),
+            "currentPage": result.get("currentPage"),
+            "_note": "screenshot removed during compaction",
         }
     if tool_name == "bash":
         stdout = result.get("stdout", "")
@@ -89,10 +109,24 @@ def _trim_old_tool_results(messages: list[dict[str, Any]], keep_recent: int = 6)
     older = messages[:-keep_recent]
     recent = messages[-keep_recent:]
 
+    tool_name_map: dict[str, str] = {}
+    for msg in older:
+        if msg.get("role") != "assistant":
+            continue
+        content = msg.get("content")
+        if isinstance(content, list):
+            for part in content:
+                if part.get("type") == "tool_use":
+                    tool_name_map[part.get("id", "")] = part.get("name", "")
+
     trimmed: list[dict[str, Any]] = []
     for msg in older:
         content = msg.get("content")
-        if msg.get("role") != "tool" or not isinstance(content, list):
+        has_tool_results = (
+            isinstance(content, list)
+            and any(p.get("type") == "tool_result" for p in content)
+        )
+        if not has_tool_results:
             trimmed.append(msg)
             continue
 
@@ -101,13 +135,29 @@ def _trim_old_tool_results(messages: list[dict[str, Any]], keep_recent: int = 6)
             if part.get("type") != "tool_result":
                 new_content.append(part)
                 continue
-            result_str = json.dumps(part.get("content", ""), ensure_ascii=False)
+            raw = part.get("content")
+            if isinstance(raw, list):
+                texts = [b.get("text", "") for b in raw if b.get("type") == "text"]
+                text_joined = "\n".join(texts)
+                try:
+                    parsed = json.loads(text_joined)
+                except (json.JSONDecodeError, TypeError):
+                    parsed = text_joined
+                tool_name = tool_name_map.get(part.get("tool_use_id", ""), "")
+                summarized = (
+                    _summarize_tool_result(tool_name, parsed)
+                    if isinstance(parsed, dict)
+                    else text_joined[:200]
+                )
+                new_content.append({**part, "content": summarized})
+                continue
+            result_str = json.dumps(raw, ensure_ascii=False) if not isinstance(raw, str) else raw
             if len(result_str) <= 500:
                 new_content.append(part)
             else:
-                raw = part.get("content")
+                tool_name = tool_name_map.get(part.get("tool_use_id", ""), "")
                 summarized = (
-                    _summarize_tool_result(part.get("tool_use_id", ""), raw)
+                    _summarize_tool_result(tool_name, raw)
                     if isinstance(raw, dict)
                     else str(raw)[:200] + "... (truncated)"
                 )

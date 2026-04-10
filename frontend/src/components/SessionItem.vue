@@ -1,7 +1,12 @@
 <script setup lang="ts">
 import { ref, nextTick } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { Trash2, Play, Pause, SquareTerminal, Check } from 'lucide-vue-next'
 import type { Session } from '../types'
+import { useSessions } from '../composables/useSessions'
+
+const { t, locale } = useI18n()
+const { brand } = useSessions()
 
 const props = defineProps<{
   session: Session
@@ -47,7 +52,7 @@ function copyId() {
 }
 
 function copyCli() {
-  navigator.clipboard.writeText(`nwb session use ${props.session.id}`).then(() => {
+  navigator.clipboard.writeText(`${brand.cliCommandName} session use ${props.session.id}`).then(() => {
     cliCopied.value = true
     setTimeout(() => { cliCopied.value = false }, 1500)
   })
@@ -56,12 +61,12 @@ function copyCli() {
 function formatRelativeTime(iso: string): string {
   const diff = Date.now() - new Date(iso).getTime()
   const mins = Math.floor(diff / 60000)
-  if (mins < 1) return '刚刚'
-  if (mins < 60) return `${mins}分钟`
+  if (mins < 1) return t('session.justNow')
+  if (mins < 60) return t('session.minutesAgo', { n: mins })
   const hours = Math.floor(mins / 60)
-  if (hours < 24) return `${hours}小时`
+  if (hours < 24) return t('session.hoursAgo', { n: hours })
   const days = Math.floor(hours / 24)
-  return `${days}天`
+  return t('session.daysAgo', { n: days })
 }
 </script>
 
@@ -82,7 +87,7 @@ function formatRelativeTime(iso: string): string {
           'bg-amber-400 animate-pulse': session.containerStatus === 'paused',
           'bg-gray-400': session.containerStatus !== 'running' && session.containerStatus !== 'paused',
         }"
-        :title="session.containerStatus === 'running' ? '运行中' : session.containerStatus === 'paused' ? '已休眠' : '已停止'"
+        :title="session.containerStatus === 'running' ? t('session.running') : session.containerStatus === 'paused' ? t('session.paused') : t('session.stopped')"
       />
       <input
         v-if="editing"
@@ -102,7 +107,7 @@ function formatRelativeTime(iso: string): string {
           v-if="session.containerStatus === 'running'"
           @click.stop="emit('pause')"
           class="w-5 h-5 flex items-center justify-center rounded text-[var(--color-text-dim)] hover:text-amber-400 hover:bg-amber-400/10 transition-colors"
-          title="休眠 — 冻结浏览器，保留完整状态"
+          :title="t('session.hibernate')"
         >
           <Pause class="w-3 h-3" />
         </button>
@@ -110,7 +115,7 @@ function formatRelativeTime(iso: string): string {
           v-else
           @click.stop="emit('start')"
           class="w-5 h-5 flex items-center justify-center rounded text-[var(--color-text-dim)] hover:text-green-400 hover:bg-green-400/10 transition-colors"
-          :title="session.containerStatus === 'paused' ? '从休眠恢复' : '启动容器'"
+          :title="session.containerStatus === 'paused' ? t('session.resumeFromHibernate') : t('session.startContainer')"
         >
           <Play class="w-3 h-3" />
         </button>
@@ -120,7 +125,7 @@ function formatRelativeTime(iso: string): string {
           :class="cliCopied
             ? 'text-green-400 bg-green-400/10'
             : 'text-[var(--color-text-dim)] hover:text-[var(--color-accent)] hover:bg-[var(--color-accent)]/10'"
-          title="复制 CLI 接入命令"
+          :title="t('session.copyCli')"
         >
           <Check v-if="cliCopied" class="w-3 h-3" />
           <SquareTerminal v-else class="w-3 h-3" />
@@ -128,7 +133,7 @@ function formatRelativeTime(iso: string): string {
         <button
           @click.stop="emit('delete')"
           class="w-5 h-5 flex items-center justify-center rounded text-[var(--color-text-dim)] hover:text-red-400 hover:bg-red-400/10 transition-colors"
-          title="删除会话"
+          :title="t('session.deleteSession')"
         >
           <Trash2 class="w-3 h-3" />
         </button>
@@ -138,9 +143,9 @@ function formatRelativeTime(iso: string): string {
       <span
         class="shrink-0 text-[9px] font-mono cursor-pointer transition-colors"
         :class="copied ? 'text-green-400 opacity-80' : 'text-[var(--color-text-dim)] opacity-40 hover:opacity-80 hover:text-[var(--color-accent)]'"
-        title="点击复制 ID"
+        :title="t('session.copyId')"
         @click.stop="copyId"
-      >{{ copied ? '已复制' : session.id.slice(0, 8) }}</span>
+      >{{ copied ? t('session.copied') : session.id.slice(0, 8) }}</span>
       <span v-if="session.preview" class="flex-1 min-w-0 text-[10px] text-[var(--color-text-dim)] truncate">{{ session.preview }}</span>
       <span class="shrink-0 text-[10px] text-[var(--color-text-dim)] opacity-60 ml-auto">{{ formatRelativeTime(session.updatedAt) }}</span>
     </div>

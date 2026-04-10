@@ -9,8 +9,8 @@ from app.config import PROJECT_ROOT
 
 
 class FileWriteInput(BaseModel):
-    path: str = Field(description="文件路径（相对于项目根目录或绝对路径）")
-    content: str = Field(description="要写入的完整文件内容")
+    path: str = Field(description="File path (relative to project root or absolute)")
+    content: str = Field(description="Complete file content to write")
 
 
 async def _execute(args: dict, ctx: ToolContext) -> dict:
@@ -30,7 +30,7 @@ async def _execute(args: dict, ctx: ToolContext) -> dict:
 
 file_write_tool = build_tool(
     name="file_write",
-    description="写入文件内容（覆盖已有文件或创建新文件）。路径相对于项目根目录。会自动创建不存在的目录。",
+    description="Write file contents (overwrite existing or create new). Path is relative to project root. Missing directories are created automatically.",
     input_schema=FileWriteInput,
     execute=_execute,
 )

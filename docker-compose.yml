@@ -7,8 +7,11 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    env_file:
+      - path: .env
+        required: false
     environment:
-      DATABASE_URL: postgresql://nodeskpane:nodeskpane@postgres:5432/nodeskpane
+      DATABASE_URL: postgresql://${POSTGRES_USER:-nodeskpane}:${POSTGRES_PASSWORD:-nodeskpane}@postgres:5432/${POSTGRES_DB:-nodeskpane}
       DOCKER_HOST_ADDR: host.docker.internal
     depends_on:
       postgres:
@@ -18,15 +21,15 @@ services:
     image: postgres:16-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_USER: nodeskpane
-      POSTGRES_PASSWORD: nodeskpane
-      POSTGRES_DB: nodeskpane
+      POSTGRES_USER: ${POSTGRES_USER:-nodeskpane}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nodeskpane}
+      POSTGRES_DB: ${POSTGRES_DB:-nodeskpane}
     ports:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U nodeskpane"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-nodeskpane}"]
       interval: 3s
       timeout: 3s
       retries: 5
@@ -36,7 +39,7 @@ services:
       context: ./services/selenium-chrome
       args:
         BASE_IMAGE: ${SELENIUM_BASE_IMAGE:-selenium/standalone-chrome:latest}
-    image: no-window-browser-selenium
+    image: ${SELENIUM_IMAGE_NAME:-no-window-browser-selenium}
     profiles: ["build"]
 
 volumes:

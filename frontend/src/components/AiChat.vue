@@ -1,13 +1,17 @@
 <script setup lang="ts">
 import { ref, nextTick, onMounted, onBeforeUnmount, computed, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { marked } from 'marked'
 import { Sparkles, Trash2, Settings, X, Loader, ChevronDown, Check, ChevronRight, Square, Send, Crosshair } from 'lucide-vue-next'
 import type { ChatBlock, ChatMessage } from '../types'
 import { useSessions } from '../composables/useSessions'
+import { isDefaultSessionName, getLocale } from '../i18n'
+
+const { t } = useI18n()
 
 marked.setOptions({ breaks: true })
 
-const { createSession, loadMessages, saveMessages, renameSession, getAppState, saveAppState } = useSessions()
+const { brand, createSession, loadMessages, saveMessages, renameSession, getAppState, saveAppState } = useSessions()
 
 function renderMarkdown(content: string): string {
   return marked.parse(content, { async: false }) as string
@@ -17,26 +21,16 @@ const props = defineProps<{
   sessionId: string | null
 }>()
 
-const TOOL_LABELS: Record<string, string> = {
-  browser_navigate: '导航',
-  browser_observe: '观察页面',
-  browser_click: '点击坐标',
-  browser_click_element: '点击元素',
-  browser_type: '输入文本',
-  browser_key: '按键',
-  browser_scroll: '滚动',
-  browser_get_page_info: '页面信息',
-  browser_list_tabs: '标签页列表',
-  browser_switch_tab: '切换标签页',
-  docker_status: '容器状态',
-  docker_start: '启动服务',
-  docker_stop: '停止服务',
-  bash: '执行命令',
-  file_read: '读取文件',
-  file_write: '写入文件',
-  file_edit: '编辑文件',
-  grep: '搜索内容',
-  glob: '搜索文件',
+const TOOL_KEYS = [
+  'browser_navigate', 'browser_observe', 'browser_click', 'browser_click_element',
+  'browser_type', 'browser_key', 'browser_scroll', 'browser_get_page_info',
+  'browser_list_tabs', 'browser_switch_tab', 'docker_status', 'docker_start',
+  'docker_stop', 'bash', 'file_read', 'file_write', 'file_edit', 'grep', 'glob',
+] as const
+
+function toolLabel(name: string): string {
+  if (TOOL_KEYS.includes(name as any)) return t(`tool.${name}`)
+  return name
 }
 
 const TOOL_ICONS: Record<string, string> = {
@@ -59,12 +53,14 @@ const loading = ref(false)
 const chatContainer = ref<HTMLElement>()
 const configOpen = ref(false)
 const expandedThinks = ref(new Set<string>())
+const expandedObserves = ref(new Set<string>())
+const viewportOffset = ref({ x: 0, y: 0 })
 let currentAbort: AbortController | null = null
 
 const emit = defineEmits<{
   (e: 'browser-active'): void
   (e: 'session-created', id: string): void
-  (e: 'highlight-click', coords: { x: number; y: number }): void
+  (e: 'highlight-click', coords: { x: number; y: number; offsetX: number; offsetY: number }): void
 }>()
 
 let currentSessionId: string | null = null
@@ -276,47 +272,47 @@ function toolArgsSummary(args: Record<string, any> | undefined): string {
 
 function toolResultSummary(result: any, toolName?: string): string {
   if (!result) return ''
-  if (result.error) return `错误: ${result.error}`
+  if (result.error) return t('toolResult.error', { msg: result.error })
 
   if (result.currentPage?.url || result.currentPage?.title) {
-    const title = result.currentPage.title || '(无标题)'
+    const title = result.currentPage.title || t('toolResult.noTitle')
     const url = result.currentPage.url || ''
     const count = typeof result.currentPage.elementCount === 'number'
-      ? ` · 元素 ${result.currentPage.elementCount}`
+      ? ` · ${t('toolResult.elements', { n: result.currentPage.elementCount })}`
       : ''
-    return `页面: ${title}${url ? ` · ${url}` : ''}${count}`
+    return `${t('toolResult.page', { title })}${url ? ` · ${url}` : ''}${count}`
   }
   if (result.url || result.title || typeof result.elementCount === 'number') {
-    const title = result.title || '(无标题)'
+    const title = result.title || t('toolResult.noTitle')
     const url = result.url || ''
-    const count = typeof result.elementCount === 'number' ? ` · 元素 ${result.elementCount}` : ''
-    return `页面: ${title}${url ? ` · ${url}` : ''}${count}`
+    const count = typeof result.elementCount === 'number' ? ` · ${t('toolResult.elements', { n: result.elementCount })}` : ''
+    return `${t('toolResult.page', { title })}${url ? ` · ${url}` : ''}${count}`
   }
   if (result.statuses) {
     const entries = Object.entries(result.statuses as Record<string, string>)
     return entries.map(([k, v]) => `${k}: ${v}`).join(', ')
   }
   if (typeof result.exitCode === 'number') {
-    const status = result.exitCode === 0 ? '成功' : `退出码 ${result.exitCode}`
+    const status = result.exitCode === 0 ? t('toolResult.success') : t('toolResult.exitCode', { n: result.exitCode })
     const preview = (result.stdout || result.stderr || '').slice(0, 120)
     return `${status}${preview ? ': ' + preview : ''}`
   }
   if (result.path && result.totalLines) {
-    return `${result.path} (${result.totalLines} 行)`
+    return `${result.path} (${t('toolResult.lines', { n: result.totalLines })})`
   }
   if (result.path && typeof result.replacements === 'number') {
-    return `${result.path}: ${result.replacements} 处替换`
+    return `${result.path}: ${t('toolResult.replacements', { n: result.replacements })}`
   }
   if (result.path && result.lines) {
-    return `${result.path} (${result.lines} 行, ${result.bytes} bytes)`
+    return `${result.path} (${t('toolResult.lines', { n: result.lines })}, ${result.bytes} bytes)`
   }
   if (typeof result.matches === 'number') {
-    return `${result.matches} 个匹配`
+    return t('toolResult.matches', { n: result.matches })
   }
   if (result.files) {
-    return `${result.count || result.files.length} 个文件`
+    return t('toolResult.files', { n: result.count || result.files.length })
   }
-  if (result.ok === true) return '成功'
+  if (result.ok === true) return t('toolResult.success')
   return JSON.stringify(result).slice(0, 80)
 }
 
@@ -339,7 +335,12 @@ function hasClickCoords(block: ChatBlock): boolean {
 
 function handleToolCallClick(block: ChatBlock) {
   if (hasClickCoords(block)) {
-    emit('highlight-click', { x: block.args!.x, y: block.args!.y })
+    emit('highlight-click', {
+      x: block.args!.x,
+      y: block.args!.y,
+      offsetX: viewportOffset.value.x,
+      offsetY: viewportOffset.value.y,
+    })
   }
 }
 
@@ -377,6 +378,28 @@ function toggleThink(key: string) {
   }
 }
 
+function toggleObserve(key: string) {
+  if (expandedObserves.value.has(key)) {
+    expandedObserves.value.delete(key)
+  } else {
+    expandedObserves.value.add(key)
+  }
+}
+
+function getObserveElements(result: any): any[] | null {
+  const els = result?.elements ?? result?.currentPage?.elements
+  return Array.isArray(els) && els.length > 0 ? els : null
+}
+
+function formatObserveElement(el: any, idx: number): string {
+  const num = String(idx + 1).padStart(3)
+  const tag = el.tag?.padEnd(8) || '???     '
+  const text = el.text ? `"${el.text}"` : '""'
+  const coord = `(${el.x}, ${el.y})`
+  const extra = [el.id && `#${el.id}`, el.href && el.href, el.role && `[${el.role}]`].filter(Boolean).join(' ')
+  return `${num}  ${tag} ${text.padEnd(24)} ${coord.padEnd(12)} ${extra}`
+}
+
 // ---------------------------------------------------------------------------
 // Send message
 // ---------------------------------------------------------------------------
@@ -392,7 +415,7 @@ function stopGeneration() {
     const pendingCalls = last.blocks.filter(b => b.type === 'tool_call' && b.loading)
     for (const b of pendingCalls) b.loading = false
     if (last.blocks.length === 0 || last.blocks.every(b => b.type === 'tool_call' || b.type === 'tool_result')) {
-      last.blocks.push({ type: 'text', content: '(已中断)' })
+      last.blocks.push({ type: 'text', content: t('chat.interrupted') })
     }
   }
 }
@@ -409,7 +432,7 @@ function buildApiMessages() {
       if (!text) continue
       const hasError = m.blocks.some(b => b.type === 'error')
       const content = hasError
-        ? text + '\n\n[系统提示：本轮回复生成过程中连接中断，上述工具调用可能未成功执行。不要信任上文中关于操作结果的描述，必须重新调用工具执行操作。]'
+        ? text + '\n\n' + t('chat.disconnectHint')
         : text
       result.push({ role: 'assistant', content })
     }
@@ -428,13 +451,13 @@ async function send() {
   }
 
   if (!currentSessionId) {
-    const session = await createSession(text.slice(0, 20) || '新会话')
+    const session = await createSession(text.slice(0, 20) || t('session.defaultName'))
     currentSessionId = session.id
     emit('session-created', session.id)
   } else {
     const { state } = useSessions()
     const s = state.sessions.find(s => s.id === currentSessionId)
-    if (s && s.name === '新会话' && messages.value.length === 0) {
+    if (s && isDefaultSessionName(s.name) && messages.value.length === 0) {
       await renameSession(currentSessionId, text.slice(0, 20))
     }
   }
@@ -465,6 +488,7 @@ async function send() {
         model: model.value,
         apiType: apiType.value,
         sessionId: currentSessionId,
+        locale: getLocale(),
       }),
       signal: abort.signal,
     })
@@ -543,7 +567,7 @@ async function send() {
     }
   } catch (e: any) {
     if (e.name === 'AbortError') return
-    assistantEntry.blocks.push({ type: 'error', content: `请求失败: ${e.message}` })
+    assistantEntry.blocks.push({ type: 'error', content: t('chat.requestFailed', { msg: e.message }) })
   } finally {
     if (currentAbort === abort) {
       currentAbort = null
@@ -589,13 +613,13 @@ onBeforeUnmount(() => {
     <div class="shrink-0 flex items-center justify-between px-3 py-2.5 border-b border-[var(--color-border)]">
       <div class="flex items-center gap-2">
         <Sparkles class="w-4 h-4 text-[var(--color-accent)]" />
-        <span class="text-sm font-semibold">NoDeskPane Agent</span>
+        <span class="text-sm font-semibold">{{ brand.agentName }}</span>
       </div>
       <div class="flex items-center gap-1">
-        <button @click="clearChat" class="w-7 h-7 flex items-center justify-center rounded-md hover:bg-[var(--color-surface-hover)] text-[var(--color-text-dim)] transition-colors" title="清除对话">
+        <button @click="clearChat" class="w-7 h-7 flex items-center justify-center rounded-md hover:bg-[var(--color-surface-hover)] text-[var(--color-text-dim)] transition-colors" :title="t('chat.clearChat')">
           <Trash2 class="w-3.5 h-3.5" />
         </button>
-        <button @click="configOpen = !configOpen" class="w-7 h-7 flex items-center justify-center rounded-md hover:bg-[var(--color-surface-hover)] text-[var(--color-text-dim)] transition-colors" :class="configOpen ? 'bg-[var(--color-surface-hover)] text-[var(--color-accent)]' : ''" title="API 设置">
+        <button @click="configOpen = !configOpen" class="w-7 h-7 flex items-center justify-center rounded-md hover:bg-[var(--color-surface-hover)] text-[var(--color-text-dim)] transition-colors" :class="configOpen ? 'bg-[var(--color-surface-hover)] text-[var(--color-accent)]' : ''" :title="t('chat.apiSettings')">
           <Settings class="w-3.5 h-3.5" />
         </button>
       </div>
@@ -606,16 +630,16 @@ onBeforeUnmount(() => {
       <div v-if="configOpen" class="fixed inset-0 z-[9998] bg-black/50 flex items-center justify-center" @click.self="configOpen = false" @keydown.escape.window="configOpen = false">
         <div class="max-w-sm w-full mx-4 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-xl shadow-2xl">
           <div class="flex items-center justify-between px-4 py-3 border-b border-[var(--color-border)]">
-            <span class="text-sm font-semibold text-[var(--color-text)]">API 设置</span>
+            <span class="text-sm font-semibold text-[var(--color-text)]">{{ t('chat.apiSettings') }}</span>
             <button @click="configOpen = false" class="w-6 h-6 flex items-center justify-center rounded-md hover:bg-[var(--color-surface-hover)] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors">
               <X class="w-4 h-4" />
             </button>
           </div>
           <div class="p-4 space-y-3">
             <div>
-              <label class="text-[10px] text-[var(--color-text-dim)] uppercase tracking-wider">API 类型</label>
+              <label class="text-[10px] text-[var(--color-text-dim)] uppercase tracking-wider">{{ t('chat.apiType') }}</label>
               <div class="flex gap-1 mt-1">
-                <button @click="apiType = 'openai'" class="flex-1 py-1 rounded text-[10px] font-medium border transition-colors" :class="apiType === 'openai' ? 'border-[var(--color-accent)] text-[var(--color-accent)] bg-[var(--color-accent)]/10' : 'border-[var(--color-border)] text-[var(--color-text-dim)]'">OpenAI 兼容</button>
+                <button @click="apiType = 'openai'" class="flex-1 py-1 rounded text-[10px] font-medium border transition-colors" :class="apiType === 'openai' ? 'border-[var(--color-accent)] text-[var(--color-accent)] bg-[var(--color-accent)]/10' : 'border-[var(--color-border)] text-[var(--color-text-dim)]'">{{ t('chat.openaiCompat') }}</button>
                 <button @click="apiType = 'anthropic'" class="flex-1 py-1 rounded text-[10px] font-medium border transition-colors" :class="apiType === 'anthropic' ? 'border-[var(--color-accent)] text-[var(--color-accent)] bg-[var(--color-accent)]/10' : 'border-[var(--color-border)] text-[var(--color-text-dim)]'">Anthropic</button>
               </div>
             </div>
@@ -650,7 +674,7 @@ onBeforeUnmount(() => {
                 </button>
               </div>
               <div v-if="modelDropdownOpen" @mousedown.prevent class="absolute z-10 left-0 right-0 mt-1 max-h-48 overflow-y-auto rounded-md bg-[var(--color-bg)] border border-[var(--color-border)] shadow-lg">
-                <div v-if="modelLoading" class="px-2.5 py-2 text-[10px] text-[var(--color-text-dim)] text-center">加载模型列表...</div>
+                <div v-if="modelLoading" class="px-2.5 py-2 text-[10px] text-[var(--color-text-dim)] text-center">{{ t('chat.loadingModels') }}</div>
                 <template v-else-if="filteredModels.length">
                   <button v-for="m in filteredModels" :key="m" @click="selectModel(m)"
                     class="w-full text-left px-2.5 py-1.5 text-xs hover:bg-[var(--color-surface-hover)] transition-colors flex items-center justify-between"
@@ -659,10 +683,10 @@ onBeforeUnmount(() => {
                     <Check v-if="m === model" class="w-3 h-3 shrink-0 ml-1" />
                   </button>
                 </template>
-                <div v-else class="px-2.5 py-2 text-[10px] text-[var(--color-text-dim)] text-center">手动输入模型名称</div>
+                <div v-else class="px-2.5 py-2 text-[10px] text-[var(--color-text-dim)] text-center">{{ t('chat.manualModelInput') }}</div>
               </div>
             </div>
-            <button @click="saveConfig" class="w-full py-1.5 rounded-md text-xs font-medium bg-[var(--color-accent)] text-white hover:bg-[var(--color-accent-dim)] transition-colors">保存设置</button>
+            <button @click="saveConfig" class="w-full py-1.5 rounded-md text-xs font-medium bg-[var(--color-accent)] text-white hover:bg-[var(--color-accent-dim)] transition-colors">{{ t('chat.saveSettings') }}</button>
           </div>
         </div>
       </div>
@@ -674,8 +698,8 @@ onBeforeUnmount(() => {
       <div v-if="messages.length === 0" class="h-full flex flex-col items-center justify-center text-[var(--color-text-dim)]">
         <Sparkles class="w-10 h-10 mb-3 opacity-20" :stroke-width="1" />
         <p class="text-xs text-center leading-relaxed">
-          NoDeskPane Agent 已就绪<br />
-          <span class="text-[10px] opacity-60">浏览器操控 · Docker 管理 · 代码读写 · 命令执行</span>
+          {{ t('chat.agentReady', { name: brand.agentName }) }}<br />
+          <span class="text-[10px] opacity-60">{{ t('chat.agentCapabilities') }}</span>
         </p>
       </div>
 
@@ -696,7 +720,7 @@ onBeforeUnmount(() => {
                   class="w-full flex items-center gap-1.5 px-2.5 py-1.5 text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors select-none"
                 >
                   <ChevronRight class="w-2.5 h-2.5 shrink-0 transition-transform" :class="(seg.unclosed || expandedThinks.has(`${i}-${si}`)) ? 'rotate-90' : ''" />
-                  <span class="font-medium">思考过程</span>
+                  <span class="font-medium">{{ t('chat.thinking') }}</span>
                   <Loader v-if="seg.unclosed" class="w-2.5 h-2.5 ml-auto animate-spin text-[var(--color-text-dim)]" />
                 </button>
                 <div v-if="seg.unclosed || expandedThinks.has(`${i}-${si}`)" class="px-2.5 pb-2 border-t border-dashed border-[var(--color-border)]">
@@ -723,9 +747,9 @@ onBeforeUnmount(() => {
               <Loader v-if="item.block.loading" class="w-3 h-3 animate-spin text-[var(--color-accent)]" />
               <Check v-else class="w-3 h-3 text-green-400" />
               <span class="text-[11px] leading-none">{{ TOOL_ICONS[item.block.toolName || ''] || '🔧' }}</span>
-              <span class="text-[10px] font-medium text-[var(--color-text)]">{{ TOOL_LABELS[item.block.toolName || ''] || item.block.toolName }}</span>
+              <span class="text-[10px] font-medium text-[var(--color-text)]">{{ toolLabel(item.block.toolName || '') }}</span>
               <span class="text-[9px] text-[var(--color-text-dim)] ml-auto font-mono">{{ item.block.toolName }}</span>
-              <Crosshair v-if="hasClickCoords(item.block)" class="w-3 h-3 shrink-0 text-[var(--color-text-dim)]" title="点击定位到浏览器视窗" />
+              <Crosshair v-if="hasClickCoords(item.block)" class="w-3 h-3 shrink-0 text-[var(--color-text-dim)]" :title="t('chat.clickLocate')" />
             </div>
             <div v-if="item.block.args && Object.keys(item.block.args).length" class="px-2.5 py-1.5 text-[10px] text-[var(--color-text-dim)] font-mono truncate">
               {{ toolArgsSummary(item.block.args) }}
@@ -742,6 +766,17 @@ onBeforeUnmount(() => {
                 {{ toolResultSummary(item.block.result, item.block.toolName) }}
               </div>
               <pre class="px-2.5 py-1.5 text-[10px] leading-relaxed text-[var(--color-text)] bg-[#0d1117] overflow-x-auto max-h-48 font-mono whitespace-pre">{{ getToolResultContent(item.block.result, item.block.toolName) }}</pre>
+            </div>
+            <!-- Observe result with expandable element list -->
+            <div v-else-if="item.block.result && getObserveElements(item.block.result)" class="rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] overflow-hidden">
+              <button
+                @click="toggleObserve(`obs-${i}`)"
+                class="w-full flex items-center gap-1.5 px-2.5 py-1.5 text-[10px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] font-mono break-all transition-colors select-none text-left"
+              >
+                <ChevronRight class="w-2.5 h-2.5 shrink-0 transition-transform" :class="expandedObserves.has(`obs-${i}`) ? 'rotate-90' : ''" />
+                <span class="flex-1 break-all">{{ toolResultSummary(item.block.result, item.block.toolName) }}</span>
+              </button>
+              <pre v-if="expandedObserves.has(`obs-${i}`)" class="px-2.5 py-1.5 text-[10px] leading-relaxed text-[var(--color-text)] bg-[#0d1117] overflow-x-auto max-h-52 font-mono whitespace-pre border-t border-[var(--color-border)]">{{ getObserveElements(item.block.result)!.map((el: any, idx: number) => formatObserveElement(el, idx)).join('\n') }}</pre>
             </div>
             <!-- Default result summary -->
             <div v-else-if="item.block.result" class="px-2.5 py-1.5 rounded-md bg-[var(--color-bg)] border border-[var(--color-border)] text-[10px] text-[var(--color-text-dim)] font-mono break-all">
@@ -773,10 +808,10 @@ onBeforeUnmount(() => {
       <div class="flex gap-2">
         <textarea v-model="input" @keydown.enter.exact="handleEnter" rows="1"
           class="flex-1 px-3 py-2 rounded-lg bg-[var(--color-bg)] border border-[var(--color-border)] text-xs text-[var(--color-text)] outline-none focus:border-[var(--color-accent)] transition-colors resize-none"
-          :placeholder="loading ? '输入新指令可中断当前任务... (Enter 发送)' : '输入指令... (Enter 发送)'" />
+          :placeholder="loading ? t('chat.inputPlaceholderLoading') : t('chat.inputPlaceholder')" />
         <button v-if="loading && !input.trim()" @click="stopGeneration"
           class="shrink-0 w-8 h-8 flex items-center justify-center rounded-lg bg-red-500/80 text-white hover:bg-red-500 transition-colors"
-          title="停止生成">
+          :title="t('chat.stopGeneration')">
           <Square class="w-3.5 h-3.5" fill="currentColor" :stroke-width="0" />
         </button>
         <button v-else @click="send" :disabled="!input.trim()"
@@ -784,7 +819,7 @@ onBeforeUnmount(() => {
           <Send class="w-3.5 h-3.5" />
         </button>
       </div>
-      <p v-if="!apiKey" class="mt-1.5 text-[10px] text-yellow-400/80">请先点击右上角齿轮配置 API Key</p>
+      <p v-if="!apiKey" class="mt-1.5 text-[10px] text-yellow-400/80">{{ t('chat.configureApiKey') }}</p>
     </div>
 
   </div>

@@ -11,8 +11,9 @@ from rich.console import Console
 from rich.table import Table
 
 from nwb import client, config
+from nwb.config import _CMD_NAME
 
-app = typer.Typer(help="nwb — no-window-browser CLI", no_args_is_help=True)
+app = typer.Typer(help=f"{_CMD_NAME} — Remote Browser CLI", no_args_is_help=True)
 config_app = typer.Typer(help="Manage CLI configuration", no_args_is_help=True)
 session_app = typer.Typer(help="Manage browser sessions", no_args_is_help=True)
 app.add_typer(config_app, name="config")
@@ -42,7 +43,7 @@ def main_callback(
 def _sid() -> str:
     sid = _session_override or config.get("active_session")
     if not sid:
-        console.print("[red]No active session. Run: nwb session use <id>[/red]")
+        console.print(f"[red]No active session. Run: {_CMD_NAME} session use <id>[/red]")
         raise typer.Exit(1)
     return sid
 
@@ -165,7 +166,7 @@ def session_create(name: str = typer.Option("新会话", "--name", "-n")):
         typer.echo(json.dumps(data, ensure_ascii=False))
     else:
         console.print(f"[green]Created session:[/green] {data['id']}  ({data['name']})")
-        console.print(f"[dim]Run: nwb session use {data['id']}[/dim]")
+        console.print(f"[dim]Run: {_CMD_NAME} session use {data['id']}[/dim]")
 
 
 @session_app.command("use")

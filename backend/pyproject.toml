@@ -13,6 +13,9 @@ dependencies = [
     "asyncpg>=0.30.0",
 ]
 
+[project.optional-dependencies]
+s3 = ["boto3>=1.35.0"]
+
 [project.scripts]
 start = "uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
 

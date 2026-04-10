@@ -11,9 +11,9 @@ MAX_FILE_SIZE = 256 * 1024
 
 
 class FileReadInput(BaseModel):
-    path: str = Field(description="文件路径（相对于项目根目录或绝对路径）")
-    offset: int | None = Field(default=None, description="从第几行开始读取（1-based），默认从头开始")
-    limit: int | None = Field(default=None, description="读取的行数，默认读取全部")
+    path: str = Field(description="File path (relative to project root or absolute)")
+    offset: int | None = Field(default=None, description="Start reading from this line (1-based), defaults to the beginning")
+    limit: int | None = Field(default=None, description="Number of lines to read, defaults to all")
 
 
 async def _execute(args: dict, ctx: ToolContext) -> dict:
@@ -56,7 +56,7 @@ async def _execute(args: dict, ctx: ToolContext) -> dict:
 
 file_read_tool = build_tool(
     name="file_read",
-    description="读取文件内容。支持指定起始行和行数限制。路径相对于项目根目录。",
+    description="Read file contents. Supports specifying start line and line limit. Path is relative to project root.",
     input_schema=FileReadInput,
     execute=_execute,
     is_concurrency_safe=True,
