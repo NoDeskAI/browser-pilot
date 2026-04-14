@@ -102,11 +102,11 @@ def _pretty(data: dict) -> None:
         table.add_column("ID", width=36)
         table.add_column("Name")
         table.add_column("Status", width=12)
-        table.add_column("Messages", width=8)
+        table.add_column("URL")
         for s in data["sessions"]:
             status = s.get("containerStatus", "?")
             style = "green" if status == "running" else "dim"
-            table.add_row(s["id"], s["name"], f"[{style}]{status}[/{style}]", str(s.get("messageCount", 0)))
+            table.add_row(s["id"], s["name"], f"[{style}]{status}[/{style}]", s.get("currentUrl", ""))
         console.print(table)
         return
 

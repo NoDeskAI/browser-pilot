@@ -1,5 +1,5 @@
 import { reactive, readonly } from 'vue'
-import type { ChatMessage, Session } from '../types'
+import type { Session } from '../types'
 import i18n from '../i18n'
 
 interface BrandConfig {
@@ -54,6 +54,8 @@ async function fetchSessions(): Promise<void> {
     const data = await res.json()
     state.sessions = (data.sessions || []).map((s: any) => ({
       ...s,
+      currentUrl: s.currentUrl || '',
+      currentTitle: s.currentTitle || '',
       containerStatus: s.containerStatus || 'not_found',
       ports: s.ports || null,
     }))
@@ -75,8 +77,8 @@ async function createSession(name?: string): Promise<Session> {
     name: data.name,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
-    messageCount: 0,
-    preview: '',
+    currentUrl: '',
+    currentTitle: '',
     containerStatus: 'not_found',
     ports: null,
   }
@@ -212,30 +214,6 @@ async function renameSession(id: string, name: string): Promise<void> {
   if (s) s.name = name
 }
 
-async function loadMessages(id: string): Promise<ChatMessage[]> {
-  const res = await fetch(`/api/sessions/${id}`)
-  const data = await res.json()
-  return data.messages || []
-}
-
-async function saveMessages(id: string, messages: ChatMessage[]): Promise<void> {
-  await fetch(`/api/sessions/${id}/messages`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ messages }),
-  })
-  const s = state.sessions.find(s => s.id === id)
-  if (s) {
-    s.messageCount = messages.length
-    s.updatedAt = new Date().toISOString()
-    const lastUserMsg = [...messages].reverse().find(m => m.role === 'user')
-    if (lastUserMsg) {
-      const textBlock = lastUserMsg.blocks.find(b => b.type === 'text' && b.content)
-      if (textBlock?.content) s.preview = textBlock.content.slice(0, 80)
-    }
-  }
-}
-
 async function getAppState(key: string): Promise<string | null> {
   try {
     const res = await fetch(`/api/app-state/${key}`)
@@ -284,8 +262,6 @@ export function useSessions() {
     switchSession,
     deleteSession,
     renameSession,
-    loadMessages,
-    saveMessages,
     getAppState,
     saveAppState,
     startContainer,

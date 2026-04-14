@@ -2,9 +2,8 @@
 import { ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useSessions } from '../composables/useSessions'
-import { Loader, Sparkles, PanelLeftClose, PanelLeft, Plus, Monitor, Play, SquareTerminal } from 'lucide-vue-next'
+import { Loader, PanelLeftClose, PanelLeft, Plus, Monitor, Play, SquareTerminal } from 'lucide-vue-next'
 import SessionItem from '../components/SessionItem.vue'
-import AiChat from '../components/AiChat.vue'
 import NoVNCViewer from '../components/NoVNCViewer.vue'
 import BrowserLogPanel from '../components/BrowserLogPanel.vue'
 import CliDocModal from '../components/CliDocModal.vue'
@@ -13,7 +12,6 @@ const { t } = useI18n()
 
 const {
   state: sessions,
-  brand,
   createSession,
   switchSession,
   deleteSession,
@@ -30,9 +28,6 @@ const activeSession = computed(() =>
 const sidebarWidth = ref(260)
 const isResizing = ref(false)
 const sidebarOpen = ref(true)
-const aiPanelWidth = ref(340)
-const isResizingAi = ref(false)
-const aiPanelOpen = ref(true)
 const cliDocOpen = ref(false)
 
 const vncUrl = computed(() => {
@@ -58,36 +53,8 @@ function startResize(e: MouseEvent) {
   document.addEventListener('mouseup', onUp)
 }
 
-function startResizeAi(e: MouseEvent) {
-  e.preventDefault()
-  isResizingAi.value = true
-  document.body.classList.add('resizing')
-  const onMove = (ev: MouseEvent) => {
-    const w = Math.max(280, Math.min(600, window.innerWidth - ev.clientX))
-    aiPanelWidth.value = w
-  }
-  const onUp = () => {
-    isResizingAi.value = false
-    document.body.classList.remove('resizing')
-    document.removeEventListener('mousemove', onMove)
-    document.removeEventListener('mouseup', onUp)
-  }
-  document.addEventListener('mousemove', onMove)
-  document.addEventListener('mouseup', onUp)
-}
-
 async function onNewSession() {
   await createSession()
-}
-
-const noVncRef = ref<InstanceType<typeof NoVNCViewer> | null>(null)
-
-function onSessionCreated(id: string) {
-  switchSession(id)
-}
-
-function onHighlightClick(coords: { x: number; y: number; offsetX?: number; offsetY?: number }) {
-  noVncRef.value?.highlightClick(coords.x, coords.y, coords.offsetX ?? 0, coords.offsetY ?? 0)
 }
 </script>
 
@@ -104,16 +71,6 @@ function onHighlightClick(coords: { x: number; y: number; offsetX?: number; offs
         <PanelLeft v-else class="w-4 h-4" />
       </button>
       <div class="flex-1" />
-      <button
-        @click="aiPanelOpen = !aiPanelOpen"
-        class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors"
-        :class="aiPanelOpen
-          ? 'bg-[var(--color-accent)]/20 text-[var(--color-accent)] border-[var(--color-accent)]/30 hover:bg-[var(--color-accent)]/30'
-          : 'bg-[var(--color-surface-hover)] text-[var(--color-text-dim)] border-[var(--color-border)] hover:text-[var(--color-text)]'"
-      >
-        <Sparkles class="w-3.5 h-3.5" />
-        {{ brand.agentName }}
-      </button>
     </div>
 
     <!-- Main content -->
@@ -189,7 +146,6 @@ function onHighlightClick(coords: { x: number; y: number; offsetX?: number; offs
             <p class="text-xs opacity-60">{{ t('app.startingBrowserHint') }}</p>
           </div>
           <NoVNCViewer
-            ref="noVncRef"
             v-else-if="vncUrl && sessions.activeId"
             :key="sessions.activeId"
             :ws-url="vncUrl"
@@ -221,27 +177,6 @@ function onHighlightClick(coords: { x: number; y: number; offsetX?: number; offs
         </div>
         <BrowserLogPanel :session-id="sessions.activeId" />
       </main>
-
-      <!-- AI Panel resize handle -->
-      <div
-        v-if="aiPanelOpen"
-        class="shrink-0 w-1 cursor-col-resize hover:bg-[var(--color-accent)]/30 active:bg-[var(--color-accent)]/50 transition-colors"
-        :class="isResizingAi ? 'bg-[var(--color-accent)]/50' : ''"
-        @mousedown="startResizeAi"
-      />
-
-      <!-- AI Panel -->
-      <aside
-        v-if="aiPanelOpen"
-        class="shrink-0 border-l border-[var(--color-border)] overflow-hidden"
-        :style="{ width: aiPanelWidth + 'px' }"
-      >
-        <AiChat
-          :session-id="sessions.activeId"
-          @session-created="onSessionCreated"
-          @highlight-click="onHighlightClick"
-        />
-      </aside>
     </div>
 
     <CliDocModal :open="cliDocOpen" @close="cliDocOpen = false" />

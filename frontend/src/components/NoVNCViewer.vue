@@ -41,8 +41,6 @@ const LANG_OPTIONS = [
 const totalRecv = ref(0)
 const totalSent = ref(0)
 const currentRate = ref(0)
-const clickIndicator = ref<{ x: number; y: number; screenX: number; screenY: number; key: number } | null>(null)
-let clickIndicatorTimer: ReturnType<typeof setTimeout> | null = null
 
 let rfb: RFB | null = null
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null
@@ -276,30 +274,7 @@ async function changeLang(lang: string) {
   }
 }
 
-function highlightClick(x: number, y: number, offsetX = 0, offsetY = 0) {
-  const canvas = vncContainer.value?.querySelector('canvas')
-  if (!canvas) return
-
-  const containerRect = vncContainer.value!.getBoundingClientRect()
-  const canvasRect = canvas.getBoundingClientRect()
-
-  const canvasOffsetX = canvasRect.left - containerRect.left
-  const canvasOffsetY = canvasRect.top - containerRect.top
-  const scaleX = canvasRect.width / canvas.width
-  const scaleY = canvasRect.height / canvas.height
-
-  clickIndicator.value = {
-    x, y,
-    screenX: canvasOffsetX + (x + offsetX) * scaleX,
-    screenY: canvasOffsetY + (y + offsetY) * scaleY,
-    key: Date.now(),
-  }
-
-  if (clickIndicatorTimer) clearTimeout(clickIndicatorTimer)
-  clickIndicatorTimer = setTimeout(() => { clickIndicator.value = null }, 3000)
-}
-
-defineExpose({ navigate, highlightClick })
+defineExpose({ navigate })
 
 onMounted(() => {
   rateTimer = setInterval(() => {
@@ -315,7 +290,6 @@ onUnmounted(() => {
   if (rfb) { try { rfb.disconnect() } catch { /* noop */ } rfb = null }
   if (reconnectTimer) clearTimeout(reconnectTimer)
   if (rateTimer) clearInterval(rateTimer)
-  if (clickIndicatorTimer) clearTimeout(clickIndicatorTimer)
   document.removeEventListener('fullscreenchange', onFullscreenChange)
   document.removeEventListener('click', handleClipClickOutside)
 })
@@ -413,14 +387,6 @@ watch(compressionLevel, applyQuality)
     <!-- VNC display area -->
     <div class="flex-1 relative overflow-hidden bg-black">
       <div ref="vncContainer" class="absolute inset-0" />
-      <div v-if="clickIndicator" :key="clickIndicator.key" class="absolute inset-0 pointer-events-none z-10 click-indicator-lifecycle">
-        <div class="absolute bg-red-500/30 h-px" :style="{ left: 0, right: 0, top: clickIndicator.screenY + 'px' }" />
-        <div class="absolute bg-red-500/30 w-px" :style="{ top: 0, bottom: 0, left: clickIndicator.screenX + 'px' }" />
-        <div class="click-ring" :style="{ left: clickIndicator.screenX + 'px', top: clickIndicator.screenY + 'px' }" />
-        <div class="click-ring" :style="{ left: clickIndicator.screenX + 'px', top: clickIndicator.screenY + 'px' }" style="animation-delay: 0.4s" />
-        <div class="click-dot" :style="{ left: clickIndicator.screenX + 'px', top: clickIndicator.screenY + 'px' }" />
-        <div class="click-label" :style="{ left: (clickIndicator.screenX + 14) + 'px', top: (clickIndicator.screenY - 8) + 'px' }">{{ clickIndicator.x }}, {{ clickIndicator.y }}</div>
-      </div>
     </div>
 
     <!-- Clipboard floating panel -->
@@ -459,46 +425,6 @@ watch(compressionLevel, applyQuality)
 </template>
 
 <style scoped>
-.click-indicator-lifecycle {
-  animation: click-lifecycle 3s ease-out forwards;
-}
-@keyframes click-lifecycle {
-  0%, 60% { opacity: 1; }
-  100% { opacity: 0; }
-}
-.click-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: #ef4444;
-  box-shadow: 0 0 8px rgba(239, 68, 68, 0.9);
-  position: absolute;
-  transform: translate(-50%, -50%);
-}
-.click-ring {
-  position: absolute;
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
-  border: 2px solid #ef4444;
-  transform: translate(-50%, -50%);
-  animation: click-ring-pulse 1.2s ease-out infinite;
-}
-@keyframes click-ring-pulse {
-  0% { transform: translate(-50%, -50%) scale(0.3); opacity: 1; }
-  100% { transform: translate(-50%, -50%) scale(2); opacity: 0; }
-}
-.click-label {
-  position: absolute;
-  font-size: 11px;
-  font-family: monospace;
-  font-weight: 600;
-  color: #ef4444;
-  background: rgba(0, 0, 0, 0.75);
-  padding: 1px 6px;
-  border-radius: 3px;
-  white-space: nowrap;
-}
 select {
   -webkit-appearance: none;
   appearance: none;

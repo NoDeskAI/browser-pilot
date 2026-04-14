@@ -6,6 +6,8 @@ import logging
 from fastapi import APIRouter, Query
 from pydantic import BaseModel, Field
 
+from app.auto_name import maybe_auto_name
+from app.db import get_pool
 from app.tools.browser.scripts import CLICK_ELEMENT_SCRIPT, OBSERVE_SCRIPT
 from app.tools.browser.session import (
     KEY_MAP,
@@ -17,6 +19,17 @@ from app.tools.browser.session import (
 )
 
 logger = logging.getLogger("routes.browser")
+
+
+async def _update_session_page(session_id: str, url: str | None, title: str | None) -> None:
+    try:
+        pool = get_pool()
+        await pool.execute(
+            "UPDATE sessions SET current_url = $1, current_title = $2, updated_at = NOW() WHERE id = $3",
+            url, title, session_id,
+        )
+    except Exception:
+        pass
 router = APIRouter()
 
 
@@ -79,6 +92,8 @@ async def api_navigate(body: NavigateBody):
             )
             await asyncio.sleep(1.5)
             page = await quick_observe(sid, base_url=base)
+        asyncio.create_task(_update_session_page(body.sessionId, page.get("url"), page.get("title")))
+        asyncio.create_task(maybe_auto_name(body.sessionId, page.get("url", ""), page.get("title", "")))
         return {"ok": True, "navigatedTo": body.url, "currentPage": page}
     except Exception as exc:
         logger.error("navigate failed: %s", exc)
@@ -113,6 +128,8 @@ async def api_observe(body: SessionBody):
                 {"script": OBSERVE_SCRIPT, "args": []},
                 base_url=base,
             )
+        if isinstance(result, dict):
+            asyncio.create_task(_update_session_page(body.sessionId, result.get("url"), result.get("title")))
         return {"ok": True, **(result if isinstance(result, dict) else {})}
     except Exception as exc:
         return {"ok": False, "error": str(exc)}
@@ -137,6 +154,7 @@ async def api_click(body: ClickBody):
             ) or []
             new_tab = len(handles_after) > len(handles_before)
             page = await quick_observe(sid, base_url=base)
+        asyncio.create_task(_update_session_page(body.sessionId, page.get("url"), page.get("title")))
         return {
             "ok": True,
             "clickedAt": {"x": x, "y": y},
@@ -172,6 +190,7 @@ async def api_click_element(body: ClickElementBody):
             ) or []
             new_tab = len(handles_after) > len(handles_before)
             page = await quick_observe(sid, base_url=base)
+        asyncio.create_task(_update_session_page(body.sessionId, page.get("url"), page.get("title")))
         return {
             "ok": True,
             "selector": body.selector,
@@ -200,6 +219,7 @@ async def api_type(body: TypeBody):
             }, base_url=base)
             await wd_fetch(f"/session/{sid}/actions", "DELETE", base_url=base)
             page = await quick_observe(sid, base_url=base)
+        asyncio.create_task(_update_session_page(body.sessionId, page.get("url"), page.get("title")))
         return {"ok": True, "typed": body.text, "currentPage": page}
     except Exception as exc:
         return {"ok": False, "error": str(exc)}
@@ -226,6 +246,7 @@ async def api_key(body: KeyBody):
             await wd_fetch(f"/session/{sid}/actions", "DELETE", base_url=base)
             await asyncio.sleep(0.5)
             page = await quick_observe(sid, base_url=base)
+        asyncio.create_task(_update_session_page(body.sessionId, page.get("url"), page.get("title")))
         return {"ok": True, "key": body.key, "currentPage": page}
     except Exception as exc:
         return {"ok": False, "error": str(exc)}
@@ -321,6 +342,7 @@ async def api_switch_tab(body: SwitchTabBody):
                 {"handle": target}, timeout=5, base_url=base,
             )
             page = await quick_observe(sid, base_url=base)
+        asyncio.create_task(_update_session_page(body.sessionId, page.get("url"), page.get("title")))
         return {"ok": True, "switchedTo": target, "currentPage": page}
     except Exception as exc:
         return {"ok": False, "error": str(exc)}

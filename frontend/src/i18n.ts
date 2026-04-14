@@ -29,15 +29,6 @@ export function getLocale(): 'zh' | 'en' {
   return (i18n.global.locale as any).value
 }
 
-export const DEFAULT_SESSION_NAMES = [
-  zh.session.defaultName,
-  en.session.defaultName,
-]
-
-export function isDefaultSessionName(name: string): boolean {
-  return DEFAULT_SESSION_NAMES.includes(name)
-}
-
 document.documentElement.lang = locale === 'zh' ? 'zh-CN' : 'en'
 
 export default i18n

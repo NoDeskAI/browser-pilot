@@ -40,6 +40,15 @@ function commitEdit() {
   }
 }
 
+function formatUrl(raw: string): string {
+  try {
+    const u = new URL(raw)
+    return u.hostname + u.pathname.replace(/\/$/, '')
+  } catch {
+    return raw
+  }
+}
+
 const copied = ref(false)
 const cliCopied = ref(false)
 
@@ -146,7 +155,7 @@ function formatRelativeTime(iso: string): string {
         :title="t('session.copyId')"
         @click.stop="copyId"
       >{{ copied ? t('session.copied') : session.id.slice(0, 8) }}</span>
-      <span v-if="session.preview" class="flex-1 min-w-0 text-[10px] text-[var(--color-text-dim)] truncate">{{ session.preview }}</span>
+      <span v-if="session.currentUrl" class="flex-1 min-w-0 text-[10px] text-[var(--color-text-dim)] truncate" :title="session.currentUrl">{{ formatUrl(session.currentUrl) }}</span>
       <span class="shrink-0 text-[10px] text-[var(--color-text-dim)] opacity-60 ml-auto">{{ formatRelativeTime(session.updatedAt) }}</span>
     </div>
   </div>

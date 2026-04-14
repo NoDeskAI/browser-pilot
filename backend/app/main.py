@@ -15,9 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from app import db
 from app.config import APP_TITLE
 from app.logging_config import setup_logging
-from app.routes.chat import router as chat_router
 from app.routes.docker import router as docker_router
-from app.routes.models import router as models_router
 from app.routes.browser import router as browser_router
 from app.routes.sessions import router as sessions_router
 from app.routes.cli import router as cli_router
@@ -82,9 +80,7 @@ async def _readiness():
 
 
 app.include_router(browser_router)
-app.include_router(chat_router)
 app.include_router(docker_router)
-app.include_router(models_router)
 app.include_router(sessions_router)
 app.include_router(cli_router)
 app.include_router(settings_router)

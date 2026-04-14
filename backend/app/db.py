@@ -17,16 +17,13 @@ CREATE TABLE IF NOT EXISTS sessions (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    current_url TEXT,
+    current_title TEXT
 );
 
-CREATE TABLE IF NOT EXISTS messages (
-    id SERIAL PRIMARY KEY,
-    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-    data JSONB NOT NULL,
-    seq INTEGER NOT NULL,
-    UNIQUE(session_id, seq)
-);
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS current_url TEXT;
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS current_title TEXT;
 
 CREATE TABLE IF NOT EXISTS app_state (
     key TEXT PRIMARY KEY,

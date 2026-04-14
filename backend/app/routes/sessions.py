@@ -30,10 +30,6 @@ class UpdateSessionBody(BaseModel):
     name: str
 
 
-class SaveMessagesBody(BaseModel):
-    messages: list[dict]
-
-
 class AppStateBody(BaseModel):
     value: str
 
@@ -46,29 +42,15 @@ class AppStateBody(BaseModel):
 async def list_sessions():
     pool = get_pool()
     rows = await pool.fetch("""
-        SELECT s.id, s.name, s.created_at, s.updated_at,
-               COUNT(m.id) AS message_count,
-               (SELECT m2.data FROM messages m2
-                WHERE m2.session_id = s.id ORDER BY m2.seq DESC LIMIT 1) AS last_message
-        FROM sessions s
-        LEFT JOIN messages m ON m.session_id = s.id
-        GROUP BY s.id
-        ORDER BY s.updated_at DESC
+        SELECT id, name, created_at, updated_at, current_url, current_title
+        FROM sessions
+        ORDER BY updated_at DESC
     """)
 
     all_statuses = await get_all_container_statuses()
 
     result = []
     for r in rows:
-        last_msg = r["last_message"]
-        preview = ""
-        if last_msg:
-            msg = last_msg if isinstance(last_msg, dict) else json.loads(last_msg)
-            for block in msg.get("blocks", []):
-                if block.get("type") == "text" and block.get("content"):
-                    preview = block["content"][:80]
-                    break
-
         sid = r["id"]
         sid_prefix = sid[:12]
         container_status = all_statuses.get(sid_prefix, "not_found")
@@ -78,8 +60,8 @@ async def list_sessions():
             "name": r["name"],
             "createdAt": r["created_at"].isoformat(),
             "updatedAt": r["updated_at"].isoformat(),
-            "messageCount": r["message_count"],
-            "preview": preview,
+            "currentUrl": r["current_url"] or "",
+            "currentTitle": r["current_title"] or "",
             "containerStatus": container_status,
         }
 
@@ -111,15 +93,20 @@ async def create_session(body: CreateSessionBody):
 @router.get("/api/sessions/{session_id}")
 async def get_session(session_id: str):
     pool = get_pool()
-    rows = await pool.fetch(
-        "SELECT data FROM messages WHERE session_id = $1 ORDER BY seq",
+    row = await pool.fetchrow(
+        "SELECT id, name, created_at, updated_at, current_url, current_title FROM sessions WHERE id = $1",
         session_id,
     )
-    messages = []
-    for r in rows:
-        msg = r["data"]
-        messages.append(msg if isinstance(msg, dict) else json.loads(msg))
-    return {"messages": messages}
+    if not row:
+        return {"error": "not found"}
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "createdAt": row["created_at"].isoformat(),
+        "updatedAt": row["updated_at"].isoformat(),
+        "currentUrl": row["current_url"] or "",
+        "currentTitle": row["current_title"] or "",
+    }
 
 
 @router.patch("/api/sessions/{session_id}")
@@ -207,30 +194,6 @@ async def get_session_logs(session_id: str, tail: int = 200, log_type: str | Non
             continue
         lines.append(entry)
     return {"logs": lines}
-
-
-# -----------------------------------------------------------------------
-# Messages bulk save
-# -----------------------------------------------------------------------
-
-@router.put("/api/sessions/{session_id}/messages")
-async def save_messages(session_id: str, body: SaveMessagesBody):
-    pool = get_pool()
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            await conn.execute(
-                "DELETE FROM messages WHERE session_id = $1", session_id,
-            )
-            for i, msg in enumerate(body.messages):
-                await conn.execute(
-                    "INSERT INTO messages (session_id, data, seq) VALUES ($1, $2::jsonb, $3)",
-                    session_id, json.dumps(msg), i,
-                )
-            await conn.execute(
-                "UPDATE sessions SET updated_at = NOW() WHERE id = $1",
-                session_id,
-            )
-    return {"ok": True, "count": len(body.messages)}
 
 
 # -----------------------------------------------------------------------
