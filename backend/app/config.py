@@ -26,7 +26,6 @@ DOCKER_HOST_ADDR = _env("DOCKER_HOST_ADDR", "localhost")
 API_BASE_URL = _env("API_BASE_URL", "http://localhost:8000")
 
 APP_TITLE = _env("APP_TITLE", "Browser Pilot")
-APP_AGENT_NAME = _env("APP_AGENT_NAME", "Browser Pilot Agent")
 CLI_COMMAND_NAME = _env("CLI_COMMAND_NAME", "bpilot")
 CONTAINER_PREFIX = _env("CONTAINER_PREFIX", "bp")
 SELENIUM_IMAGE_NAME = _env("SELENIUM_IMAGE_NAME", "browser-pilot-selenium")

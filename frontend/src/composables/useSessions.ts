@@ -4,7 +4,6 @@ import i18n from '../i18n'
 
 interface BrandConfig {
   appTitle: string
-  agentName: string
   cliCommandName: string
   cliInstallCommand: string
   cliPythonInstallCommand: string
@@ -12,7 +11,6 @@ interface BrandConfig {
 
 const brand = reactive<BrandConfig>({
   appTitle: 'Browser Pilot',
-  agentName: 'Browser Pilot Agent',
   cliCommandName: 'bpilot',
   cliInstallCommand: 'pip install bpilot-cli',
   cliPythonInstallCommand: 'pip install bpilot-cli',
@@ -23,7 +21,6 @@ async function fetchBrand(): Promise<void> {
     const res = await fetch('/api/site-info')
     const data = await res.json()
     if (data.appTitle) brand.appTitle = data.appTitle
-    if (data.agentName) brand.agentName = data.agentName
     if (data.cliCommandName) brand.cliCommandName = data.cliCommandName
     if (data.cliInstallCommand) brand.cliInstallCommand = data.cliInstallCommand
     if (data.cliPythonInstallCommand) brand.cliPythonInstallCommand = data.cliPythonInstallCommand

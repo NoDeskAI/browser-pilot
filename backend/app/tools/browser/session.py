@@ -15,7 +15,7 @@ from app.db import get_pool
 from app.device_presets import get_preset, DEFAULT_PRESET
 from app.tools.browser.scripts import OBSERVE_SCRIPT
 
-logger = logging.getLogger("agent.browser")
+logger = logging.getLogger("browser.session")
 
 _client: httpx.AsyncClient | None = None
 

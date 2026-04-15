@@ -14,7 +14,7 @@ cd browser-pilot
 docker compose build && docker compose up -d
 ```
 
-Open **http://localhost:8000** — you'll see the web UI with session management, a live browser viewer (noVNC), and an AI chat panel.
+Open **http://localhost:8000** — you'll see the web UI with session management and a live browser viewer (noVNC).
 
 ### Apple Silicon / ARM users
 
@@ -106,9 +106,8 @@ This starts PostgreSQL in Docker, builds the Selenium image, and runs the backen
 | `DATABASE_URL` | `postgresql://nodeskpane:nodeskpane@localhost:5432/nodeskpane` | PostgreSQL connection string |
 | `SELENIUM_BASE_IMAGE` | `selenium/standalone-chrome:latest` | Base image for browser containers. ARM users: `seleniarm/standalone-chromium:latest` |
 | `DOCKER_HOST_ADDR` | `localhost` | How the backend reaches browser containers. Set to `host.docker.internal` in Docker deployment (auto-configured by docker-compose) |
-| `MAX_STEPS` | `100` | Max steps for built-in AI Agent |
-| `ANTHROPIC_API_KEY` | — | Anthropic API key (for built-in Agent) |
-| `OPENAI_API_KEY` | — | OpenAI API key (for built-in Agent) |
+| `OPENAI_API_KEY` | — | Optional. When set, uses LLM to auto-name sessions on first navigation. Without it, sessions are named by page title. |
+| `LOG_LEVEL` | `INFO` | Backend log verbosity. Set to `DEBUG` for troubleshooting. |
 
 ## Security
 

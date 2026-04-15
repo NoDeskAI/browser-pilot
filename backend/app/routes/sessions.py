@@ -291,14 +291,13 @@ async def get_session_logs(session_id: str, tail: int = 200, log_type: str | Non
 
 @router.get("/api/site-info")
 async def get_site_info(request: Request):
-    from ..config import APP_TITLE, APP_AGENT_NAME, CLI_COMMAND_NAME
+    from ..config import APP_TITLE, CLI_COMMAND_NAME
     from .cli import get_cli_install_info
 
     base = str(request.base_url).rstrip("/")
     cli_info = get_cli_install_info(base)
     return {
         "appTitle": APP_TITLE,
-        "agentName": APP_AGENT_NAME,
         "cliCommandName": CLI_COMMAND_NAME,
         "cliInstallCommand": cli_info["shell"],
         "cliPythonInstallCommand": cli_info["python"],

@@ -40,6 +40,6 @@ Each browser session runs in its own Docker container with no shared state. Howe
 
 ### API Keys
 
-- LLM API keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`) are stored as environment variables, never in the database.
+- The `OPENAI_API_KEY` (used for session auto-naming) is stored as an environment variable, never in the database.
 - The `.env` file is git-ignored by default. Never commit it.
 - S3 storage credentials are stored in the application database — ensure the database is not publicly accessible.
