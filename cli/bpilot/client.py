@@ -4,7 +4,7 @@ from typing import Any
 
 import httpx
 
-from nwb.config import get
+from bpilot.config import get
 
 _TIMEOUT = 60.0
 

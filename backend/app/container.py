@@ -182,7 +182,7 @@ async def stop_cdp_logger(session_id: str) -> None:
 
 
 async def get_all_container_statuses() -> dict[str, str]:
-    """Batch query all ndb- containers. Returns {container_name: status}."""
+    """Batch query all bp- containers. Returns {container_name: status}."""
     stdout, _, rc = await _run(
         f'docker ps -a --filter "name={CONTAINER_PREFIX}" --format '
         '"{{.Names}}\\t{{.State}}"',

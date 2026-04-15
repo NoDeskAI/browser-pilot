@@ -36,7 +36,7 @@ If applicable, attach relevant logs:
 
 ```bash
 # CDP event log from the browser container
-docker exec ndb-<session_id_prefix> tail -100 /tmp/cdp-events.jsonl
+docker exec bp-<session_id_prefix> tail -100 /tmp/cdp-events.jsonl
 
 # Backend logs
 docker compose logs backend --tail=50

@@ -2,7 +2,7 @@ import { createI18n } from 'vue-i18n'
 import zh from './locales/zh'
 import en from './locales/en'
 
-const STORAGE_KEY = 'nwb-ui-locale'
+const STORAGE_KEY = 'bpilot-ui-locale'
 
 function detectLocale(): 'zh' | 'en' {
   const saved = localStorage.getItem(STORAGE_KEY)

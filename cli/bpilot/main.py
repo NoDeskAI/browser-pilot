@@ -10,8 +10,8 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from nwb import client, config
-from nwb.config import _CMD_NAME
+from bpilot import client, config
+from bpilot.config import _CMD_NAME
 
 app = typer.Typer(help=f"{_CMD_NAME} — Remote Browser CLI", no_args_is_help=True)
 config_app = typer.Typer(help="Manage CLI configuration", no_args_is_help=True)

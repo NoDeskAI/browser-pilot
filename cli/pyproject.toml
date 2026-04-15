@@ -1,7 +1,7 @@
 [project]
-name = "nwb-cli"
+name = "bpilot-cli"
 version = "0.1.0"
-description = "CLI for no-window-browser — control headless browser sessions from the terminal"
+description = "CLI for browser-pilot — control headless browser sessions from the terminal"
 requires-python = ">=3.10"
 license = "Apache-2.0"
 readme = "README.md"
@@ -21,11 +21,11 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/user/no-window-browser"
-Repository = "https://github.com/user/no-window-browser"
+Homepage = "https://github.com/NoDeskAI/browser-pilot"
+Repository = "https://github.com/NoDeskAI/browser-pilot"
 
 [project.scripts]
-nwb = "nwb.main:app"
+bpilot = "bpilot.main:app"
 
 [build-system]
 requires = ["setuptools>=68.0"]

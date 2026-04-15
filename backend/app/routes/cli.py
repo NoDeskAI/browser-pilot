@@ -44,7 +44,7 @@ INSTALL_DIR="${{HOME}}/.local/bin"
 
 echo "Installing $CLI_NAME ..."
 mkdir -p "$INSTALL_DIR"
-curl -fsSL "{base}/api/cli/nwb" -o "$INSTALL_DIR/$CLI_NAME"
+curl -fsSL "{base}/api/cli/bpilot" -o "$INSTALL_DIR/$CLI_NAME"
 chmod +x "$INSTALL_DIR/$CLI_NAME"
 
 if ! echo "$PATH" | tr ':' '\\n' | grep -q "^$INSTALL_DIR$"; then
@@ -59,7 +59,7 @@ echo "Done! Run '$CLI_NAME session list' to verify."
     return PlainTextResponse(script, media_type="text/x-shellscript")
 
 
-@router.get("/api/cli/nwb")
+@router.get("/api/cli/bpilot")
 async def cli_script(request: Request):
     """Serve the bash CLI with API URL and CLI name baked in."""
     from ..config import CLI_COMMAND_NAME

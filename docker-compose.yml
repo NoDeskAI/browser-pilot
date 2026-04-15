@@ -39,7 +39,7 @@ services:
       context: ./services/selenium-chrome
       args:
         BASE_IMAGE: ${SELENIUM_BASE_IMAGE:-selenium/standalone-chrome:latest}
-    image: ${SELENIUM_IMAGE_NAME:-no-window-browser-selenium}
+    image: ${SELENIUM_IMAGE_NAME:-browser-pilot-selenium}
     profiles: ["build"]
 
 volumes:

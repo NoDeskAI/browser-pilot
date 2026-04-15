@@ -32,7 +32,7 @@ docker compose build && docker compose up -d
 ```
 backend/          Python (FastAPI) — API server
 frontend/         Vue 3 + TypeScript + Tailwind — Web UI
-cli/              Python (Typer) — nwb command-line tool
+cli/              Python (Typer) — bpilot command-line tool
 services/
   selenium-chrome/  Browser container image (Dockerfile + stealth extensions)
 ```
@@ -41,13 +41,13 @@ services/
 
 ### Reporting Bugs
 
-- Use the [Bug Report](https://github.com/user/no-window-browser/issues/new?template=bug_report.md) template.
+- Use the [Bug Report](https://github.com/NoDeskAI/browser-pilot/issues/new?template=bug_report.md) template.
 - Include: OS, Docker version, browser version, steps to reproduce, expected vs actual behavior.
-- Attach relevant logs (`docker exec ndb-xxx tail -100 /tmp/cdp-events.jsonl`).
+- Attach relevant logs (`docker exec bp-xxx tail -100 /tmp/cdp-events.jsonl`).
 
 ### Suggesting Features
 
-- Use the [Feature Request](https://github.com/user/no-window-browser/issues/new?template=feature_request.md) template.
+- Use the [Feature Request](https://github.com/NoDeskAI/browser-pilot/issues/new?template=feature_request.md) template.
 - Describe the problem you're trying to solve, not just the solution.
 
 ### Submitting Pull Requests

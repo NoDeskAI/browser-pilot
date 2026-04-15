@@ -11,11 +11,11 @@ interface BrandConfig {
 }
 
 const brand = reactive<BrandConfig>({
-  appTitle: 'Remote Browser Playground',
-  agentName: 'NoDeskPane Agent',
-  cliCommandName: 'nwb',
-  cliInstallCommand: 'pip install nwb-cli',
-  cliPythonInstallCommand: 'pip install nwb-cli',
+  appTitle: 'Browser Pilot',
+  agentName: 'Browser Pilot Agent',
+  cliCommandName: 'bpilot',
+  cliInstallCommand: 'pip install bpilot-cli',
+  cliPythonInstallCommand: 'pip install bpilot-cli',
 })
 
 async function fetchBrand(): Promise<void> {

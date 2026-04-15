@@ -1,4 +1,4 @@
-# no-window-browser
+# browser-pilot
 
 Remote browser automation for AI Agents. Each session runs in an isolated Docker container with Chrome, Selenium, anti-bot stealth, and a noVNC viewer — controllable via REST API, CLI, or the built-in web UI.
 
@@ -7,8 +7,8 @@ Remote browser automation for AI Agents. Each session runs in an isolated Docker
 Requires **Docker** (with Compose v2).
 
 ```bash
-git clone https://github.com/user/no-window-browser.git
-cd no-window-browser
+git clone https://github.com/NoDeskAI/browser-pilot.git
+cd browser-pilot
 
 # Build all images and start services
 docker compose build && docker compose up -d
@@ -26,10 +26,10 @@ echo 'SELENIUM_BASE_IMAGE=seleniarm/standalone-chromium:latest' > .env
 
 ## CLI
 
-Install the `nwb` command-line tool to drive the browser from your terminal or integrate with external Agent frameworks like OpenClaw.
+Install the `bpilot` command-line tool to drive the browser from your terminal or integrate with external Agent frameworks like OpenClaw.
 
 ```bash
-pip install nwb-cli           # from PyPI
+pip install bpilot-cli           # from PyPI
 # or
 pip install ./cli             # from source
 ```
@@ -37,21 +37,21 @@ pip install ./cli             # from source
 Configure and use:
 
 ```bash
-nwb config set api-url http://localhost:8000
+bpilot config set api-url http://localhost:8000
 
-nwb session create --name "My Task"
-nwb session create --name "Mobile" --device iphone-16
-nwb session create --name "Proxied" --proxy socks5://host:port
-nwb session use <session-id>
+bpilot session create --name "My Task"
+bpilot session create --name "Mobile" --device iphone-16
+bpilot session create --name "Proxied" --proxy socks5://host:port
+bpilot session use <session-id>
 
-nwb session set-device iphone-16    # switch device (restarts container)
-nwb session set-proxy socks5://h:p  # set proxy (restarts container)
+bpilot session set-device iphone-16    # switch device (restarts container)
+bpilot session set-proxy socks5://h:p  # set proxy (restarts container)
 
-nwb navigate https://example.com
-nwb observe                    # see page elements with coordinates
-nwb click 640 380              # click at coordinates
-nwb type "hello world"         # type into focused input
-nwb screenshot --output page.png
+bpilot navigate https://example.com
+bpilot observe                    # see page elements with coordinates
+bpilot click 640 380              # click at coordinates
+bpilot type "hello world"         # type into focused input
+bpilot screenshot --output page.png
 ```
 
 Add `--json` for machine-readable output (for AI Agents).
@@ -65,12 +65,12 @@ graph TB
     Postgres["postgres:5432"]
   end
   subgraph dynamic ["Created on demand"]
-    B1["ndb-xxx — Chrome + Selenium"]
-    B2["ndb-yyy — Chrome + Selenium"]
+    B1["bp-xxx — Chrome + Selenium"]
+    B2["bp-yyy — Chrome + Selenium"]
   end
   User["Browser"] -->|"http://localhost:8000"| Backend
   User -->|"VNC WebSocket"| B1
-  CLI["nwb CLI"] -->|"REST API"| Backend
+  CLI["bpilot CLI"] -->|"REST API"| Backend
   Backend -->|"Docker socket"| dynamic
   Backend --> Postgres
 ```
