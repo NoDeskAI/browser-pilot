@@ -9,6 +9,15 @@ H=${SE_SCREEN_HEIGHT:-800}
 LANG_CODE=$(cat /tmp/browser-lang 2>/dev/null || echo "zh-CN")
 LOCALE_ID=$(echo "$LANG_CODE" | sed 's/-/_/')
 export LANGUAGE="${LOCALE_ID}"
+
+EXTRA_ARGS=""
+if [ -n "${BROWSER_UA:-}" ]; then
+  EXTRA_ARGS="${EXTRA_ARGS} --user-agent=${BROWSER_UA}"
+fi
+if [ -n "${BROWSER_PROXY:-}" ]; then
+  EXTRA_ARGS="${EXTRA_ARGS} --proxy-server=${BROWSER_PROXY}"
+fi
+
 exec /usr/lib/chromium/chromium \
   --no-sandbox \
   --test-type \
@@ -34,4 +43,5 @@ exec /usr/lib/chromium/chromium \
   --load-extension=/opt/stealth-ext \
   --remote-debugging-port=9222 \
   --remote-debugging-address=0.0.0.0 \
-  --remote-allow-origins=*
+  --remote-allow-origins=* \
+  ${EXTRA_ARGS}

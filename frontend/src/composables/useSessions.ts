@@ -1,5 +1,5 @@
 import { reactive, readonly } from 'vue'
-import type { Session } from '../types'
+import type { Session, DevicePreset } from '../types'
 import i18n from '../i18n'
 
 interface BrandConfig {
@@ -37,7 +37,9 @@ interface SessionsState {
   activeId: string | null
   activePorts: { seleniumPort: number; vncPort: number } | null
   containerLoading: boolean
+  containerRestarting: boolean
   loading: boolean
+  devicePresets: DevicePreset[]
 }
 
 const state = reactive<SessionsState>({
@@ -45,8 +47,20 @@ const state = reactive<SessionsState>({
   activeId: null,
   activePorts: null,
   containerLoading: false,
+  containerRestarting: false,
   loading: false,
+  devicePresets: [],
 })
+
+async function fetchDevicePresets(): Promise<void> {
+  try {
+    const res = await fetch('/api/device-presets')
+    const data = await res.json()
+    state.devicePresets = data.presets || []
+  } catch {
+    // silently ignore
+  }
+}
 
 async function fetchSessions(): Promise<void> {
   try {
@@ -58,6 +72,8 @@ async function fetchSessions(): Promise<void> {
       currentTitle: s.currentTitle || '',
       containerStatus: s.containerStatus || 'not_found',
       ports: s.ports || null,
+      devicePreset: s.devicePreset || '',
+      proxyUrl: s.proxyUrl || '',
     }))
   } catch {
     // silently ignore
@@ -191,6 +207,62 @@ async function stopContainer(id: string): Promise<void> {
   }
 }
 
+async function changeDevicePreset(id: string, preset: string): Promise<void> {
+  state.containerRestarting = true
+  try {
+    const res = await fetch(`/api/sessions/${id}/device-preset`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ preset }),
+    })
+    const data = await res.json()
+    if (data.ok && data.ports) {
+      const s = state.sessions.find(s => s.id === id)
+      if (s) {
+        s.devicePreset = data.devicePreset || preset
+        s.ports = data.ports
+        s.containerStatus = 'running'
+      }
+      if (state.activeId === id) {
+        state.activePorts = {
+          seleniumPort: data.ports.selenium_port,
+          vncPort: data.ports.vnc_port,
+        }
+      }
+    }
+  } finally {
+    state.containerRestarting = false
+  }
+}
+
+async function changeProxy(id: string, proxyUrl: string): Promise<void> {
+  state.containerRestarting = true
+  try {
+    const res = await fetch(`/api/sessions/${id}/proxy`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ proxyUrl }),
+    })
+    const data = await res.json()
+    if (data.ok && data.ports) {
+      const s = state.sessions.find(s => s.id === id)
+      if (s) {
+        s.proxyUrl = data.proxyUrl ?? proxyUrl
+        s.ports = data.ports
+        s.containerStatus = 'running'
+      }
+      if (state.activeId === id) {
+        state.activePorts = {
+          seleniumPort: data.ports.selenium_port,
+          vncPort: data.ports.vnc_port,
+        }
+      }
+    }
+  } finally {
+    state.containerRestarting = false
+  }
+}
+
 async function deleteSession(id: string): Promise<void> {
   await fetch(`/api/sessions/${id}`, { method: 'DELETE' })
   state.sessions = state.sessions.filter(s => s.id !== id)
@@ -238,7 +310,7 @@ async function saveAppState(key: string, value: string): Promise<void> {
 
 async function init(): Promise<void> {
   state.loading = true
-  await Promise.all([fetchSessions(), fetchBrand()])
+  await Promise.all([fetchSessions(), fetchBrand(), fetchDevicePresets()])
   const savedId = await getAppState('active_session_id')
   if (savedId && state.sessions.some(s => s.id === savedId)) {
     state.activeId = savedId
@@ -267,5 +339,7 @@ export function useSessions() {
     startContainer,
     pauseContainer,
     stopContainer,
+    changeDevicePreset,
+    changeProxy,
   }
 }

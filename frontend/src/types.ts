@@ -7,4 +7,16 @@ export interface Session {
   currentTitle: string
   containerStatus: 'running' | 'paused' | 'exited' | 'not_found'
   ports?: { selenium_port: number; vnc_port: number } | null
+  devicePreset?: string
+  proxyUrl?: string
+}
+
+export interface DevicePreset {
+  id: string
+  label: string
+  category: 'desktop' | 'mobile'
+  width: number
+  height: number
+  dpr?: number
+  default?: boolean
 }

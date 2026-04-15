@@ -40,7 +40,12 @@ Configure and use:
 nwb config set api-url http://localhost:8000
 
 nwb session create --name "My Task"
+nwb session create --name "Mobile" --device iphone-16
+nwb session create --name "Proxied" --proxy socks5://host:port
 nwb session use <session-id>
+
+nwb session set-device iphone-16    # switch device (restarts container)
+nwb session set-proxy socks5://h:p  # set proxy (restarts container)
 
 nwb navigate https://example.com
 nwb observe                    # see page elements with coordinates
@@ -75,6 +80,8 @@ Each browser session gets its own Docker container with:
 - Selenium WebDriver for automation
 - noVNC (port 7900) for live viewing
 - CDP event logger for debugging
+- **Device presets**: Switch between desktop resolutions (1920×1080 to 1280×720) and mobile device emulation (iPhone, iPad, Galaxy, Pixel) with automatic UA and viewport switching
+- **Per-session proxy**: Configure HTTP/HTTPS/SOCKS4/SOCKS5 proxy per session, changeable at any time via the UI or CLI
 
 ## Development
 

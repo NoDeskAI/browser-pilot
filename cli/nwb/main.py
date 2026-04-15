@@ -159,13 +159,24 @@ def session_list():
 
 
 @session_app.command("create")
-def session_create(name: str = typer.Option("新会话", "--name", "-n")):
+def session_create(
+    name: str = typer.Option("新会话", "--name", "-n"),
+    device: str = typer.Option("desktop-1920x1080", "--device", "-d", help="Device preset (e.g. desktop-1920x1080, iphone-16)"),
+    proxy: str = typer.Option("", "--proxy", "-p", help="Proxy URL (e.g. socks5://host:port)"),
+):
     """Create a new session."""
-    data = client.post("/api/sessions", {"name": name}, api_url=_api())
+    body: dict = {"name": name, "devicePreset": device}
+    if proxy:
+        body["proxyUrl"] = proxy
+    data = client.post("/api/sessions", body, api_url=_api())
     if _json_output:
         typer.echo(json.dumps(data, ensure_ascii=False))
     else:
         console.print(f"[green]Created session:[/green] {data['id']}  ({data['name']})")
+        if device != "desktop-1920x1080":
+            console.print(f"[dim]Device: {device}[/dim]")
+        if proxy:
+            console.print(f"[dim]Proxy: {proxy}[/dim]")
         console.print(f"[dim]Run: {_CMD_NAME} session use {data['id']}[/dim]")
 
 
@@ -209,6 +220,49 @@ def session_delete(session_id: str):
     """Delete a session and its container."""
     data = client.delete(f"/api/sessions/{session_id}", api_url=_api())
     _out(data)
+
+
+@session_app.command("set-device")
+def session_set_device(
+    preset: str = typer.Argument(..., help="Device preset ID (e.g. desktop-1920x1080, iphone-16)"),
+    session_id: Optional[str] = typer.Option(None, "--session", "-s"),
+):
+    """Change device preset for a session (triggers container restart)."""
+    sid = session_id or _sid()
+    data = client.post(f"/api/sessions/{sid}/device-preset", {"preset": preset}, api_url=_api())
+    if _json_output:
+        typer.echo(json.dumps(data, ensure_ascii=False))
+    else:
+        if data.get("ok"):
+            ports = data.get("ports", {})
+            console.print(f"[green]Device changed to {preset}[/green]")
+            console.print(f"  Selenium: localhost:{ports.get('selenium_port')}")
+            console.print(f"  VNC:      localhost:{ports.get('vnc_port')}")
+        else:
+            console.print(f"[red]Failed: {data.get('error')}[/red]")
+
+
+@session_app.command("set-proxy")
+def session_set_proxy(
+    proxy_url: str = typer.Argument("", help='Proxy URL (e.g. socks5://host:port) or empty to clear'),
+    session_id: Optional[str] = typer.Option(None, "--session", "-s"),
+):
+    """Change proxy for a session (triggers container restart)."""
+    sid = session_id or _sid()
+    data = client.post(f"/api/sessions/{sid}/proxy", {"proxyUrl": proxy_url}, api_url=_api())
+    if _json_output:
+        typer.echo(json.dumps(data, ensure_ascii=False))
+    else:
+        if data.get("ok"):
+            ports = data.get("ports", {})
+            if proxy_url:
+                console.print(f"[green]Proxy set to {proxy_url}[/green]")
+            else:
+                console.print("[green]Proxy cleared (direct connection)[/green]")
+            console.print(f"  Selenium: localhost:{ports.get('selenium_port')}")
+            console.print(f"  VNC:      localhost:{ports.get('vnc_port')}")
+        else:
+            console.print(f"[red]Failed: {data.get('error')}[/red]")
 
 
 # ── Browser commands ────────────────────────────────────────────────────

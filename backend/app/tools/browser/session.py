@@ -11,6 +11,8 @@ import httpx
 
 from app.config import DOCKER_HOST_ADDR
 from app.container import ensure_container_running
+from app.db import get_pool
+from app.device_presets import get_preset, DEFAULT_PRESET
 from app.tools.browser.scripts import OBSERVE_SCRIPT
 
 logger = logging.getLogger("agent.browser")
@@ -172,6 +174,31 @@ async def _inject_stealth(sid: str, *, base_url: str) -> None:
         pass
 
 
+async def _inject_device_emulation(sid: str, preset_data: dict, *, base_url: str) -> None:
+    """For mobile presets, inject CDP Emulation.setDeviceMetricsOverride."""
+    if preset_data.get("category") != "mobile":
+        return
+    try:
+        await _cdp(sid, "Emulation.setDeviceMetricsOverride", {
+            "width": preset_data["width"],
+            "height": preset_data["height"],
+            "deviceScaleFactor": preset_data.get("dpr", 1),
+            "mobile": True,
+        }, base_url=base_url)
+        logger.info("Device emulation injected: %s (%dx%d @%.1fx)",
+                     preset_data.get("label", "?"), preset_data["width"],
+                     preset_data["height"], preset_data.get("dpr", 1))
+    except Exception as exc:
+        logger.warning("Device emulation inject failed: %s", exc)
+
+
+def invalidate_session_cache(chat_session_id: str) -> None:
+    """Clear cached WD session after container recreation."""
+    bs = _sessions.pop(chat_session_id, None)
+    if bs:
+        logger.info("Invalidated session cache for %s", chat_session_id)
+
+
 async def _ensure_session_impl(bs: BrowserSession) -> str:
     base = bs.selenium_base
 
@@ -228,6 +255,18 @@ async def ensure_session(chat_session_id: str) -> tuple[str, str]:
 
     async with bs.lock:
         sid = await _ensure_session_impl(bs)
+
+    try:
+        pool = get_pool()
+        row = await pool.fetchrow(
+            "SELECT device_preset FROM sessions WHERE id = $1", chat_session_id,
+        )
+        preset_id = (row["device_preset"] if row else None) or DEFAULT_PRESET
+        preset_data = get_preset(preset_id)
+        await _inject_device_emulation(sid, preset_data, base_url=bs.selenium_base)
+    except Exception as exc:
+        logger.debug("Device emulation lookup/inject skipped: %s", exc)
+
     return sid, bs.selenium_base
 
 

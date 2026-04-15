@@ -58,11 +58,13 @@ Add `--json` / `-j` before the command for machine-readable output.
 | Command | Description |
 |---------|-------------|
 | `nwb session list` | List all sessions with container status |
-| `nwb session create [--name NAME]` | Create new session, returns ID |
+| `nwb session create [--name NAME] [--device PRESET] [--proxy URL]` | Create new session, returns ID |
 | `nwb session use <id>` | Set active session |
 | `nwb session start [<id>]` | Start container (optional — browser commands auto-start) |
 | `nwb session stop [<id>]` | Stop container (saves resources) |
 | `nwb session delete <id>` | Delete session and container |
+| `nwb session set-device <preset>` | Change device preset (restarts container). Presets: `desktop-1920x1080` (default), `desktop-1600x900`, `desktop-1440x900`, `desktop-1366x768`, `desktop-1280x800`, `desktop-1280x720`, `iphone-16-pro-max`, `iphone-16`, `iphone-se`, `ipad-air`, `galaxy-s24`, `pixel-8` |
+| `nwb session set-proxy <url>` | Set proxy (restarts container). Formats: `http://host:port`, `socks5://host:port`. Empty string to clear |
 
 ### Browser Primitives
 
@@ -125,3 +127,5 @@ nwb screenshot --output qr-code.png
 - **Anti-bot stealth**: Each container runs Chrome with fingerprint spoofing, human-like click/type patterns, and timezone override (Asia/Shanghai).
 - **Per-call sessions**: Each CLI command creates and destroys a WebDriver session to minimize detection. This adds ~200ms overhead per command but prevents anti-bot triggers.
 - **Observe before click**: Always run `nwb observe` to get current element coordinates before clicking. Coordinates change when the page updates.
+- **Device presets**: Use `--device` on create or `set-device` to switch between desktop resolutions and mobile emulation (iPhone/iPad/Galaxy/Pixel). Mobile presets automatically set DPR, viewport, and user agent. Switching restarts the container (~5-8s) but preserves cookies/bookmarks.
+- **Proxy support**: Use `--proxy` on create or `set-proxy` to route traffic through HTTP/SOCKS proxy. Supports `http://`, `https://`, `socks4://`, `socks5://`. Changing proxy restarts the container.

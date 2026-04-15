@@ -13,10 +13,12 @@ from app.container import (
     get_all_container_statuses,
     get_container_ports,
     pause_container,
+    recreate_container,
     remove_container,
     stop_container,
 )
 from app.db import get_pool
+from app.device_presets import DEVICE_PRESETS, DEFAULT_PRESET, get_preset
 
 logger = logging.getLogger("routes.sessions")
 router = APIRouter()
@@ -24,14 +26,26 @@ router = APIRouter()
 
 class CreateSessionBody(BaseModel):
     name: str = "新会话"
+    devicePreset: str = DEFAULT_PRESET
+    proxyUrl: str = ""
 
 
 class UpdateSessionBody(BaseModel):
     name: str
 
 
+class DevicePresetBody(BaseModel):
+    preset: str
+
+
+class ProxyBody(BaseModel):
+    proxyUrl: str = ""
+
+
 class AppStateBody(BaseModel):
     value: str
+
+_VALID_PROXY_SCHEMES = ("http://", "https://", "socks4://", "socks5://")
 
 
 # -----------------------------------------------------------------------
@@ -42,7 +56,8 @@ class AppStateBody(BaseModel):
 async def list_sessions():
     pool = get_pool()
     rows = await pool.fetch("""
-        SELECT id, name, created_at, updated_at, current_url, current_title
+        SELECT id, name, created_at, updated_at, current_url, current_title,
+               device_preset, proxy_url
         FROM sessions
         ORDER BY updated_at DESC
     """)
@@ -63,6 +78,8 @@ async def list_sessions():
             "currentUrl": r["current_url"] or "",
             "currentTitle": r["current_title"] or "",
             "containerStatus": container_status,
+            "devicePreset": r["device_preset"] or DEFAULT_PRESET,
+            "proxyUrl": r["proxy_url"] or "",
         }
 
         if container_status == "running":
@@ -82,19 +99,20 @@ async def list_sessions():
 async def create_session(body: CreateSessionBody):
     pool = get_pool()
     session_id = str(uuid.uuid4())
+    preset_id = body.devicePreset if body.devicePreset in DEVICE_PRESETS else DEFAULT_PRESET
     await pool.execute(
-        "INSERT INTO sessions (id, name) VALUES ($1, $2)",
-        session_id, body.name,
+        "INSERT INTO sessions (id, name, device_preset, proxy_url) VALUES ($1, $2, $3, $4)",
+        session_id, body.name, preset_id, body.proxyUrl,
     )
-    logger.info("Session created: %s (%s)", session_id, body.name)
-    return {"id": session_id, "name": body.name}
+    logger.info("Session created: %s (%s) preset=%s", session_id, body.name, preset_id)
+    return {"id": session_id, "name": body.name, "devicePreset": preset_id, "proxyUrl": body.proxyUrl}
 
 
 @router.get("/api/sessions/{session_id}")
 async def get_session(session_id: str):
     pool = get_pool()
     row = await pool.fetchrow(
-        "SELECT id, name, created_at, updated_at, current_url, current_title FROM sessions WHERE id = $1",
+        "SELECT id, name, created_at, updated_at, current_url, current_title, device_preset, proxy_url FROM sessions WHERE id = $1",
         session_id,
     )
     if not row:
@@ -106,6 +124,8 @@ async def get_session(session_id: str):
         "updatedAt": row["updated_at"].isoformat(),
         "currentUrl": row["current_url"] or "",
         "currentTitle": row["current_title"] or "",
+        "devicePreset": row["device_preset"] or DEFAULT_PRESET,
+        "proxyUrl": row["proxy_url"] or "",
     }
 
 
@@ -170,6 +190,75 @@ async def unpause_session_container(session_id: str):
     except Exception as exc:
         logger.error("Container unpause failed for %s: %s", session_id, exc)
         return {"ok": False, "error": str(exc)}
+
+
+# -----------------------------------------------------------------------
+# Device preset & proxy
+# -----------------------------------------------------------------------
+
+@router.get("/api/device-presets")
+async def list_device_presets():
+    presets = []
+    for pid, p in DEVICE_PRESETS.items():
+        entry = {"id": pid, "label": p["label"], "category": p["category"], "width": p["width"], "height": p["height"]}
+        if "dpr" in p:
+            entry["dpr"] = p["dpr"]
+        if p.get("default"):
+            entry["default"] = True
+        presets.append(entry)
+    return {"presets": presets}
+
+
+@router.post("/api/sessions/{session_id}/device-preset")
+async def change_device_preset(session_id: str, body: DevicePresetBody):
+    if body.preset not in DEVICE_PRESETS:
+        return {"ok": False, "error": f"Unknown preset: {body.preset}"}
+    pool = get_pool()
+    row = await pool.fetchrow("SELECT proxy_url FROM sessions WHERE id = $1", session_id)
+    if not row:
+        return {"ok": False, "error": "Session not found"}
+    await pool.execute(
+        "UPDATE sessions SET device_preset = $1, updated_at = NOW() WHERE id = $2",
+        body.preset, session_id,
+    )
+    preset_data = get_preset(body.preset)
+    proxy = row["proxy_url"] or None
+    from app.tools.browser.session import invalidate_session_cache
+    invalidate_session_cache(session_id)
+    ports = await recreate_container(
+        session_id,
+        width=preset_data["width"],
+        height=preset_data["height"],
+        user_agent=preset_data.get("user_agent"),
+        proxy=proxy,
+    )
+    return {"ok": True, "ports": ports, "devicePreset": body.preset}
+
+
+@router.post("/api/sessions/{session_id}/proxy")
+async def change_proxy(session_id: str, body: ProxyBody):
+    proxy_url = body.proxyUrl.strip()
+    if proxy_url and not proxy_url.startswith(_VALID_PROXY_SCHEMES):
+        return {"ok": False, "error": "Proxy URL must start with http://, https://, socks4://, or socks5://"}
+    pool = get_pool()
+    row = await pool.fetchrow("SELECT device_preset FROM sessions WHERE id = $1", session_id)
+    if not row:
+        return {"ok": False, "error": "Session not found"}
+    await pool.execute(
+        "UPDATE sessions SET proxy_url = $1, updated_at = NOW() WHERE id = $2",
+        proxy_url, session_id,
+    )
+    preset_data = get_preset(row["device_preset"] or DEFAULT_PRESET)
+    from app.tools.browser.session import invalidate_session_cache
+    invalidate_session_cache(session_id)
+    ports = await recreate_container(
+        session_id,
+        width=preset_data["width"],
+        height=preset_data["height"],
+        user_agent=preset_data.get("user_agent"),
+        proxy=proxy_url or None,
+    )
+    return {"ok": True, "ports": ports, "proxyUrl": proxy_url}
 
 
 # -----------------------------------------------------------------------

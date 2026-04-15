@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import RFB from '@novnc/novnc'
+import { useSessions } from '../composables/useSessions'
 
 const { t } = useI18n()
+const { state: sessState, changeDevicePreset, changeProxy } = useSessions()
 
 const props = defineProps<{
   wsUrl: string
@@ -38,6 +40,18 @@ const LANG_OPTIONS = [
   { value: 'es', label: 'Español' },
   { value: 'ru', label: 'Русский' },
 ]
+const proxyOpen = ref(false)
+const proxyInput = ref('')
+const proxyBtnRef = ref<HTMLElement>()
+const proxyPanelRef = ref<HTMLElement>()
+const proxyPos = ref({ top: 0, left: 0 })
+
+const currentSession = computed(() => sessState.sessions.find(s => s.id === props.sessionId))
+const currentPreset = computed(() => currentSession.value?.devicePreset || 'desktop-1920x1080')
+const currentProxy = computed(() => currentSession.value?.proxyUrl || '')
+const desktopPresets = computed(() => sessState.devicePresets.filter(p => p.category === 'desktop'))
+const mobilePresets = computed(() => sessState.devicePresets.filter(p => p.category === 'mobile'))
+
 const totalRecv = ref(0)
 const totalSent = ref(0)
 const currentRate = ref(0)
@@ -274,6 +288,41 @@ async function changeLang(lang: string) {
   }
 }
 
+async function onDeviceChange(preset: string) {
+  if (sessState.containerRestarting || preset === currentPreset.value) return
+  await changeDevicePreset(props.sessionId, preset)
+}
+
+function toggleProxy() {
+  if (!proxyOpen.value && proxyBtnRef.value) {
+    const rect = proxyBtnRef.value.getBoundingClientRect()
+    proxyPos.value = { top: rect.bottom + 4, left: rect.left }
+    proxyInput.value = currentProxy.value
+  }
+  proxyOpen.value = !proxyOpen.value
+}
+
+async function saveProxy() {
+  if (sessState.containerRestarting) return
+  proxyOpen.value = false
+  await changeProxy(props.sessionId, proxyInput.value.trim())
+}
+
+async function clearProxy() {
+  if (sessState.containerRestarting) return
+  proxyInput.value = ''
+  proxyOpen.value = false
+  await changeProxy(props.sessionId, '')
+}
+
+function handleProxyClickOutside(e: MouseEvent) {
+  if (!proxyOpen.value) return
+  const tgt = e.target as Node
+  if (proxyBtnRef.value?.contains(tgt)) return
+  if (proxyPanelRef.value?.contains(tgt)) return
+  proxyOpen.value = false
+}
+
 defineExpose({ navigate })
 
 onMounted(() => {
@@ -284,6 +333,7 @@ onMounted(() => {
   connectRFB()
   document.addEventListener('fullscreenchange', onFullscreenChange)
   document.addEventListener('click', handleClipClickOutside)
+  document.addEventListener('click', handleProxyClickOutside)
 })
 
 onUnmounted(() => {
@@ -292,6 +342,7 @@ onUnmounted(() => {
   if (rateTimer) clearInterval(rateTimer)
   document.removeEventListener('fullscreenchange', onFullscreenChange)
   document.removeEventListener('click', handleClipClickOutside)
+  document.removeEventListener('click', handleProxyClickOutside)
 })
 
 watch(() => props.wsUrl, () => {
@@ -369,6 +420,34 @@ watch(compressionLevel, applyQuality)
         :title="isFullscreen ? t('vnc.exitFullscreenTitle') : t('vnc.fullscreenTitle')"
       >{{ isFullscreen ? t('vnc.exitFullscreen') : t('vnc.fullscreen') }}</button>
 
+      <!-- Device preset selector -->
+      <select
+        :value="currentPreset"
+        @change="onDeviceChange(($event.target as HTMLSelectElement).value)"
+        :disabled="sessState.containerRestarting"
+        class="px-1 py-0.5 rounded text-[10px] bg-[var(--color-surface-hover)] text-[var(--color-text-dim)] border border-[var(--color-border)] outline-none cursor-pointer shrink-0 disabled:opacity-40"
+        :title="t('vnc.device')"
+      >
+        <optgroup :label="t('vnc.deviceDesktop')">
+          <option v-for="p in desktopPresets" :key="p.id" :value="p.id">{{ p.label }}</option>
+        </optgroup>
+        <optgroup :label="t('vnc.deviceMobile')">
+          <option v-for="p in mobilePresets" :key="p.id" :value="p.id">{{ p.label }} — {{ p.width }}×{{ p.height }}</option>
+        </optgroup>
+      </select>
+
+      <!-- Proxy -->
+      <button
+        ref="proxyBtnRef"
+        @click="toggleProxy"
+        :disabled="sessState.containerRestarting"
+        class="px-1.5 py-0.5 rounded text-[10px] transition-colors shrink-0"
+        :class="currentProxy ? 'bg-emerald-600/30 text-emerald-300' : 'bg-[var(--color-surface-hover)] text-[var(--color-text-dim)] hover:text-[var(--color-text)]'"
+        :title="currentProxy ? t('vnc.proxyActive') + ': ' + currentProxy : t('vnc.proxy')"
+      >{{ t('vnc.proxy') }}</button>
+
+      <span v-if="sessState.containerRestarting" class="text-[10px] text-amber-400 shrink-0 animate-pulse">{{ t('vnc.switchingDevice') }}</span>
+
       <!-- Language -->
       <select
         :value="browserLang"
@@ -416,6 +495,40 @@ watch(compressionLevel, applyQuality)
           >{{ clipLoading ? '...' : t('vnc.getFromRemote') }}</button>
           <button
             @click="clipboardOpen = false"
+            class="px-2 py-1 rounded text-[10px] font-medium bg-[var(--color-surface-hover)] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors"
+          >{{ t('vnc.close') }}</button>
+        </div>
+      </div>
+    </Teleport>
+
+    <!-- Proxy floating panel -->
+    <Teleport to="body">
+      <div
+        v-if="proxyOpen"
+        ref="proxyPanelRef"
+        class="fixed z-[9990] w-64 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg shadow-xl p-2"
+        :style="{ top: proxyPos.top + 'px', left: proxyPos.left + 'px' }"
+      >
+        <input
+          v-model="proxyInput"
+          type="text"
+          class="w-full bg-[var(--color-bg)] border border-[var(--color-border)] rounded text-xs text-[var(--color-text)] p-1.5 outline-none focus:border-[var(--color-accent)]"
+          :placeholder="t('vnc.proxyPlaceholder')"
+          @keydown.enter="saveProxy"
+        />
+        <div class="flex gap-1.5 mt-1.5">
+          <button
+            @click="saveProxy"
+            :disabled="sessState.containerRestarting"
+            class="flex-1 px-2 py-1 rounded text-[10px] font-medium bg-lime-600/20 text-lime-400 border border-lime-600/30 hover:bg-lime-600/30 transition-colors disabled:opacity-40"
+          >{{ sessState.containerRestarting ? t('vnc.proxySaving') : t('vnc.proxySave') }}</button>
+          <button
+            @click="clearProxy"
+            :disabled="sessState.containerRestarting || !currentProxy"
+            class="flex-1 px-2 py-1 rounded text-[10px] font-medium bg-red-600/20 text-red-400 border border-red-600/30 hover:bg-red-600/30 transition-colors disabled:opacity-40"
+          >{{ t('vnc.proxyClear') }}</button>
+          <button
+            @click="proxyOpen = false"
             class="px-2 py-1 rounded text-[10px] font-medium bg-[var(--color-surface-hover)] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors"
           >{{ t('vnc.close') }}</button>
         </div>

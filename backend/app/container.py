@@ -8,6 +8,8 @@ from typing import Any
 import httpx
 
 from app.config import DOCKER_HOST_ADDR, CONTAINER_PREFIX as _PREFIX, SELENIUM_IMAGE_NAME
+from app.db import get_pool
+from app.device_presets import DEVICE_PRESETS, DEFAULT_PRESET, get_preset
 
 logger = logging.getLogger("container")
 
@@ -15,10 +17,8 @@ CONTAINER_PREFIX = f"{_PREFIX}-"
 IMAGE_NAME = SELENIUM_IMAGE_NAME
 SHM_SIZE = "2g"
 
-CONTAINER_ENV = {
+_STATIC_ENV = {
     "SE_VNC_NO_PASSWORD": "1",
-    "SE_SCREEN_WIDTH": "1280",
-    "SE_SCREEN_HEIGHT": "800",
     "SE_SCREEN_DEPTH": "24",
     "SE_NODE_SESSION_TIMEOUT": "86400",
     "SE_NODE_OVERRIDE_MAX_SESSIONS": "true",
@@ -60,10 +60,25 @@ async def exec_in_container(session_id: str, cmd: str, timeout: float = 10) -> s
     return stdout
 
 
-async def create_container(session_id: str) -> str:
+async def create_container(
+    session_id: str,
+    width: int = 1920,
+    height: int = 1080,
+    user_agent: str | None = None,
+    proxy: str | None = None,
+) -> str:
     name = container_name(session_id)
     vol_name = f"{name}-data"
-    env_args = " ".join(f"-e {k}={v}" for k, v in CONTAINER_ENV.items())
+    env = {
+        **_STATIC_ENV,
+        "SE_SCREEN_WIDTH": str(width),
+        "SE_SCREEN_HEIGHT": str(height),
+    }
+    if user_agent:
+        env["BROWSER_UA"] = user_agent
+    if proxy:
+        env["BROWSER_PROXY"] = proxy
+    env_args = " ".join(f"-e {k}='{v}'" for k, v in env.items())
     cmd = (
         f"docker run -d --name {name} "
         f"--label {_PREFIX}.session_id={session_id} "
@@ -73,7 +88,7 @@ async def create_container(session_id: str) -> str:
         f"{env_args} "
         f"{IMAGE_NAME}"
     )
-    logger.info("Creating container: %s", name)
+    logger.info("Creating container: %s (%dx%d)", name, width, height)
     stdout, stderr, rc = await _run(cmd, timeout=30)
     if rc != 0:
         raise RuntimeError(f"docker run failed (rc={rc}): {stderr[:300]}")
@@ -113,14 +128,15 @@ async def unpause_container(session_id: str) -> None:
         raise RuntimeError(f"docker unpause failed: {stderr[:300]}")
 
 
-async def remove_container(session_id: str) -> None:
+async def remove_container(session_id: str, *, keep_volume: bool = False) -> None:
     name = container_name(session_id)
     vol_name = f"{name}-data"
-    logger.info("Removing container: %s", name)
+    logger.info("Removing container: %s (keep_volume=%s)", name, keep_volume)
     _, stderr, rc = await _run(f"docker rm -f {name}", timeout=15)
     if rc != 0:
         logger.warning("docker rm -f %s failed (rc=%d): %s — ignoring", name, rc, stderr[:200])
-    await _run(f"docker volume rm -f {vol_name}", timeout=10)
+    if not keep_volume:
+        await _run(f"docker volume rm -f {vol_name}", timeout=10)
 
 
 async def get_container_ports(session_id: str) -> dict[str, int]:
@@ -202,11 +218,27 @@ async def _wait_grid_ready(selenium_port: int) -> None:
     logger.warning("Grid readiness timeout on port %d after %.1fs", selenium_port, elapsed)
 
 
+async def _session_container_params(session_id: str) -> tuple[int, int, str | None, str | None]:
+    """Read device_preset + proxy_url from DB and resolve to container params."""
+    pool = get_pool()
+    row = await pool.fetchrow(
+        "SELECT device_preset, proxy_url FROM sessions WHERE id = $1",
+        session_id,
+    )
+    if not row:
+        preset_data = get_preset(DEFAULT_PRESET)
+        return preset_data["width"], preset_data["height"], None, None
+    preset_data = get_preset(row["device_preset"] or DEFAULT_PRESET)
+    proxy = row["proxy_url"] or None
+    return preset_data["width"], preset_data["height"], preset_data.get("user_agent"), proxy
+
+
 async def ensure_container_running(session_id: str) -> dict[str, int]:
     status = await get_container_status(session_id)
 
     if status == "not_found":
-        await create_container(session_id)
+        width, height, ua, proxy = await _session_container_params(session_id)
+        await create_container(session_id, width=width, height=height, user_agent=ua, proxy=proxy)
         ports = await get_container_ports(session_id)
         await _wait_grid_ready(ports["selenium_port"])
         return ports
@@ -222,3 +254,22 @@ async def ensure_container_running(session_id: str) -> dict[str, int]:
         return ports
 
     return await get_container_ports(session_id)
+
+
+async def recreate_container(
+    session_id: str,
+    width: int,
+    height: int,
+    user_agent: str | None = None,
+    proxy: str | None = None,
+) -> dict[str, int]:
+    """Stop, remove (keep volume), create with new params, wait for grid."""
+    try:
+        await stop_container(session_id)
+    except Exception:
+        pass
+    await remove_container(session_id, keep_volume=True)
+    await create_container(session_id, width=width, height=height, user_agent=user_agent, proxy=proxy)
+    ports = await get_container_ports(session_id)
+    await _wait_grid_ready(ports["selenium_port"])
+    return ports
