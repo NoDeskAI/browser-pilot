@@ -1,9 +1,23 @@
 import { reactive, readonly } from 'vue'
 import type { Session, DevicePreset } from '../types'
 import i18n from '../i18n'
+import { api } from '../lib/api'
+
+interface SiteInfo {
+  appTitle: string
+  edition: string
+  setupComplete: boolean
+  features: { sso: boolean; multiTenant: boolean }
+  cliCommandName: string
+  cliInstallCommand: string
+  cliPythonInstallCommand: string
+}
 
 interface BrandConfig {
   appTitle: string
+  edition: string
+  setupComplete: boolean
+  features: { sso: boolean; multiTenant: boolean }
   cliCommandName: string
   cliInstallCommand: string
   cliPythonInstallCommand: string
@@ -11,6 +25,9 @@ interface BrandConfig {
 
 const brand = reactive<BrandConfig>({
   appTitle: 'Browser Pilot',
+  edition: 'ce',
+  setupComplete: false,
+  features: { sso: false, multiTenant: false },
   cliCommandName: 'bpilot',
   cliInstallCommand: 'pip install bpilot-cli',
   cliPythonInstallCommand: 'pip install bpilot-cli',
@@ -19,8 +36,11 @@ const brand = reactive<BrandConfig>({
 async function fetchBrand(): Promise<void> {
   try {
     const res = await fetch('/api/site-info')
-    const data = await res.json()
+    const data: SiteInfo = await res.json()
     if (data.appTitle) brand.appTitle = data.appTitle
+    if (data.edition) brand.edition = data.edition
+    if (data.setupComplete !== undefined) brand.setupComplete = data.setupComplete
+    if (data.features) brand.features = data.features
     if (data.cliCommandName) brand.cliCommandName = data.cliCommandName
     if (data.cliInstallCommand) brand.cliInstallCommand = data.cliInstallCommand
     if (data.cliPythonInstallCommand) brand.cliPythonInstallCommand = data.cliPythonInstallCommand
@@ -51,7 +71,7 @@ const state = reactive<SessionsState>({
 
 async function fetchDevicePresets(): Promise<void> {
   try {
-    const res = await fetch('/api/device-presets')
+    const res = await api('/api/device-presets')
     const data = await res.json()
     state.devicePresets = data.presets || []
   } catch {
@@ -61,7 +81,7 @@ async function fetchDevicePresets(): Promise<void> {
 
 async function fetchSessions(): Promise<void> {
   try {
-    const res = await fetch('/api/sessions')
+    const res = await api('/api/sessions')
     const data = await res.json()
     state.sessions = (data.sessions || []).map((s: any) => ({
       ...s,
@@ -79,7 +99,7 @@ async function fetchSessions(): Promise<void> {
 
 async function createSession(name?: string): Promise<Session> {
   if (!name) name = i18n.global.t('session.defaultName')
-  const res = await fetch('/api/sessions', {
+  const res = await api('/api/sessions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name }),
@@ -109,7 +129,7 @@ async function _startContainerForSession(id: string): Promise<void> {
 
   state.containerLoading = true
   try {
-    const res = await fetch(`/api/sessions/${id}/container/start`, { method: 'POST' })
+    const res = await api(`/api/sessions/${id}/container/start`, { method: 'POST' })
     const data = await res.json()
     if (data.ok && data.ports) {
       state.activePorts = {
@@ -153,7 +173,7 @@ async function startContainer(id: string): Promise<void> {
 
   if (isActive) state.containerLoading = true
   try {
-    const res = await fetch(`/api/sessions/${id}/container/start`, { method: 'POST' })
+    const res = await api(`/api/sessions/${id}/container/start`, { method: 'POST' })
     const data = await res.json()
     if (data.ok && data.ports) {
       if (s) {
@@ -174,7 +194,7 @@ async function startContainer(id: string): Promise<void> {
 
 async function pauseContainer(id: string): Promise<void> {
   try {
-    await fetch(`/api/sessions/${id}/container/pause`, { method: 'POST' })
+    await api(`/api/sessions/${id}/container/pause`, { method: 'POST' })
     const s = state.sessions.find(s => s.id === id)
     if (s) {
       s.containerStatus = 'paused'
@@ -190,7 +210,7 @@ async function pauseContainer(id: string): Promise<void> {
 
 async function stopContainer(id: string): Promise<void> {
   try {
-    await fetch(`/api/sessions/${id}/container/stop`, { method: 'POST' })
+    await api(`/api/sessions/${id}/container/stop`, { method: 'POST' })
     const s = state.sessions.find(s => s.id === id)
     if (s) {
       s.containerStatus = 'exited'
@@ -207,7 +227,7 @@ async function stopContainer(id: string): Promise<void> {
 async function changeDevicePreset(id: string, preset: string): Promise<void> {
   state.containerRestarting = true
   try {
-    const res = await fetch(`/api/sessions/${id}/device-preset`, {
+    const res = await api(`/api/sessions/${id}/device-preset`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ preset }),
@@ -235,7 +255,7 @@ async function changeDevicePreset(id: string, preset: string): Promise<void> {
 async function changeProxy(id: string, proxyUrl: string): Promise<void> {
   state.containerRestarting = true
   try {
-    const res = await fetch(`/api/sessions/${id}/proxy`, {
+    const res = await api(`/api/sessions/${id}/proxy`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ proxyUrl }),
@@ -261,11 +281,11 @@ async function changeProxy(id: string, proxyUrl: string): Promise<void> {
 }
 
 async function deleteSession(id: string): Promise<void> {
-  await fetch(`/api/sessions/${id}`, { method: 'DELETE' })
+  await api(`/api/sessions/${id}`, { method: 'DELETE' })
   state.sessions = state.sessions.filter(s => s.id !== id)
   if (state.activeId === id) {
     state.activePorts = null
-    state.activeId = state.sessions.length ? state.sessions[0].id : null
+    state.activeId = state.sessions.length ? state.sessions[0]!.id : null
     if (state.activeId) {
       await saveAppState('active_session_id', state.activeId)
       await _startContainerForSession(state.activeId)
@@ -274,7 +294,7 @@ async function deleteSession(id: string): Promise<void> {
 }
 
 async function renameSession(id: string, name: string): Promise<void> {
-  await fetch(`/api/sessions/${id}`, {
+  await api(`/api/sessions/${id}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name }),
@@ -285,7 +305,7 @@ async function renameSession(id: string, name: string): Promise<void> {
 
 async function getAppState(key: string): Promise<string | null> {
   try {
-    const res = await fetch(`/api/app-state/${key}`)
+    const res = await api(`/api/app-state/${key}`)
     const data = await res.json()
     return data.value ?? null
   } catch {
@@ -295,7 +315,7 @@ async function getAppState(key: string): Promise<string | null> {
 
 async function saveAppState(key: string, value: string): Promise<void> {
   try {
-    await fetch(`/api/app-state/${key}`, {
+    await api(`/api/app-state/${key}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ value }),
@@ -312,7 +332,7 @@ async function init(): Promise<void> {
   if (savedId && state.sessions.some(s => s.id === savedId)) {
     state.activeId = savedId
   } else if (state.sessions.length) {
-    state.activeId = state.sessions[0].id
+    state.activeId = state.sessions[0]!.id
   }
 
   if (state.activeId) {

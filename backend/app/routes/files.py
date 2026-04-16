@@ -1,13 +1,15 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
+
+from app.auth.dependencies import CurrentUser, get_current_user
 
 router = APIRouter()
 
 
 @router.get("/api/files/{file_id}.{ext}")
-async def serve_file(file_id: str, ext: str):
+async def serve_file(file_id: str, ext: str, _user: CurrentUser = Depends(get_current_user)):
     from app.file_store import BuiltinStore, get_store
 
     store = await get_store()

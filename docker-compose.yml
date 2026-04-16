@@ -11,6 +11,7 @@ services:
       - path: .env
         required: false
     environment:
+      PROJECT_ROOT: /app
       DATABASE_URL: postgresql://${POSTGRES_USER:-nodeskpane}:${POSTGRES_PASSWORD:-nodeskpane}@postgres:5432/${POSTGRES_DB:-nodeskpane}
       DOCKER_HOST_ADDR: host.docker.internal
     depends_on:

@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import json
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
+from app.auth.dependencies import CurrentUser, require_role
 from app.db import get_pool
 
 router = APIRouter()
@@ -24,7 +25,7 @@ class StorageConfig(BaseModel):
 
 
 @router.get("/api/settings/storage")
-async def get_storage_settings():
+async def get_storage_settings(_user: CurrentUser = Depends(require_role(["superadmin", "admin"]))):
     pool = get_pool()
     row = await pool.fetchrow("SELECT value FROM app_state WHERE key = $1", _KEY)
     if row:
@@ -33,7 +34,7 @@ async def get_storage_settings():
 
 
 @router.put("/api/settings/storage")
-async def save_storage_settings(body: StorageConfig):
+async def save_storage_settings(body: StorageConfig, _user: CurrentUser = Depends(require_role(["superadmin", "admin"]))):
     pool = get_pool()
     await pool.execute(
         """INSERT INTO app_state (key, value) VALUES ($1, $2)

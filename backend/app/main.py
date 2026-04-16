@@ -15,12 +15,15 @@ from fastapi.staticfiles import StaticFiles
 from app import db
 from app.config import APP_TITLE
 from app.logging_config import setup_logging
+from app.auth.routes import router as auth_router
 from app.routes.docker import router as docker_router
 from app.routes.browser import router as browser_router
 from app.routes.sessions import router as sessions_router
 from app.routes.cli import router as cli_router
 from app.routes.settings import router as settings_router
 from app.routes.files import router as files_router
+from app.routes.users import router as users_router
+from app.edition import register_ee
 
 setup_logging()
 logger = logging.getLogger("access")
@@ -79,12 +82,16 @@ async def _readiness():
     return JSONResponse({"status": "waiting for database"}, status_code=503)
 
 
+app.include_router(auth_router)
 app.include_router(browser_router)
 app.include_router(docker_router)
 app.include_router(sessions_router)
 app.include_router(cli_router)
 app.include_router(settings_router)
 app.include_router(files_router)
+app.include_router(users_router)
+
+register_ee(app)
 
 _STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 

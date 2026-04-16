@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { reactive, ref, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { api } from '../lib/api'
 
 const { t } = useI18n()
 
@@ -20,7 +21,7 @@ const saved = ref(false)
 
 onMounted(async () => {
   try {
-    const res = await fetch('/api/settings/storage')
+    const res = await api('/api/settings/storage')
     if (res.ok) {
       const data = await res.json()
       Object.assign(form, data)
@@ -32,7 +33,7 @@ async function saveSettings() {
   saving.value = true
   saved.value = false
   try {
-    const res = await fetch('/api/settings/storage', {
+    const res = await api('/api/settings/storage', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(form),

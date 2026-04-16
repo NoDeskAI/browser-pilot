@@ -4,9 +4,10 @@ import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { setLocale, getLocale } from './i18n'
 import { useSessions } from './composables/useSessions'
-import { Settings, ArrowLeft } from 'lucide-vue-next'
+import { useAuth } from './composables/useAuth'
+import { Settings, ArrowLeft, LogOut, Users } from 'lucide-vue-next'
 
-const { locale } = useI18n()
+const { t, locale } = useI18n()
 const route = useRoute()
 const router = useRouter()
 
@@ -15,6 +16,7 @@ function toggleLocale() {
 }
 
 const { brand, init: initSessions } = useSessions()
+const { user, isAuthenticated, logout, fetchMe } = useAuth()
 
 const titleParts = computed(() => {
   const words = brand.appTitle.split(' ')
@@ -22,10 +24,22 @@ const titleParts = computed(() => {
   return { prefix: words.join(' '), accent }
 })
 
-const isSettings = computed(() => route.path === '/settings')
+const isSettings = computed(() => route.path === '/settings' || route.path === '/users')
+const isAuthPage = computed(() => route.path === '/login' || route.path === '/setup')
+const showUsersLink = computed(() => user.value && (user.value.role === 'superadmin' || user.value.role === 'admin'))
+
+function handleLogout() {
+  logout()
+  router.push('/login')
+}
 
 onMounted(async () => {
-  await initSessions()
+  if (isAuthenticated.value) {
+    await fetchMe()
+  }
+  if (!isAuthPage.value && isAuthenticated.value) {
+    await initSessions()
+  }
   document.title = brand.appTitle
 })
 
@@ -36,7 +50,7 @@ watch(() => brand.appTitle, (title) => {
 
 <template>
   <div class="h-screen flex flex-col bg-[var(--color-bg)] overflow-hidden">
-    <header class="shrink-0 flex items-center gap-3 px-5 py-2.5 border-b border-[var(--color-border)] bg-[var(--color-surface)]">
+    <header v-if="!isAuthPage" class="shrink-0 flex items-center gap-3 px-5 py-2.5 border-b border-[var(--color-border)] bg-[var(--color-surface)]">
       <button
         v-if="isSettings"
         @click="router.push('/')"
@@ -52,6 +66,14 @@ watch(() => brand.appTitle, (title) => {
 
       <div class="ml-auto flex items-center gap-2">
         <button
+          v-if="showUsersLink && !isSettings"
+          @click="router.push('/users')"
+          class="shrink-0 w-7 h-7 flex items-center justify-center rounded-md text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-hover)] transition-colors"
+          :title="t('users.title')"
+        >
+          <Users class="w-4 h-4" />
+        </button>
+        <button
           v-if="!isSettings"
           @click="router.push('/settings')"
           class="shrink-0 w-7 h-7 flex items-center justify-center rounded-md text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-hover)] transition-colors"
@@ -63,6 +85,16 @@ watch(() => brand.appTitle, (title) => {
           @click="toggleLocale"
           class="px-2.5 py-1.5 rounded-lg text-xs font-medium border border-[var(--color-border)] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:border-[var(--color-text-dim)] transition-colors"
         >{{ locale === 'zh' ? '中文 | EN' : 'EN | 中文' }}</button>
+
+        <span v-if="user" class="text-xs text-[var(--color-text-dim)] truncate max-w-[120px]">{{ user.email }}</span>
+        <button
+          v-if="isAuthenticated"
+          @click="handleLogout"
+          class="shrink-0 w-7 h-7 flex items-center justify-center rounded-md text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-hover)] transition-colors"
+          :title="t('auth.logout')"
+        >
+          <LogOut class="w-4 h-4" />
+        </button>
       </div>
     </header>
 

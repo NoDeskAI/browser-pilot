@@ -5,7 +5,7 @@ import { Trash2, Play, Pause, SquareTerminal, Check } from 'lucide-vue-next'
 import type { Session } from '../types'
 import { useSessions } from '../composables/useSessions'
 
-const { t, locale } = useI18n()
+const { t } = useI18n()
 const { brand } = useSessions()
 
 const props = defineProps<{

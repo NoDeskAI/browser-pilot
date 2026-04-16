@@ -2,6 +2,7 @@
 import { ref, watch, onUnmounted, nextTick, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ChevronUp, ChevronDown, Trash2 } from 'lucide-vue-next'
+import { api } from '../lib/api'
 
 const { t, locale } = useI18n()
 
@@ -23,8 +24,6 @@ const panelHeight = ref(200)
 const isResizingPanel = ref(false)
 const logContainer = ref<HTMLElement | null>(null)
 let pollTimer: ReturnType<typeof setInterval> | null = null
-
-const FILTER_KEYS = [null, 'console', 'network', 'navigation', 'error'] as const
 
 const FILTERS = computed(() => [
   { key: null, label: t('logs.all') },
@@ -73,7 +72,7 @@ async function fetchLogs() {
   if (!props.sessionId) return
   const typeParam = activeFilter.value ? `&log_type=${activeFilter.value}` : ''
   try {
-    const resp = await fetch(`/api/sessions/${props.sessionId}/logs?tail=150${typeParam}`)
+    const resp = await api(`/api/sessions/${props.sessionId}/logs?tail=150${typeParam}`)
     const data = await resp.json()
     if (data.logs) {
       logs.value = data.logs.reverse()

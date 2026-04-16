@@ -4,9 +4,10 @@ import json
 import logging
 import uuid
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
+from app.auth.dependencies import CurrentUser, get_current_user, require_role
 from app.container import (
     ensure_container_running,
     exec_in_container,
@@ -22,6 +23,18 @@ from app.device_presets import DEVICE_PRESETS, DEFAULT_PRESET, get_preset
 
 logger = logging.getLogger("routes.sessions")
 router = APIRouter()
+
+
+async def _verify_session_tenant(session_id: str, user: CurrentUser) -> None:
+    """Raise 404 if session doesn't belong to the user's tenant."""
+    pool = get_pool()
+    row = await pool.fetchrow(
+        "SELECT tenant_id FROM sessions WHERE id = $1", session_id,
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if row["tenant_id"] and row["tenant_id"] != user.tenant_id:
+        raise HTTPException(status_code=404, detail="Session not found")
 
 
 class CreateSessionBody(BaseModel):
@@ -53,14 +66,22 @@ _VALID_PROXY_SCHEMES = ("http://", "https://", "socks4://", "socks5://")
 # -----------------------------------------------------------------------
 
 @router.get("/api/sessions")
-async def list_sessions():
+async def list_sessions(user: CurrentUser = Depends(get_current_user)):
     pool = get_pool()
-    rows = await pool.fetch("""
-        SELECT id, name, created_at, updated_at, current_url, current_title,
-               device_preset, proxy_url
-        FROM sessions
-        ORDER BY updated_at DESC
-    """)
+    if user.role in ("superadmin", "admin"):
+        rows = await pool.fetch("""
+            SELECT id, name, created_at, updated_at, current_url, current_title,
+                   device_preset, proxy_url, user_id
+            FROM sessions WHERE tenant_id = $1
+            ORDER BY updated_at DESC
+        """, user.tenant_id)
+    else:
+        rows = await pool.fetch("""
+            SELECT id, name, created_at, updated_at, current_url, current_title,
+                   device_preset, proxy_url, user_id
+            FROM sessions WHERE tenant_id = $1 AND user_id = $2
+            ORDER BY updated_at DESC
+        """, user.tenant_id, user.id)
 
     all_statuses = await get_all_container_statuses()
 
@@ -96,27 +117,28 @@ async def list_sessions():
 
 
 @router.post("/api/sessions")
-async def create_session(body: CreateSessionBody):
+async def create_session(body: CreateSessionBody, user: CurrentUser = Depends(get_current_user)):
     pool = get_pool()
     session_id = str(uuid.uuid4())
     preset_id = body.devicePreset if body.devicePreset in DEVICE_PRESETS else DEFAULT_PRESET
     await pool.execute(
-        "INSERT INTO sessions (id, name, device_preset, proxy_url) VALUES ($1, $2, $3, $4)",
-        session_id, body.name, preset_id, body.proxyUrl,
+        "INSERT INTO sessions (id, name, device_preset, proxy_url, tenant_id, user_id) VALUES ($1, $2, $3, $4, $5, $6)",
+        session_id, body.name, preset_id, body.proxyUrl, user.tenant_id, user.id,
     )
     logger.info("Session created: %s (%s) preset=%s", session_id, body.name, preset_id)
     return {"id": session_id, "name": body.name, "devicePreset": preset_id, "proxyUrl": body.proxyUrl}
 
 
 @router.get("/api/sessions/{session_id}")
-async def get_session(session_id: str):
+async def get_session(session_id: str, user: CurrentUser = Depends(get_current_user)):
+    await _verify_session_tenant(session_id, user)
     pool = get_pool()
     row = await pool.fetchrow(
         "SELECT id, name, created_at, updated_at, current_url, current_title, device_preset, proxy_url FROM sessions WHERE id = $1",
         session_id,
     )
     if not row:
-        return {"error": "not found"}
+        raise HTTPException(status_code=404, detail="Session not found")
     return {
         "id": row["id"],
         "name": row["name"],
@@ -130,7 +152,8 @@ async def get_session(session_id: str):
 
 
 @router.patch("/api/sessions/{session_id}")
-async def update_session(session_id: str, body: UpdateSessionBody):
+async def update_session(session_id: str, body: UpdateSessionBody, user: CurrentUser = Depends(get_current_user)):
+    await _verify_session_tenant(session_id, user)
     pool = get_pool()
     await pool.execute(
         "UPDATE sessions SET name = $1, updated_at = NOW() WHERE id = $2",
@@ -140,7 +163,8 @@ async def update_session(session_id: str, body: UpdateSessionBody):
 
 
 @router.delete("/api/sessions/{session_id}")
-async def delete_session(session_id: str):
+async def delete_session(session_id: str, user: CurrentUser = Depends(get_current_user)):
+    await _verify_session_tenant(session_id, user)
     pool = get_pool()
     await remove_container(session_id)
     await pool.execute("DELETE FROM sessions WHERE id = $1", session_id)
@@ -153,7 +177,8 @@ async def delete_session(session_id: str):
 # -----------------------------------------------------------------------
 
 @router.post("/api/sessions/{session_id}/container/start")
-async def start_session_container(session_id: str):
+async def start_session_container(session_id: str, user: CurrentUser = Depends(get_current_user)):
+    await _verify_session_tenant(session_id, user)
     try:
         ports = await ensure_container_running(session_id)
         return {"ok": True, "ports": ports}
@@ -163,7 +188,8 @@ async def start_session_container(session_id: str):
 
 
 @router.post("/api/sessions/{session_id}/container/stop")
-async def stop_session_container(session_id: str):
+async def stop_session_container(session_id: str, user: CurrentUser = Depends(get_current_user)):
+    await _verify_session_tenant(session_id, user)
     try:
         await stop_container(session_id)
         return {"ok": True}
@@ -173,7 +199,8 @@ async def stop_session_container(session_id: str):
 
 
 @router.post("/api/sessions/{session_id}/container/pause")
-async def pause_session_container(session_id: str):
+async def pause_session_container(session_id: str, user: CurrentUser = Depends(get_current_user)):
+    await _verify_session_tenant(session_id, user)
     try:
         await pause_container(session_id)
         return {"ok": True}
@@ -183,7 +210,8 @@ async def pause_session_container(session_id: str):
 
 
 @router.post("/api/sessions/{session_id}/container/unpause")
-async def unpause_session_container(session_id: str):
+async def unpause_session_container(session_id: str, user: CurrentUser = Depends(get_current_user)):
+    await _verify_session_tenant(session_id, user)
     try:
         ports = await ensure_container_running(session_id)
         return {"ok": True, "ports": ports}
@@ -197,7 +225,7 @@ async def unpause_session_container(session_id: str):
 # -----------------------------------------------------------------------
 
 @router.get("/api/device-presets")
-async def list_device_presets():
+async def list_device_presets(_user: CurrentUser = Depends(get_current_user)):
     presets = []
     for pid, p in DEVICE_PRESETS.items():
         entry = {"id": pid, "label": p["label"], "category": p["category"], "width": p["width"], "height": p["height"]}
@@ -210,7 +238,8 @@ async def list_device_presets():
 
 
 @router.post("/api/sessions/{session_id}/device-preset")
-async def change_device_preset(session_id: str, body: DevicePresetBody):
+async def change_device_preset(session_id: str, body: DevicePresetBody, user: CurrentUser = Depends(get_current_user)):
+    await _verify_session_tenant(session_id, user)
     if body.preset not in DEVICE_PRESETS:
         return {"ok": False, "error": f"Unknown preset: {body.preset}"}
     pool = get_pool()
@@ -236,7 +265,8 @@ async def change_device_preset(session_id: str, body: DevicePresetBody):
 
 
 @router.post("/api/sessions/{session_id}/proxy")
-async def change_proxy(session_id: str, body: ProxyBody):
+async def change_proxy(session_id: str, body: ProxyBody, user: CurrentUser = Depends(get_current_user)):
+    await _verify_session_tenant(session_id, user)
     proxy_url = body.proxyUrl.strip()
     if proxy_url and not proxy_url.startswith(_VALID_PROXY_SCHEMES):
         return {"ok": False, "error": "Proxy URL must start with http://, https://, socks4://, or socks5://"}
@@ -266,7 +296,8 @@ async def change_proxy(session_id: str, body: ProxyBody):
 # -----------------------------------------------------------------------
 
 @router.get("/api/sessions/{session_id}/logs")
-async def get_session_logs(session_id: str, tail: int = 200, log_type: str | None = None):
+async def get_session_logs(session_id: str, tail: int = 200, log_type: str | None = None, user: CurrentUser = Depends(get_current_user)):
+    await _verify_session_tenant(session_id, user)
     try:
         stdout = await exec_in_container(
             session_id, f"tail -n {min(tail, 1000)} /tmp/cdp-events.jsonl"
@@ -291,13 +322,22 @@ async def get_session_logs(session_id: str, tail: int = 200, log_type: str | Non
 
 @router.get("/api/site-info")
 async def get_site_info(request: Request):
-    from ..config import APP_TITLE, CLI_COMMAND_NAME
+    from ..config import APP_TITLE, CLI_COMMAND_NAME, EDITION
     from .cli import get_cli_install_info
+
+    pool = get_pool()
+    user_count = await pool.fetchval("SELECT COUNT(*) FROM users")
 
     base = str(request.base_url).rstrip("/")
     cli_info = get_cli_install_info(base)
     return {
         "appTitle": APP_TITLE,
+        "edition": EDITION,
+        "setupComplete": user_count > 0,
+        "features": {
+            "sso": EDITION == "ee",
+            "multiTenant": EDITION == "ee",
+        },
         "cliCommandName": CLI_COMMAND_NAME,
         "cliInstallCommand": cli_info["shell"],
         "cliPythonInstallCommand": cli_info["python"],
@@ -308,7 +348,7 @@ async def get_site_info(request: Request):
 # -----------------------------------------------------------------------
 
 @router.get("/api/app-state/{key}")
-async def get_app_state(key: str):
+async def get_app_state(key: str, _user: CurrentUser = Depends(get_current_user)):
     pool = get_pool()
     row = await pool.fetchrow(
         "SELECT value FROM app_state WHERE key = $1", key,
@@ -319,7 +359,7 @@ async def get_app_state(key: str):
 
 
 @router.put("/api/app-state/{key}")
-async def set_app_state(key: str, body: AppStateBody):
+async def set_app_state(key: str, body: AppStateBody, _user: CurrentUser = Depends(require_role(["superadmin", "admin"]))):
     pool = get_pool()
     await pool.execute(
         """INSERT INTO app_state (key, value) VALUES ($1, $2)

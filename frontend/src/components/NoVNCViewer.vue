@@ -3,6 +3,7 @@ import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import RFB from '@novnc/novnc'
 import { useSessions } from '../composables/useSessions'
+import { api } from '../lib/api'
 
 const { t } = useI18n()
 const { state: sessState, changeDevicePreset, changeProxy } = useSessions()
@@ -169,12 +170,12 @@ async function navigate(url: string) {
   currentRate.value = 0
   bytesWindow = []
   try {
-    const resp = await fetch('/api/docker/navigate', {
+    const resp = await api('/api/docker/navigate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sessionId: props.sessionId, url }),
     })
-    const data = await resp.json()
+    await resp.json()
   } catch { /* ignore */ }
 }
 
@@ -182,7 +183,7 @@ async function pasteClipboard() {
   if (!clipboardText.value || clipLoading.value) return
   clipLoading.value = true
   try {
-    await fetch('/api/docker/clipboard', {
+    await api('/api/docker/clipboard', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sessionId: props.sessionId, action: 'paste', text: clipboardText.value }),
@@ -195,7 +196,7 @@ async function getRemoteClipboard() {
   if (clipLoading.value) return
   clipLoading.value = true
   try {
-    const resp = await fetch('/api/docker/clipboard', {
+    const resp = await api('/api/docker/clipboard', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sessionId: props.sessionId, action: 'get' }),
@@ -262,7 +263,7 @@ async function changeLang(lang: string) {
   langLoading.value = true
   langError.value = ''
   try {
-    const resp = await fetch('/api/docker/browser-lang', {
+    const resp = await api('/api/docker/browser-lang', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sessionId: props.sessionId, lang }),

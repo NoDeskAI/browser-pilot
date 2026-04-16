@@ -15,7 +15,11 @@ def _url(path: str, *, api_url: str = "") -> str:
 
 
 def _client() -> httpx.Client:
-    return httpx.Client(timeout=_TIMEOUT)
+    headers: dict[str, str] = {}
+    api_token = get("api_token")
+    if api_token:
+        headers["Authorization"] = f"Bearer {api_token}"
+    return httpx.Client(timeout=_TIMEOUT, headers=headers)
 
 
 def post(path: str, body: dict | None = None, *, api_url: str = "") -> dict:
