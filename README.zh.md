@@ -4,7 +4,7 @@
 
 面向 AI Agent 的远程浏览器自动化。每个会话运行在独立的 Docker 容器中，内置 Chrome、Selenium、反检测隐身机制和 noVNC 查看器 — 可通过 REST API、CLI 或内置 Web UI 控制。
 
-![Session Viewer](docs/screenshots/session-viewer.png)
+Session Viewer
 
 ## 快速开始
 
@@ -18,9 +18,9 @@ cd browser-pilot
 docker compose build && docker compose up -d
 ```
 
-打开 **http://localhost:8000** — 即可看到带会话管理和实时浏览器查看器（noVNC）的 Web UI。
+打开 **[http://localhost:8000](http://localhost:8000)** — 即可看到带会话管理和实时浏览器查看器（noVNC）的 Web UI。
 
-![Dashboard](docs/screenshots/dashboard.png)
+Dashboard
 
 ### Apple Silicon / ARM 用户
 
@@ -34,7 +34,7 @@ echo 'SELENIUM_BASE_IMAGE=seleniarm/standalone-chromium:latest' > .env
 
 安装 `bpilot` 命令行工具，可以从终端驱动浏览器，也可以对接 OpenClaw 等外部 Agent 框架。Web UI 中有一个 **CLI Access** 按钮，可一键生成完整的 CLI 命令参考文档，直接粘贴给你的 AI Agent 使用。
 
-![CLI Access](docs/screenshots/cli-access.png)
+CLI Access
 
 ```bash
 pip install bpilot-cli           # 从 PyPI 安装
@@ -110,13 +110,15 @@ cp .env.example .env
 
 ## 配置项
 
-| Variable              | Default                                                        | Description                                                                          |
-| --------------------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| `DATABASE_URL`        | `postgresql://nodeskpane:nodeskpane@localhost:5432/nodeskpane` | PostgreSQL 连接字符串                                                                 |
-| `SELENIUM_BASE_IMAGE` | `selenium/standalone-chrome:latest`                            | 浏览器容器基础镜像。ARM 用户使用 `seleniarm/standalone-chromium:latest`                |
+
+| Variable              | Default                                                        | Description                                                           |
+| --------------------- | -------------------------------------------------------------- | --------------------------------------------------------------------- |
+| `DATABASE_URL`        | `postgresql://nodeskpane:nodeskpane@localhost:5432/nodeskpane` | PostgreSQL 连接字符串                                                      |
+| `SELENIUM_BASE_IMAGE` | `selenium/standalone-chrome:latest`                            | 浏览器容器基础镜像。ARM 用户使用 `seleniarm/standalone-chromium:latest`             |
 | `DOCKER_HOST_ADDR`    | `localhost`                                                    | 后端访问浏览器容器的地址。Docker 部署时设为 `host.docker.internal`（docker-compose 自动配置） |
-| `OPENAI_API_KEY`      | —                                                              | 可选。设置后会用 LLM 在首次导航时自动命名会话，未设置则以页面标题命名                        |
-| `LOG_LEVEL`           | `INFO`                                                         | 后端日志级别。排查问题时可设为 `DEBUG`                                                   |
+| `OPENAI_API_KEY`      | —                                                              | 可选。设置后会用 LLM 在首次导航时自动命名会话，未设置则以页面标题命名                                 |
+| `LOG_LEVEL`           | `INFO`                                                         | 后端日志级别。排查问题时可设为 `DEBUG`                                               |
+
 
 ## 安全说明
 

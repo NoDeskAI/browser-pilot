@@ -4,7 +4,7 @@
 
 Remote browser automation for AI Agents. Each session runs in an isolated Docker container with Chrome, Selenium, anti-bot stealth, and a noVNC viewer — controllable via REST API, CLI, or the built-in web UI.
 
-Session Viewer
+![Session Viewer](docs/screenshots/session-viewer.png)
 
 ## Quick Start
 
@@ -20,7 +20,7 @@ docker compose build && docker compose up -d
 
 Open **[http://localhost:8000](http://localhost:8000)** — you'll see the web UI with session management and a live browser viewer (noVNC).
 
-Dashboard
+![Dashboard](docs/screenshots/dashboard.png)
 
 ### Apple Silicon / ARM users
 
@@ -34,7 +34,7 @@ echo 'SELENIUM_BASE_IMAGE=seleniarm/standalone-chromium:latest' > .env
 
 Install the `bpilot` command-line tool to drive the browser from your terminal or integrate with external Agent frameworks like OpenClaw. The web UI includes a **CLI Access** button that generates a ready-to-paste command reference for your AI agent.
 
-CLI Access
+![CLI Access](docs/screenshots/cli-access.png)
 
 ```bash
 pip install bpilot-cli           # from PyPI
