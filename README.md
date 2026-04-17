@@ -115,7 +115,7 @@ This starts PostgreSQL in Docker, builds the Selenium image, and runs the backen
 
 | Variable              | Default                                                        | Description                                                                                                                        |
 | --------------------- | -------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `DATABASE_URL`        | `postgresql://nodeskpane:nodeskpane@localhost:5432/nodeskpane` | PostgreSQL connection string                                                                                                       |
+| `DATABASE_URL`        | `postgresql://bpilot:bpilot@localhost:5432/bpilot` | PostgreSQL connection string                                                                                                       |
 | `SELENIUM_BASE_IMAGE` | `selenium/standalone-chrome:latest`                            | Base image for browser containers. ARM users: `seleniarm/standalone-chromium:latest`                                               |
 | `DOCKER_HOST_ADDR`    | `localhost`                                                    | How the backend reaches browser containers. Set to `host.docker.internal` in Docker deployment (auto-configured by docker-compose) |
 | `OPENAI_API_KEY`      | —                                                              | Optional. When set, uses LLM to auto-name sessions on first navigation. Without it, sessions are named by page title.              |

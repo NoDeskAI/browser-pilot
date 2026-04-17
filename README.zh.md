@@ -113,7 +113,7 @@ cp .env.example .env
 
 | Variable              | Default                                                        | Description                                                           |
 | --------------------- | -------------------------------------------------------------- | --------------------------------------------------------------------- |
-| `DATABASE_URL`        | `postgresql://nodeskpane:nodeskpane@localhost:5432/nodeskpane` | PostgreSQL 连接字符串                                                      |
+| `DATABASE_URL`        | `postgresql://bpilot:bpilot@localhost:5432/bpilot` | PostgreSQL 连接字符串                                                      |
 | `SELENIUM_BASE_IMAGE` | `selenium/standalone-chrome:latest`                            | 浏览器容器基础镜像。ARM 用户使用 `seleniarm/standalone-chromium:latest`             |
 | `DOCKER_HOST_ADDR`    | `localhost`                                                    | 后端访问浏览器容器的地址。Docker 部署时设为 `host.docker.internal`（docker-compose 自动配置） |
 | `OPENAI_API_KEY`      | —                                                              | 可选。设置后会用 LLM 在首次导航时自动命名会话，未设置则以页面标题命名                                 |
