@@ -1,0 +1,3 @@
+[submodule "ee"]
+	path = ee
+	url = https://github.com/NoDeskAI/browser-pilot-ee.git
