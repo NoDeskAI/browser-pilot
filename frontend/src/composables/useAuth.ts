@@ -6,6 +6,7 @@ export interface AuthUser {
   name: string
   role: string
   tenantId: string
+  createdAt?: string
 }
 
 const _token = ref<string | null>(localStorage.getItem('auth_token'))

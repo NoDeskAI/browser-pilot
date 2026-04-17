@@ -3,6 +3,9 @@ import { ref, watch, onUnmounted, nextTick, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ChevronUp, ChevronDown, Trash2 } from 'lucide-vue-next'
 import { api } from '../lib/api'
+import {
+  Tooltip, TooltipContent, TooltipProvider, TooltipTrigger,
+} from '@/components/ui/tooltip'
 
 const { t, locale } = useI18n()
 
@@ -44,7 +47,7 @@ function typeColor(type: string): string {
     case 'navigation': return 'text-green-400'
     case 'error': return 'text-red-400'
     case 'console': return 'text-yellow-300'
-    default: return 'text-[var(--color-text-dim)]'
+    default: return 'text-muted-foreground'
   }
 }
 
@@ -145,85 +148,83 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="shrink-0 border-t border-[var(--color-border)]">
-    <!-- Resize handle -->
-    <div
-      v-if="expanded"
-      class="h-1 cursor-row-resize hover:bg-[var(--color-accent)]/30 active:bg-[var(--color-accent)]/50 transition-colors"
-      :class="isResizingPanel ? 'bg-[var(--color-accent)]/50' : ''"
-      @mousedown="startResizePanel"
-    />
-
-    <!-- Header bar -->
-    <div
-      class="flex items-center gap-2 px-3 py-1 bg-[var(--color-surface)] cursor-pointer select-none"
-      @click="toggleExpanded"
-    >
-      <component :is="expanded ? ChevronDown : ChevronUp" class="w-3.5 h-3.5 text-[var(--color-text-dim)]" />
-      <span class="text-[11px] font-medium text-[var(--color-text-dim)]">{{ t('logs.title') }}</span>
-
-      <template v-if="expanded">
-        <div class="flex items-center gap-1 ml-2" @click.stop>
-          <button
-            v-for="f in FILTERS"
-            :key="f.key ?? 'all'"
-            @click="activeFilter = f.key; fetchLogs()"
-            class="px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors"
-            :class="activeFilter === f.key
-              ? 'bg-[var(--color-accent)]/20 text-[var(--color-accent)]'
-              : 'text-[var(--color-text-dim)] hover:text-[var(--color-text)]'"
-          >
-            {{ f.label }}
-          </button>
-        </div>
-      </template>
-
-      <div class="ml-auto flex items-center gap-1" v-if="expanded" @click.stop>
-        <span class="text-[10px] text-[var(--color-text-dim)]">{{ filteredLogs.length }}</span>
-        <button
-          @click="clearLogs"
-          class="p-0.5 rounded text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors"
-          :title="t('logs.clear')"
-        >
-          <Trash2 class="w-3 h-3" />
-        </button>
-      </div>
-    </div>
-
-    <!-- Log content -->
-    <div
-      v-if="expanded"
-      ref="logContainer"
-      class="overflow-y-auto bg-[var(--color-bg)] font-mono text-[11px] leading-5"
-      :style="{ height: panelHeight + 'px' }"
-    >
-      <div v-if="filteredLogs.length === 0" class="flex items-center justify-center h-full text-[var(--color-text-dim)] text-xs">
-        {{ t('logs.empty') }}
-      </div>
+  <TooltipProvider :delay-duration="300">
+    <div class="shrink-0 border-t border-border">
+      <!-- Resize handle -->
       <div
-        v-for="(entry, i) in filteredLogs"
-        :key="i"
-        class="flex items-start gap-2 px-3 py-0.5 hover:bg-[var(--color-surface-hover)]/50"
-        :class="entry.type === 'error' ? 'bg-red-500/5' : ''"
+        v-if="expanded"
+        class="h-1 cursor-row-resize hover:bg-primary/20 active:bg-primary/40 transition-colors"
+        :class="isResizingPanel ? 'bg-primary/40' : ''"
+        @mousedown="startResizePanel"
+      />
+
+      <!-- Header bar -->
+      <div
+        class="flex items-center gap-2 px-3 py-1 cursor-pointer select-none"
+        @click="toggleExpanded"
       >
-        <span class="shrink-0 text-[var(--color-text-dim)] opacity-60 w-[60px]">{{ formatTime(entry.ts) }}</span>
-        <span
-          class="shrink-0 w-[28px] text-center font-bold"
-          :class="typeColor(entry.type)"
-        >{{ typeLabel(entry.type) }}</span>
-        <span
-          class="flex-1 break-all"
-          :class="entry.type === 'error' ? 'text-red-400' : 'text-[var(--color-text)]'"
-        >{{ entry.summary }}</span>
+        <component :is="expanded ? ChevronDown : ChevronUp" class="size-3.5 text-muted-foreground" />
+        <span class="text-[11px] font-medium text-muted-foreground">{{ t('logs.title') }}</span>
+
+        <template v-if="expanded">
+          <div class="flex items-center gap-0.5 ml-2" @click.stop>
+            <button
+              v-for="f in FILTERS"
+              :key="f.key ?? 'all'"
+              @click="activeFilter = f.key; fetchLogs()"
+              class="px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors"
+              :class="activeFilter === f.key
+                ? 'bg-primary/15 text-primary'
+                : 'text-muted-foreground hover:text-foreground'"
+            >
+              {{ f.label }}
+            </button>
+          </div>
+        </template>
+
+        <div class="ml-auto flex items-center gap-1" v-if="expanded" @click.stop>
+          <span class="text-[10px] text-muted-foreground">{{ filteredLogs.length }}</span>
+          <Tooltip>
+            <TooltipTrigger as-child>
+              <button
+                @click="clearLogs"
+                class="p-0.5 rounded text-muted-foreground hover:text-foreground transition-colors"
+              >
+                <Trash2 class="size-3" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent>{{ t('logs.clear') }}</TooltipContent>
+          </Tooltip>
+        </div>
+      </div>
+
+      <!-- Log content -->
+      <div
+        v-if="expanded"
+        ref="logContainer"
+        class="overflow-y-auto bg-background font-mono text-[11px] leading-5"
+        :style="{ height: panelHeight + 'px' }"
+      >
+        <div v-if="filteredLogs.length === 0" class="flex items-center justify-center h-full text-muted-foreground text-xs">
+          {{ t('logs.empty') }}
+        </div>
+        <div
+          v-for="(entry, i) in filteredLogs"
+          :key="i"
+          class="flex items-start gap-2 px-3 py-0.5 hover:bg-accent/50"
+          :class="entry.type === 'error' ? 'bg-red-500/5' : ''"
+        >
+          <span class="shrink-0 text-muted-foreground/60 w-[60px]">{{ formatTime(entry.ts) }}</span>
+          <span
+            class="shrink-0 w-[28px] text-center font-bold"
+            :class="typeColor(entry.type)"
+          >{{ typeLabel(entry.type) }}</span>
+          <span
+            class="flex-1 break-all"
+            :class="entry.type === 'error' ? 'text-red-400' : 'text-foreground'"
+          >{{ entry.summary }}</span>
+        </div>
       </div>
     </div>
-  </div>
+  </TooltipProvider>
 </template>
-
-<style>
-body.resizing-panel,
-body.resizing-panel * {
-  cursor: row-resize !important;
-  user-select: none !important;
-}
-</style>

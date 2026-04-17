@@ -5,6 +5,11 @@ import { useRouter } from 'vue-router'
 import { useAuth } from '../composables/useAuth'
 import { useSessions } from '../composables/useSessions'
 import { invalidateSiteInfoCache } from '../router'
+import { setLocale, getLocale } from '../i18n'
+import { Loader2 } from 'lucide-vue-next'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 
 const { t } = useI18n()
 const router = useRouter()
@@ -51,75 +56,55 @@ async function handleSetup() {
     loading.value = false
   }
 }
+
+function toggleLocale() {
+  setLocale(getLocale() === 'zh' ? 'en' : 'zh')
+}
 </script>
 
 <template>
-  <div class="min-h-screen flex items-center justify-center bg-[var(--color-bg)] px-4">
-    <div class="w-full max-w-sm space-y-6">
-      <div class="text-center">
-        <h1 class="text-2xl font-bold text-[var(--color-text)]">{{ t('auth.setupTitle', { appTitle: brand.appTitle }) }}</h1>
-        <p class="mt-2 text-sm text-[var(--color-text-dim)]">{{ t('auth.setupSubtitle') }}</p>
+  <div class="min-h-screen flex items-center justify-center px-4">
+    <div class="w-full max-w-[380px]">
+      <div class="mb-8">
+        <h1 class="text-2xl font-bold tracking-tight">{{ brand.appTitle }}</h1>
+        <p class="mt-2 text-sm text-muted-foreground">{{ t('auth.setupSubtitle') }}</p>
       </div>
 
       <form @submit.prevent="handleSetup" class="space-y-4">
-        <div>
-          <label class="block text-sm font-medium text-[var(--color-text-dim)] mb-1">{{ t('auth.tenantName') }}</label>
-          <input
-            v-model="tenantName"
-            type="text"
-            required
-            autofocus
-            class="w-full px-3 py-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-text)] focus:outline-none focus:ring-2 focus:ring-[var(--color-accent)] focus:border-transparent"
-          />
+        <div class="space-y-2">
+          <Label for="tenantName">{{ t('auth.tenantName') }}</Label>
+          <Input id="tenantName" v-model="tenantName" type="text" :placeholder="t('auth.tenantNamePlaceholder')" required autofocus />
         </div>
-        <div>
-          <label class="block text-sm font-medium text-[var(--color-text-dim)] mb-1">{{ t('auth.adminName') }}</label>
-          <input
-            v-model="adminName"
-            type="text"
-            required
-            class="w-full px-3 py-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-text)] focus:outline-none focus:ring-2 focus:ring-[var(--color-accent)] focus:border-transparent"
-          />
+        <div class="space-y-2">
+          <Label for="adminName">{{ t('auth.adminName') }}</Label>
+          <Input id="adminName" v-model="adminName" type="text" :placeholder="t('auth.adminNamePlaceholder')" required />
         </div>
-        <div>
-          <label class="block text-sm font-medium text-[var(--color-text-dim)] mb-1">{{ t('auth.email') }}</label>
-          <input
-            v-model="email"
-            type="email"
-            required
-            class="w-full px-3 py-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-text)] focus:outline-none focus:ring-2 focus:ring-[var(--color-accent)] focus:border-transparent"
-          />
+        <div class="space-y-2">
+          <Label for="email">{{ t('auth.email') }}</Label>
+          <Input id="email" v-model="email" type="email" :placeholder="t('auth.emailPlaceholder')" required />
         </div>
-        <div>
-          <label class="block text-sm font-medium text-[var(--color-text-dim)] mb-1">{{ t('auth.password') }}</label>
-          <input
-            v-model="password"
-            type="password"
-            required
-            minlength="6"
-            class="w-full px-3 py-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-text)] focus:outline-none focus:ring-2 focus:ring-[var(--color-accent)] focus:border-transparent"
-          />
+        <div class="space-y-2">
+          <Label for="password">{{ t('auth.password') }}</Label>
+          <Input id="password" v-model="password" type="password" :placeholder="t('auth.passwordPlaceholder')" required minlength="6" />
         </div>
-        <div>
-          <label class="block text-sm font-medium text-[var(--color-text-dim)] mb-1">{{ t('auth.confirmPassword') }}</label>
-          <input
-            v-model="confirmPassword"
-            type="password"
-            required
-            class="w-full px-3 py-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-text)] focus:outline-none focus:ring-2 focus:ring-[var(--color-accent)] focus:border-transparent"
-          />
+        <div class="space-y-2">
+          <Label for="confirmPassword">{{ t('auth.confirmPassword') }}</Label>
+          <Input id="confirmPassword" v-model="confirmPassword" type="password" :placeholder="t('auth.confirmPasswordPlaceholder')" required />
         </div>
 
-        <div v-if="error" class="text-sm text-red-500 text-center">{{ error }}</div>
+        <div v-if="error" class="text-sm text-destructive">{{ error }}</div>
 
-        <button
-          type="submit"
-          :disabled="loading"
-          class="w-full py-2.5 rounded-lg bg-[var(--color-accent)] text-white font-medium hover:opacity-90 transition-opacity disabled:opacity-50"
-        >
+        <Button type="submit" class="w-full" :disabled="loading">
+          <Loader2 v-if="loading" class="size-4 mr-2 animate-spin" />
           {{ loading ? t('auth.settingUp') : t('auth.completeSetup') }}
-        </button>
+        </Button>
       </form>
+
+      <div class="mt-6 text-center">
+        <button @click="toggleLocale" class="text-xs text-muted-foreground hover:text-foreground transition-colors">
+          {{ getLocale() === 'zh' ? 'English' : '中文' }}
+        </button>
+      </div>
     </div>
   </div>
 </template>

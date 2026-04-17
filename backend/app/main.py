@@ -23,6 +23,7 @@ from app.routes.cli import router as cli_router
 from app.routes.settings import router as settings_router
 from app.routes.files import router as files_router
 from app.routes.users import router as users_router
+from app.routes.account import router as account_router
 from app.edition import register_ee
 
 setup_logging()
@@ -90,6 +91,7 @@ app.include_router(cli_router)
 app.include_router(settings_router)
 app.include_router(files_router)
 app.include_router(users_router)
+app.include_router(account_router)
 
 register_ee(app)
 

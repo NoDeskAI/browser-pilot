@@ -1,13 +1,14 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import MainView from '../views/MainView.vue'
 import { token } from '../composables/useAuth'
 
 const router = createRouter({
   history: createWebHistory(),
   routes: [
-    { path: '/', component: MainView, meta: { requiresAuth: true } },
+    { path: '/', component: () => import('../views/DashboardView.vue'), meta: { requiresAuth: true } },
+    { path: '/s/:id', component: () => import('../views/MainView.vue'), meta: { requiresAuth: true } },
     { path: '/settings', component: () => import('../views/SettingsView.vue'), meta: { requiresAuth: true } },
     { path: '/users', component: () => import('../views/UsersView.vue'), meta: { requiresAuth: true } },
+    { path: '/account', component: () => import('../views/AccountView.vue'), meta: { requiresAuth: true } },
     { path: '/login', component: () => import('../views/LoginView.vue') },
     { path: '/setup', component: () => import('../views/SetupView.vue') },
   ],

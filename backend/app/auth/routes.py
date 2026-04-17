@@ -74,6 +74,7 @@ async def me(user: CurrentUser = Depends(get_current_user)):
         "name": user.name,
         "role": user.role,
         "tenantId": user.tenant_id,
+        "createdAt": user.created_at,
     }
 
 

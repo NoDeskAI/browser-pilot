@@ -1,15 +1,45 @@
 <script setup lang="ts">
+import { ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import StorageSettings from '../components/StorageSettings.vue'
+import OrgSettings from '../components/OrgSettings.vue'
 
 const { t } = useI18n()
+const activeTab = ref('organization')
 </script>
 
 <template>
-  <div class="flex-1 overflow-y-auto p-6">
-    <div class="max-w-2xl mx-auto space-y-6">
-      <h2 class="text-xl font-bold text-[var(--color-text)]">{{ t('settings.title') }}</h2>
-      <StorageSettings />
+  <div class="flex flex-1 overflow-hidden">
+    <div class="flex-1 overflow-y-auto">
+      <div class="max-w-4xl mx-auto px-6 py-8">
+        <h2 class="text-lg font-semibold mb-6">{{ t('settings.title') }}</h2>
+        
+        <div class="flex flex-col md:flex-row gap-8">
+          <!-- Left Navigation -->
+          <nav class="flex md:flex-col gap-1 md:w-[200px] shrink-0 overflow-x-auto pb-2 md:pb-0">
+            <button
+              @click="activeTab = 'organization'"
+              class="px-3 py-2 text-sm rounded-md transition-colors text-left whitespace-nowrap"
+              :class="activeTab === 'organization' ? 'bg-accent text-accent-foreground font-medium' : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground'"
+            >
+              {{ t('settings.organization') }}
+            </button>
+            <button
+              @click="activeTab = 'storage'"
+              class="px-3 py-2 text-sm rounded-md transition-colors text-left whitespace-nowrap"
+              :class="activeTab === 'storage' ? 'bg-accent text-accent-foreground font-medium' : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground'"
+            >
+              {{ t('settings.fileStorage') }}
+            </button>
+          </nav>
+          
+          <!-- Main Content Area -->
+          <div class="flex-1 min-w-0">
+            <OrgSettings v-if="activeTab === 'organization'" />
+            <StorageSettings v-else-if="activeTab === 'storage'" />
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 </template>

@@ -116,10 +116,6 @@ async function createSession(name?: string): Promise<Session> {
     ports: null,
   }
   state.sessions.unshift(session)
-  state.activeId = session.id
-  await saveAppState('active_session_id', session.id)
-
-  await _startContainerForSession(session.id)
   return session
 }
 
@@ -285,11 +281,7 @@ async function deleteSession(id: string): Promise<void> {
   state.sessions = state.sessions.filter(s => s.id !== id)
   if (state.activeId === id) {
     state.activePorts = null
-    state.activeId = state.sessions.length ? state.sessions[0]!.id : null
-    if (state.activeId) {
-      await saveAppState('active_session_id', state.activeId)
-      await _startContainerForSession(state.activeId)
-    }
+    state.activeId = null
   }
 }
 
@@ -328,16 +320,6 @@ async function saveAppState(key: string, value: string): Promise<void> {
 async function init(): Promise<void> {
   state.loading = true
   await Promise.all([fetchSessions(), fetchBrand(), fetchDevicePresets()])
-  const savedId = await getAppState('active_session_id')
-  if (savedId && state.sessions.some(s => s.id === savedId)) {
-    state.activeId = savedId
-  } else if (state.sessions.length) {
-    state.activeId = state.sessions[0]!.id
-  }
-
-  if (state.activeId) {
-    await _startContainerForSession(state.activeId)
-  }
   state.loading = false
 }
 

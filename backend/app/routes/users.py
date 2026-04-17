@@ -25,6 +25,7 @@ class UpdateUserBody(BaseModel):
     name: str | None = None
     role: str | None = None
     is_active: bool | None = None
+    password: str | None = None
 
 
 @router.get("")
@@ -108,6 +109,12 @@ async def update_user(user_id: str, body: UpdateUserBody, user: CurrentUser = De
             raise HTTPException(status_code=400, detail="Cannot disable superadmin")
         updates.append(f"is_active = ${idx}")
         params.append(body.is_active)
+        idx += 1
+    if body.password is not None:
+        if len(body.password) < 6:
+            raise HTTPException(status_code=400, detail="New password must be at least 6 characters")
+        updates.append(f"password_hash = ${idx}")
+        params.append(hash_password(body.password))
         idx += 1
 
     if not updates:

@@ -21,6 +21,7 @@ class CurrentUser:
     email: str
     name: str
     role: str  # superadmin | admin | member
+    created_at: str
 
 
 def _extract_token(request: Request) -> str | None:
@@ -36,7 +37,7 @@ async def _resolve_api_token(raw: str) -> CurrentUser | None:
     pool = get_pool()
     row = await pool.fetchrow(
         """
-        SELECT t.user_id, t.tenant_id, u.email, u.name, u.role
+        SELECT t.user_id, t.tenant_id, u.email, u.name, u.role, u.created_at
         FROM api_tokens t JOIN users u ON t.user_id = u.id
         WHERE t.token_hash = $1 AND u.is_active = TRUE
         """,
@@ -54,6 +55,7 @@ async def _resolve_api_token(raw: str) -> CurrentUser | None:
         email=row["email"],
         name=row["name"],
         role=row["role"],
+        created_at=row["created_at"].isoformat(),
     )
 
 
@@ -83,7 +85,7 @@ async def get_current_user(request: Request) -> CurrentUser:
 
     pool = get_pool()
     row = await pool.fetchrow(
-        "SELECT email, name, role FROM users WHERE id = $1 AND tenant_id = $2 AND is_active = TRUE",
+        "SELECT email, name, role, created_at FROM users WHERE id = $1 AND tenant_id = $2 AND is_active = TRUE",
         user_id, tenant_id,
     )
     if not row:
@@ -95,6 +97,7 @@ async def get_current_user(request: Request) -> CurrentUser:
         email=row["email"],
         name=row["name"],
         role=row["role"],
+        created_at=row["created_at"].isoformat(),
     )
 
 

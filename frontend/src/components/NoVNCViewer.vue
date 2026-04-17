@@ -4,6 +4,24 @@ import { useI18n } from 'vue-i18n'
 import RFB from '@novnc/novnc'
 import { useSessions } from '../composables/useSessions'
 import { api } from '../lib/api'
+import {
+  Clipboard, Maximize, Minimize, Eye, MousePointer,
+  Globe, Network, Loader2,
+} from 'lucide-vue-next'
+import { Button } from '@/components/ui/button'
+import { Separator } from '@/components/ui/separator'
+import { Slider } from '@/components/ui/slider'
+import { Input } from '@/components/ui/input'
+import {
+  Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue,
+} from '@/components/ui/select'
+import {
+  Popover, PopoverContent, PopoverTrigger,
+} from '@/components/ui/popover'
+import {
+  Tooltip, TooltipContent, TooltipProvider, TooltipTrigger,
+} from '@/components/ui/tooltip'
+import { Toggle } from '@/components/ui/toggle'
 
 const { t } = useI18n()
 const { state: sessState, changeDevicePreset, changeProxy } = useSessions()
@@ -17,15 +35,12 @@ const vncContainer = ref<HTMLDivElement | null>(null)
 const viewerRoot = ref<HTMLDivElement | null>(null)
 const connected = ref(false)
 const desktopName = ref('')
-const qualityLevel = ref(9)
+const qualityLevel = ref([9])
 const compressionLevel = ref(0)
 const scaleMode = ref<'scale' | 'resize'>('scale')
 const viewOnly = ref(false)
 const clipboardText = ref('')
 const clipboardOpen = ref(false)
-const clipBtnRef = ref<HTMLElement>()
-const clipPanelRef = ref<HTMLElement>()
-const clipPos = ref({ top: 0, left: 0 })
 const clipLoading = ref(false)
 const isFullscreen = ref(false)
 const browserLang = ref('zh-CN')
@@ -43,9 +58,6 @@ const LANG_OPTIONS = [
 ]
 const proxyOpen = ref(false)
 const proxyInput = ref('')
-const proxyBtnRef = ref<HTMLElement>()
-const proxyPanelRef = ref<HTMLElement>()
-const proxyPos = ref({ top: 0, left: 0 })
 
 const currentSession = computed(() => sessState.sessions.find(s => s.id === props.sessionId))
 const currentPreset = computed(() => currentSession.value?.devicePreset || 'desktop-1920x1080')
@@ -130,7 +142,7 @@ function connectRFB() {
 
   rfb.scaleViewport = scaleMode.value === 'scale'
   rfb.resizeSession = scaleMode.value === 'resize'
-  rfb.qualityLevel = qualityLevel.value
+  rfb.qualityLevel = qualityLevel.value[0] ?? 9
   rfb.compressionLevel = compressionLevel.value
   rfb.viewOnly = viewOnly.value
   rfb.focusOnClick = true
@@ -207,21 +219,9 @@ async function getRemoteClipboard() {
   clipLoading.value = false
 }
 
-function toggleClipboard() {
-  if (!clipboardOpen.value && clipBtnRef.value) {
-    const rect = clipBtnRef.value.getBoundingClientRect()
-    clipPos.value = { top: rect.bottom + 4, left: rect.left }
-    getRemoteClipboard()
-  }
-  clipboardOpen.value = !clipboardOpen.value
-}
-
-function handleClipClickOutside(e: MouseEvent) {
-  if (!clipboardOpen.value) return
-  const t = e.target as Node
-  if (clipBtnRef.value?.contains(t)) return
-  if (clipPanelRef.value?.contains(t)) return
-  clipboardOpen.value = false
+function onClipboardOpenChange(open: boolean) {
+  clipboardOpen.value = open
+  if (open) getRemoteClipboard()
 }
 
 function toggleScaleMode() {
@@ -239,7 +239,7 @@ function toggleViewOnly() {
 
 function applyQuality() {
   if (rfb) {
-    rfb.qualityLevel = qualityLevel.value
+    rfb.qualityLevel = qualityLevel.value[0] ?? 9
     rfb.compressionLevel = compressionLevel.value
   }
 }
@@ -258,8 +258,9 @@ function onFullscreenChange() {
   isFullscreen.value = !!document.fullscreenElement
 }
 
-async function changeLang(lang: string) {
-  if (langLoading.value) return
+async function changeLang(rawLang: string | number | bigint | Record<string, any> | null) {
+  const lang = String(rawLang ?? '')
+  if (langLoading.value || !lang) return
   langLoading.value = true
   langError.value = ''
   try {
@@ -289,18 +290,15 @@ async function changeLang(lang: string) {
   }
 }
 
-async function onDeviceChange(preset: string) {
-  if (sessState.containerRestarting || preset === currentPreset.value) return
-  await changeDevicePreset(props.sessionId, preset)
+async function onDeviceChange(preset: string | number | bigint | Record<string, any> | null) {
+  const val = String(preset ?? '')
+  if (sessState.containerRestarting || val === currentPreset.value || !val) return
+  await changeDevicePreset(props.sessionId, val)
 }
 
-function toggleProxy() {
-  if (!proxyOpen.value && proxyBtnRef.value) {
-    const rect = proxyBtnRef.value.getBoundingClientRect()
-    proxyPos.value = { top: rect.bottom + 4, left: rect.left }
-    proxyInput.value = currentProxy.value
-  }
-  proxyOpen.value = !proxyOpen.value
+function onProxyOpenChange(open: boolean) {
+  proxyOpen.value = open
+  if (open) proxyInput.value = currentProxy.value
 }
 
 async function saveProxy() {
@@ -316,14 +314,6 @@ async function clearProxy() {
   await changeProxy(props.sessionId, '')
 }
 
-function handleProxyClickOutside(e: MouseEvent) {
-  if (!proxyOpen.value) return
-  const tgt = e.target as Node
-  if (proxyBtnRef.value?.contains(tgt)) return
-  if (proxyPanelRef.value?.contains(tgt)) return
-  proxyOpen.value = false
-}
-
 defineExpose({ navigate })
 
 onMounted(() => {
@@ -333,8 +323,6 @@ onMounted(() => {
   }, 1000)
   connectRFB()
   document.addEventListener('fullscreenchange', onFullscreenChange)
-  document.addEventListener('click', handleClipClickOutside)
-  document.addEventListener('click', handleProxyClickOutside)
 })
 
 onUnmounted(() => {
@@ -342,8 +330,6 @@ onUnmounted(() => {
   if (reconnectTimer) clearTimeout(reconnectTimer)
   if (rateTimer) clearInterval(rateTimer)
   document.removeEventListener('fullscreenchange', onFullscreenChange)
-  document.removeEventListener('click', handleClipClickOutside)
-  document.removeEventListener('click', handleProxyClickOutside)
 })
 
 watch(() => props.wsUrl, () => {
@@ -353,221 +339,228 @@ watch(() => props.wsUrl, () => {
 })
 
 watch(qualityLevel, applyQuality)
-watch(compressionLevel, applyQuality)
 </script>
 
 <template>
   <div ref="viewerRoot" class="relative w-full h-full flex flex-col">
-    <!-- Status bar + toolbar -->
-    <div class="shrink-0 flex items-center gap-2 px-3 py-1 bg-[var(--color-surface)] border-b border-[var(--color-border)] text-[11px] font-mono select-none overflow-x-auto">
-      <!-- Connection status -->
-      <span class="flex items-center gap-1.5 shrink-0">
-        <span class="w-1.5 h-1.5 rounded-full" :class="connected ? 'bg-emerald-400' : 'bg-red-400 animate-pulse'" />
-        <span :class="connected ? 'text-emerald-400' : 'text-red-400'">{{ connected ? 'Connected' : 'Disconnected' }}</span>
-      </span>
+    <TooltipProvider :delay-duration="300">
+      <!-- Toolbar -->
+      <div class="shrink-0 flex items-center gap-1.5 px-2 py-1 border-b border-border text-[11px] font-mono select-none overflow-x-auto">
+        <!-- Connection status group -->
+        <Tooltip>
+          <TooltipTrigger as-child>
+            <span class="flex items-center gap-1 shrink-0 px-1">
+              <span class="size-1.5 rounded-full" :class="connected ? 'bg-emerald-400' : 'bg-red-400 animate-pulse'" />
+              <span class="text-[10px]" :class="connected ? 'text-emerald-400' : 'text-red-400'">{{ connected ? 'Connected' : 'Disconnected' }}</span>
+            </span>
+          </TooltipTrigger>
+          <TooltipContent v-if="desktopName">{{ desktopName }}</TooltipContent>
+        </Tooltip>
 
-      <span v-if="desktopName" class="text-[var(--color-text-dim)] shrink-0 truncate max-w-32" :title="desktopName">{{ desktopName }}</span>
+        <Separator orientation="vertical" class="h-3.5" />
 
-      <span class="w-px h-3.5 bg-[var(--color-border)] shrink-0" />
+        <!-- Traffic stats -->
+        <span class="flex items-center gap-1.5 text-[10px] text-muted-foreground shrink-0">
+          <span>↓{{ fmtBytes(totalRecv) }}</span>
+          <span>↑{{ fmtBytes(totalSent) }}</span>
+          <span>{{ fmtRate(currentRate) }}</span>
+        </span>
 
-      <span class="text-[var(--color-text-dim)] shrink-0">↓ {{ fmtBytes(totalRecv) }}</span>
-      <span class="text-[var(--color-text-dim)] shrink-0">↑ {{ fmtBytes(totalSent) }}</span>
-      <span class="text-[var(--color-text-dim)] shrink-0">{{ fmtRate(currentRate) }}</span>
+        <Separator orientation="vertical" class="h-3.5" />
 
-      <span class="w-px h-3.5 bg-[var(--color-border)] shrink-0" />
+        <!-- Clipboard popover -->
+        <Popover :open="clipboardOpen" @update:open="onClipboardOpenChange">
+          <Tooltip>
+            <TooltipTrigger as-child>
+              <PopoverTrigger as-child>
+                <Button variant="ghost" size="sm" class="h-5 px-1.5 text-[10px] gap-1" :class="clipboardOpen ? 'text-lime-400' : ''">
+                  <Clipboard class="size-3" />
+                  Clip
+                </Button>
+              </PopoverTrigger>
+            </TooltipTrigger>
+            <TooltipContent>{{ t('vnc.clipboard') }}</TooltipContent>
+          </Tooltip>
+          <PopoverContent class="w-64 p-2" align="start">
+            <textarea
+              v-model="clipboardText"
+              rows="4"
+              class="w-full bg-background border border-border rounded text-xs p-1.5 resize-none outline-none focus:border-ring"
+              :placeholder="t('vnc.clipPlaceholder')"
+            />
+            <div class="flex gap-1.5 mt-1.5">
+              <Button
+                @click="pasteClipboard"
+                :disabled="clipLoading || !clipboardText"
+                variant="outline" size="sm"
+                class="flex-1 h-6 text-[10px] border-lime-600/30 text-lime-400 hover:bg-lime-600/10"
+              >{{ clipLoading ? '...' : t('vnc.sendToRemote') }}</Button>
+              <Button
+                @click="getRemoteClipboard"
+                :disabled="clipLoading"
+                variant="outline" size="sm"
+                class="flex-1 h-6 text-[10px] border-sky-600/30 text-sky-400 hover:bg-sky-600/10"
+              >{{ clipLoading ? '...' : t('vnc.getFromRemote') }}</Button>
+            </div>
+          </PopoverContent>
+        </Popover>
 
-      <!-- Clipboard -->
-      <button
-        ref="clipBtnRef"
-        @click="toggleClipboard"
-        class="px-1.5 py-0.5 rounded text-[10px] transition-colors shrink-0"
-        :class="clipboardOpen ? 'bg-lime-600/30 text-lime-300' : 'bg-[var(--color-surface-hover)] text-[var(--color-text-dim)] hover:text-[var(--color-text)]'"
-        :title="t('vnc.clipboard')"
-      >Clip</button>
+        <!-- Scale mode toggle -->
+        <Tooltip>
+          <TooltipTrigger as-child>
+            <Toggle
+              :pressed="scaleMode === 'scale'"
+              @update:pressed="toggleScaleMode"
+              size="sm"
+              class="h-5 px-1.5 text-[10px] data-[state=on]:text-blue-400"
+            >{{ scaleMode === 'scale' ? t('vnc.scaleFit') : t('vnc.scaleNative') }}</Toggle>
+          </TooltipTrigger>
+          <TooltipContent>{{ scaleMode === 'scale' ? t('vnc.scaleFitTitle') : t('vnc.scaleNativeTitle') }}</TooltipContent>
+        </Tooltip>
 
-      <!-- Scale mode -->
-      <button
-        @click="toggleScaleMode"
-        class="px-1.5 py-0.5 rounded text-[10px] transition-colors shrink-0"
-        :class="scaleMode === 'scale' ? 'bg-blue-600/20 text-blue-400' : 'bg-cyan-600/20 text-cyan-400'"
-        :title="scaleMode === 'scale' ? t('vnc.scaleFitTitle') : t('vnc.scaleNativeTitle')"
-      >{{ scaleMode === 'scale' ? t('vnc.scaleFit') : t('vnc.scaleNative') }}</button>
+        <!-- Quality slider -->
+        <Tooltip>
+          <TooltipTrigger as-child>
+            <span class="flex items-center gap-1 shrink-0 px-0.5">
+              <span class="text-[10px] text-muted-foreground">Q</span>
+              <Slider v-model="qualityLevel" :min="0" :max="9" :step="1" class="w-12" />
+              <span class="text-[10px] text-muted-foreground w-3 text-center">{{ qualityLevel[0] }}</span>
+            </span>
+          </TooltipTrigger>
+          <TooltipContent>{{ t('vnc.quality') }}</TooltipContent>
+        </Tooltip>
 
-      <!-- Quality -->
-      <span class="flex items-center gap-1 shrink-0">
-        <span class="text-[var(--color-text-dim)] text-[10px]">Q</span>
-        <input
-          type="range"
-          v-model.number="qualityLevel"
-          min="0" max="9" step="1"
-          class="w-12 h-2 accent-lime-500"
-          :title="t('vnc.quality')"
-        />
-        <span class="text-[var(--color-text-dim)] w-3 text-center">{{ qualityLevel }}</span>
-      </span>
+        <!-- View-only toggle -->
+        <Tooltip>
+          <TooltipTrigger as-child>
+            <Toggle
+              :pressed="viewOnly"
+              @update:pressed="toggleViewOnly"
+              size="sm"
+              class="h-5 px-1.5 text-[10px] gap-1 data-[state=on]:text-amber-400"
+            >
+              <Eye v-if="viewOnly" class="size-3" />
+              <MousePointer v-else class="size-3" />
+              {{ viewOnly ? t('vnc.viewOnly') : t('vnc.interactive') }}
+            </Toggle>
+          </TooltipTrigger>
+          <TooltipContent>{{ viewOnly ? t('vnc.viewOnlyTitle') : t('vnc.interactiveTitle') }}</TooltipContent>
+        </Tooltip>
 
-      <!-- View only -->
-      <button
-        @click="toggleViewOnly"
-        class="px-1.5 py-0.5 rounded text-[10px] transition-colors shrink-0"
-        :class="viewOnly ? 'bg-amber-600/20 text-amber-400' : 'bg-[var(--color-surface-hover)] text-[var(--color-text-dim)] hover:text-[var(--color-text)]'"
-        :title="viewOnly ? t('vnc.viewOnlyTitle') : t('vnc.interactiveTitle')"
-      >{{ viewOnly ? t('vnc.viewOnly') : t('vnc.interactive') }}</button>
+        <!-- Fullscreen -->
+        <Tooltip>
+          <TooltipTrigger as-child>
+            <Button variant="ghost" size="sm" class="h-5 px-1.5 text-[10px]" @click="toggleFullscreen">
+              <Minimize v-if="isFullscreen" class="size-3" />
+              <Maximize v-else class="size-3" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>{{ isFullscreen ? t('vnc.exitFullscreenTitle') : t('vnc.fullscreenTitle') }}</TooltipContent>
+        </Tooltip>
 
-      <!-- Fullscreen -->
-      <button
-        @click="toggleFullscreen"
-        class="px-1.5 py-0.5 rounded text-[10px] bg-[var(--color-surface-hover)] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors shrink-0"
-        :title="isFullscreen ? t('vnc.exitFullscreenTitle') : t('vnc.fullscreenTitle')"
-      >{{ isFullscreen ? t('vnc.exitFullscreen') : t('vnc.fullscreen') }}</button>
+        <Separator orientation="vertical" class="h-3.5" />
 
-      <!-- Device preset selector -->
-      <select
-        :value="currentPreset"
-        @change="onDeviceChange(($event.target as HTMLSelectElement).value)"
-        :disabled="sessState.containerRestarting"
-        class="px-1 py-0.5 rounded text-[10px] bg-[var(--color-surface-hover)] text-[var(--color-text-dim)] border border-[var(--color-border)] outline-none cursor-pointer shrink-0 disabled:opacity-40"
-        :title="t('vnc.device')"
-      >
-        <optgroup :label="t('vnc.deviceDesktop')">
-          <option v-for="p in desktopPresets" :key="p.id" :value="p.id">{{ p.label }}</option>
-        </optgroup>
-        <optgroup :label="t('vnc.deviceMobile')">
-          <option v-for="p in mobilePresets" :key="p.id" :value="p.id">{{ p.label }} — {{ p.width }}×{{ p.height }}</option>
-        </optgroup>
-      </select>
+        <!-- Device preset -->
+        <Select :model-value="currentPreset" @update:model-value="onDeviceChange" :disabled="sessState.containerRestarting">
+          <Tooltip>
+            <TooltipTrigger as-child>
+              <SelectTrigger class="h-5 w-auto min-w-24 max-w-40 text-[10px] px-1.5 border-0 bg-transparent gap-1">
+                <SelectValue :placeholder="t('vnc.device')" />
+              </SelectTrigger>
+            </TooltipTrigger>
+            <TooltipContent>{{ t('vnc.device') }}</TooltipContent>
+          </Tooltip>
+          <SelectContent>
+            <SelectGroup>
+              <SelectLabel class="text-[10px]">{{ t('vnc.deviceDesktop') }}</SelectLabel>
+              <SelectItem v-for="p in desktopPresets" :key="p.id" :value="p.id" class="text-xs">{{ p.label }}</SelectItem>
+            </SelectGroup>
+            <SelectGroup>
+              <SelectLabel class="text-[10px]">{{ t('vnc.deviceMobile') }}</SelectLabel>
+              <SelectItem v-for="p in mobilePresets" :key="p.id" :value="p.id" class="text-xs">{{ p.label }} — {{ p.width }}×{{ p.height }}</SelectItem>
+            </SelectGroup>
+          </SelectContent>
+        </Select>
 
-      <!-- Proxy -->
-      <button
-        ref="proxyBtnRef"
-        @click="toggleProxy"
-        :disabled="sessState.containerRestarting"
-        class="px-1.5 py-0.5 rounded text-[10px] transition-colors shrink-0"
-        :class="currentProxy ? 'bg-emerald-600/30 text-emerald-300' : 'bg-[var(--color-surface-hover)] text-[var(--color-text-dim)] hover:text-[var(--color-text)]'"
-        :title="currentProxy ? t('vnc.proxyActive') + ': ' + currentProxy : t('vnc.proxy')"
-      >{{ t('vnc.proxy') }}</button>
+        <!-- Proxy popover -->
+        <Popover :open="proxyOpen" @update:open="onProxyOpenChange">
+          <Tooltip>
+            <TooltipTrigger as-child>
+              <PopoverTrigger as-child>
+                <Button
+                  variant="ghost" size="sm"
+                  :disabled="sessState.containerRestarting"
+                  class="h-5 px-1.5 text-[10px] gap-1"
+                  :class="currentProxy ? 'text-emerald-400' : ''"
+                >
+                  <Network class="size-3" />
+                  {{ t('vnc.proxy') }}
+                </Button>
+              </PopoverTrigger>
+            </TooltipTrigger>
+            <TooltipContent>{{ currentProxy ? t('vnc.proxyActive') + ': ' + currentProxy : t('vnc.proxy') }}</TooltipContent>
+          </Tooltip>
+          <PopoverContent class="w-64 p-2" align="start">
+            <Input
+              v-model="proxyInput"
+              type="text"
+              class="h-7 text-xs"
+              :placeholder="t('vnc.proxyPlaceholder')"
+              @keydown.enter="saveProxy"
+            />
+            <div class="flex gap-1.5 mt-1.5">
+              <Button
+                @click="saveProxy"
+                :disabled="sessState.containerRestarting"
+                variant="outline" size="sm"
+                class="flex-1 h-6 text-[10px] border-lime-600/30 text-lime-400 hover:bg-lime-600/10"
+              >{{ sessState.containerRestarting ? t('vnc.proxySaving') : t('vnc.proxySave') }}</Button>
+              <Button
+                @click="clearProxy"
+                :disabled="sessState.containerRestarting || !currentProxy"
+                variant="outline" size="sm"
+                class="flex-1 h-6 text-[10px] border-destructive/30 text-destructive hover:bg-destructive/10"
+              >{{ t('vnc.proxyClear') }}</Button>
+            </div>
+          </PopoverContent>
+        </Popover>
 
-      <span v-if="sessState.containerRestarting" class="text-[10px] text-amber-400 shrink-0 animate-pulse">{{ t('vnc.switchingDevice') }}</span>
+        <span v-if="sessState.containerRestarting" class="text-[10px] text-amber-400 shrink-0 animate-pulse">
+          <Loader2 class="size-3 inline animate-spin mr-0.5" />
+          {{ t('vnc.switchingDevice') }}
+        </span>
 
-      <!-- Language -->
-      <select
-        :value="browserLang"
-        @change="changeLang(($event.target as HTMLSelectElement).value)"
-        :disabled="langLoading"
-        class="px-1 py-0.5 rounded text-[10px] bg-[var(--color-surface-hover)] text-[var(--color-text-dim)] border border-[var(--color-border)] outline-none cursor-pointer shrink-0 disabled:opacity-40"
-        :title="t('vnc.browserLangTitle')"
-      >
-        <option v-for="opt in LANG_OPTIONS" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
-      </select>
-      <span v-if="langError" class="text-[10px] text-yellow-400 shrink-0 whitespace-nowrap max-w-40 truncate" :title="langError">{{ langError }}</span>
+        <!-- Browser language -->
+        <Select :model-value="browserLang" @update:model-value="changeLang" :disabled="langLoading">
+          <Tooltip>
+            <TooltipTrigger as-child>
+              <SelectTrigger class="h-5 w-auto min-w-16 max-w-24 text-[10px] px-1.5 border-0 bg-transparent gap-1">
+                <Globe class="size-3 shrink-0" />
+                <SelectValue />
+              </SelectTrigger>
+            </TooltipTrigger>
+            <TooltipContent>{{ t('vnc.browserLangTitle') }}</TooltipContent>
+          </Tooltip>
+          <SelectContent>
+            <SelectItem v-for="opt in LANG_OPTIONS" :key="opt.value" :value="opt.value" class="text-xs">{{ opt.label }}</SelectItem>
+          </SelectContent>
+        </Select>
 
-      <span class="ml-auto text-lime-400/60 text-[10px] shrink-0">noVNC Mode</span>
-    </div>
+        <span v-if="langError" class="text-[10px] text-amber-400 shrink-0 truncate max-w-40">{{ langError }}</span>
+
+        <span class="ml-auto text-primary/40 text-[10px] shrink-0">noVNC</span>
+      </div>
+    </TooltipProvider>
 
     <!-- VNC display area -->
     <div class="flex-1 relative overflow-hidden bg-black">
       <div ref="vncContainer" class="absolute inset-0" />
     </div>
-
-    <!-- Clipboard floating panel -->
-    <Teleport to="body">
-      <div
-        v-if="clipboardOpen"
-        ref="clipPanelRef"
-        class="fixed z-[9990] w-64 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg shadow-xl p-2"
-        :style="{ top: clipPos.top + 'px', left: clipPos.left + 'px' }"
-      >
-        <textarea
-          v-model="clipboardText"
-          rows="4"
-          class="w-full bg-[var(--color-bg)] border border-[var(--color-border)] rounded text-xs text-[var(--color-text)] p-1.5 resize-none outline-none focus:border-[var(--color-accent)]"
-          :placeholder="t('vnc.clipPlaceholder')"
-        />
-        <div class="flex gap-1.5 mt-1.5">
-          <button
-            @click="pasteClipboard"
-            :disabled="clipLoading || !clipboardText"
-            class="flex-1 px-2 py-1 rounded text-[10px] font-medium bg-lime-600/20 text-lime-400 border border-lime-600/30 hover:bg-lime-600/30 transition-colors disabled:opacity-40"
-          >{{ clipLoading ? '...' : t('vnc.sendToRemote') }}</button>
-          <button
-            @click="getRemoteClipboard"
-            :disabled="clipLoading"
-            class="flex-1 px-2 py-1 rounded text-[10px] font-medium bg-sky-600/20 text-sky-400 border border-sky-600/30 hover:bg-sky-600/30 transition-colors disabled:opacity-40"
-          >{{ clipLoading ? '...' : t('vnc.getFromRemote') }}</button>
-          <button
-            @click="clipboardOpen = false"
-            class="px-2 py-1 rounded text-[10px] font-medium bg-[var(--color-surface-hover)] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors"
-          >{{ t('vnc.close') }}</button>
-        </div>
-      </div>
-    </Teleport>
-
-    <!-- Proxy floating panel -->
-    <Teleport to="body">
-      <div
-        v-if="proxyOpen"
-        ref="proxyPanelRef"
-        class="fixed z-[9990] w-64 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg shadow-xl p-2"
-        :style="{ top: proxyPos.top + 'px', left: proxyPos.left + 'px' }"
-      >
-        <input
-          v-model="proxyInput"
-          type="text"
-          class="w-full bg-[var(--color-bg)] border border-[var(--color-border)] rounded text-xs text-[var(--color-text)] p-1.5 outline-none focus:border-[var(--color-accent)]"
-          :placeholder="t('vnc.proxyPlaceholder')"
-          @keydown.enter="saveProxy"
-        />
-        <div class="flex gap-1.5 mt-1.5">
-          <button
-            @click="saveProxy"
-            :disabled="sessState.containerRestarting"
-            class="flex-1 px-2 py-1 rounded text-[10px] font-medium bg-lime-600/20 text-lime-400 border border-lime-600/30 hover:bg-lime-600/30 transition-colors disabled:opacity-40"
-          >{{ sessState.containerRestarting ? t('vnc.proxySaving') : t('vnc.proxySave') }}</button>
-          <button
-            @click="clearProxy"
-            :disabled="sessState.containerRestarting || !currentProxy"
-            class="flex-1 px-2 py-1 rounded text-[10px] font-medium bg-red-600/20 text-red-400 border border-red-600/30 hover:bg-red-600/30 transition-colors disabled:opacity-40"
-          >{{ t('vnc.proxyClear') }}</button>
-          <button
-            @click="proxyOpen = false"
-            class="px-2 py-1 rounded text-[10px] font-medium bg-[var(--color-surface-hover)] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors"
-          >{{ t('vnc.close') }}</button>
-        </div>
-      </div>
-    </Teleport>
   </div>
 </template>
 
 <style scoped>
-select {
-  -webkit-appearance: none;
-  appearance: none;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='8' viewBox='0 0 8 8'%3E%3Cpath fill='%23888' d='M0 2l4 4 4-4z'/%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: right 4px center;
-  padding-right: 14px;
-}
-select option {
-  background: #1a1a2e;
-  color: #e0e0e0;
-}
-input[type="range"] {
-  -webkit-appearance: none;
-  appearance: none;
-  background: transparent;
-  cursor: pointer;
-}
-input[type="range"]::-webkit-slider-runnable-track {
+:deep(.slider-track) {
   height: 3px;
-  border-radius: 2px;
-  background: var(--color-border);
-}
-input[type="range"]::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: #84cc16;
-  margin-top: -3.5px;
 }
 </style>
