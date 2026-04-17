@@ -4,7 +4,7 @@
 
 面向 AI Agent 的远程浏览器自动化。每个会话运行在独立的 Docker 容器中，内置 Chrome、Selenium、反检测隐身机制和 noVNC 查看器 — 可通过 REST API、CLI 或内置 Web UI 控制。
 
-Session Viewer
+![Session Viewer](docs/screenshots/session-viewer.png)
 
 ## 快速开始
 
@@ -20,7 +20,7 @@ docker compose build && docker compose up -d
 
 打开 **[http://localhost:8000](http://localhost:8000)** — 即可看到带会话管理和实时浏览器查看器（noVNC）的 Web UI。
 
-Dashboard
+![Dashboard](docs/screenshots/dashboard.png)
 
 ### Apple Silicon / ARM 用户
 
@@ -34,7 +34,7 @@ echo 'SELENIUM_BASE_IMAGE=seleniarm/standalone-chromium:latest' > .env
 
 安装 `bpilot` 命令行工具，可以从终端驱动浏览器，也可以对接 OpenClaw 等外部 Agent 框架。Web UI 中有一个 **CLI Access** 按钮，可一键生成完整的 CLI 命令参考文档，直接粘贴给你的 AI Agent 使用。
 
-CLI Access
+![CLI Access](docs/screenshots/cli-access.png)
 
 ```bash
 pip install bpilot-cli           # 从 PyPI 安装

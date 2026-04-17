@@ -1,6 +1,6 @@
 [project]
 name = "browser-pilot-backend"
-version = "1.0.0"
+version = "0.0.1"
 description = "browser-pilot backend — remote browser management platform"
 requires-python = ">=3.10"
 dependencies = [

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="1.0.0"
+VERSION="0.0.1"
 API_URL="{{API_URL}}"
 CLI_NAME="{{CLI_NAME}}"
 CONFIG_DIR="${HOME}/.${CLI_NAME}"
