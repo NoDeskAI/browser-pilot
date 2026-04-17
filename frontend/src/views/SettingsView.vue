@@ -1,8 +1,16 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, defineAsyncComponent } from 'vue'
 import { useI18n } from 'vue-i18n'
 import StorageSettings from '../components/StorageSettings.vue'
 import OrgSettings from '../components/OrgSettings.vue'
+
+const isEE = __EE__
+const SsoConfigPanel = isEE
+  ? defineAsyncComponent(() => import('@ee/components/SsoConfigPanel.vue'))
+  : null
+const TenantManager = isEE
+  ? defineAsyncComponent(() => import('@ee/components/TenantManager.vue'))
+  : null
 
 const { t } = useI18n()
 const activeTab = ref('organization')
@@ -31,12 +39,30 @@ const activeTab = ref('organization')
             >
               {{ t('settings.fileStorage') }}
             </button>
+            <button
+              v-if="isEE"
+              @click="activeTab = 'sso'"
+              class="px-3 py-2 text-sm rounded-md transition-colors text-left whitespace-nowrap"
+              :class="activeTab === 'sso' ? 'bg-accent text-accent-foreground font-medium' : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground'"
+            >
+              {{ t('settings.sso', 'SSO') }}
+            </button>
+            <button
+              v-if="isEE"
+              @click="activeTab = 'tenants'"
+              class="px-3 py-2 text-sm rounded-md transition-colors text-left whitespace-nowrap"
+              :class="activeTab === 'tenants' ? 'bg-accent text-accent-foreground font-medium' : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground'"
+            >
+              {{ t('settings.tenants', 'Tenants') }}
+            </button>
           </nav>
           
           <!-- Main Content Area -->
           <div class="flex-1 min-w-0">
             <OrgSettings v-if="activeTab === 'organization'" />
             <StorageSettings v-else-if="activeTab === 'storage'" />
+            <component v-else-if="isEE && activeTab === 'sso' && SsoConfigPanel" :is="SsoConfigPanel" />
+            <component v-else-if="isEE && activeTab === 'tenants' && TenantManager" :is="TenantManager" />
           </div>
         </div>
       </div>

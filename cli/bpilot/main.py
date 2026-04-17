@@ -10,8 +10,15 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from bpilot import client, config
+from bpilot import __version__, client, config
 from bpilot.config import _CMD_NAME
+
+
+def _version_callback(value: bool):
+    if value:
+        typer.echo(f"{_CMD_NAME} {__version__}")
+        raise typer.Exit()
+
 
 app = typer.Typer(help=f"{_CMD_NAME} — Remote Browser CLI", no_args_is_help=True)
 config_app = typer.Typer(help="Manage CLI configuration", no_args_is_help=True)
@@ -33,6 +40,7 @@ def main_callback(
     json_flag: bool = typer.Option(False, "--json", "-j", help="Machine-readable JSON output"),
     api_url: str = typer.Option("", "--api-url", help="Override API base URL"),
     session: str = typer.Option("", "--session", "-s", help="Override active session ID"),
+    version: bool = typer.Option(False, "--version", "-v", help="Show version", callback=_version_callback, is_eager=True),
 ):
     global _json_output, _api_url_override, _session_override
     _json_output = json_flag

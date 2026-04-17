@@ -1,6 +1,6 @@
 [project]
 name = "browser-pilot-backend"
-version = "0.1.0"
+version = "1.0.0"
 description = "browser-pilot backend — remote browser management platform"
 requires-python = ">=3.10"
 dependencies = [
@@ -12,13 +12,17 @@ dependencies = [
     "asyncpg>=0.30.0",
     "bcrypt>=4.2.0",
     "PyJWT>=2.9.0",
+    "sqlalchemy[asyncio]>=2.0.0",
+    "alembic>=1.15.0",
 ]
 
 [project.optional-dependencies]
 s3 = ["boto3>=1.35.0"]
 
-[project.scripts]
-start = "uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+# Dev server: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+[tool.setuptools.packages.find]
+include = ["app*"]
 
 [build-system]
 requires = ["setuptools>=68.0"]

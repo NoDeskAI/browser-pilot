@@ -10,7 +10,7 @@ WORKDIR /build
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
 COPY frontend/ ./
-COPY --from=context /ctx/ee/frontend/ /build-ee/frontend/
+COPY --from=context /ctx/ee/frontend/ /ee/frontend/
 RUN npm run build
 
 # Stage 2: Build CLI wheel
@@ -30,6 +30,7 @@ COPY backend/ ./
 RUN pip install --no-cache-dir .
 
 COPY --from=context /ctx/ee/ /app/ee/
+RUN if [ -f /app/ee/backend/requirements.txt ]; then pip install --no-cache-dir -r /app/ee/backend/requirements.txt; fi
 COPY --from=frontend /build/dist /app/static
 COPY --from=cli-builder /dist/*.whl /app/cli-dist/
 

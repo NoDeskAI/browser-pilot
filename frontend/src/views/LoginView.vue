@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, defineAsyncComponent, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { useAuth } from '../composables/useAuth'
@@ -10,10 +10,17 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 
+const isEE = __EE__
+const SsoLoginButton = isEE
+  ? defineAsyncComponent(() => import('@ee/components/SsoLoginButton.vue'))
+  : null
+
 const { t } = useI18n()
 const router = useRouter()
 const { setAuth } = useAuth()
-const { brand } = useSessions()
+const { brand, fetchBrand } = useSessions()
+
+onMounted(() => fetchBrand())
 
 const email = ref('')
 const password = ref('')
@@ -81,6 +88,8 @@ function toggleLocale() {
           {{ loading ? t('auth.loggingIn') : t('auth.login') }}
         </Button>
       </form>
+
+      <component v-if="isEE && brand.features.sso && SsoLoginButton" :is="SsoLoginButton" />
 
       <div class="mt-6 text-center">
         <button @click="toggleLocale" class="text-xs text-muted-foreground hover:text-foreground transition-colors">

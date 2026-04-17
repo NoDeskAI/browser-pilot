@@ -1,6 +1,6 @@
 [project]
 name = "bpilot-cli"
-version = "0.1.0"
+version = "1.0.0"
 description = "CLI for browser-pilot — control headless browser sessions from the terminal"
 requires-python = ">=3.10"
 license = "Apache-2.0"

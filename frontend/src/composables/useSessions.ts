@@ -7,7 +7,7 @@ interface SiteInfo {
   appTitle: string
   edition: string
   setupComplete: boolean
-  features: { sso: boolean; multiTenant: boolean }
+  features: { sso: boolean; multiTenantManagement: boolean }
   cliCommandName: string
   cliInstallCommand: string
   cliPythonInstallCommand: string
@@ -17,7 +17,7 @@ interface BrandConfig {
   appTitle: string
   edition: string
   setupComplete: boolean
-  features: { sso: boolean; multiTenant: boolean }
+  features: { sso: boolean; multiTenantManagement: boolean }
   cliCommandName: string
   cliInstallCommand: string
   cliPythonInstallCommand: string
@@ -27,7 +27,7 @@ const brand = reactive<BrandConfig>({
   appTitle: 'Browser Pilot',
   edition: 'ce',
   setupComplete: false,
-  features: { sso: false, multiTenant: false },
+  features: { sso: false, multiTenantManagement: false },
   cliCommandName: 'bpilot',
   cliInstallCommand: 'pip install bpilot-cli',
   cliPythonInstallCommand: 'pip install bpilot-cli',
@@ -328,6 +328,7 @@ export function useSessions() {
     state: readonly(state),
     brand: readonly(brand),
     init,
+    fetchBrand,
     fetchSessions,
     createSession,
     switchSession,

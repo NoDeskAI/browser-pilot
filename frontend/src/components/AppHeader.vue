@@ -45,7 +45,7 @@ function toggleLocale() {
     <div class="flex items-center gap-6">
       <div class="flex items-center gap-2 shrink-0">
         <span class="text-sm font-semibold">{{ brand.appTitle }}</span>
-        <Badge v-if="brand.edition" variant="outline" class="text-[10px] uppercase px-1">{{ brand.edition }}</Badge>
+        <Badge v-if="brand.edition === 'ee'" variant="outline" class="text-[10px] uppercase px-1">EE</Badge>
       </div>
 
       <nav class="flex items-center gap-1">

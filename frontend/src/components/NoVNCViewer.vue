@@ -547,8 +547,6 @@ watch(qualityLevel, applyQuality)
         </Select>
 
         <span v-if="langError" class="text-[10px] text-amber-400 shrink-0 truncate max-w-40">{{ langError }}</span>
-
-        <span class="ml-auto text-primary/40 text-[10px] shrink-0">noVNC</span>
       </div>
     </TooltipProvider>
 

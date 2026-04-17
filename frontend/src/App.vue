@@ -15,6 +15,7 @@ const { isAuthenticated, fetchMe } = useAuth()
 
 const isAuthPage = computed(() => route.path === '/login' || route.path === '/setup')
 const cliDocOpen = ref(false)
+const ready = ref(false)
 
 function handleKeydown(e: KeyboardEvent) {
   if ((e.metaKey || e.ctrlKey) && e.key === 'n') {
@@ -36,6 +37,7 @@ onMounted(async () => {
     await initSessions()
   }
   document.title = brand.appTitle
+  ready.value = true
 })
 
 onUnmounted(() => {
@@ -52,7 +54,7 @@ watch(() => brand.appTitle, (title) => {
     <template v-if="isAuthPage">
       <router-view />
     </template>
-    <template v-else>
+    <template v-else-if="ready">
       <AppHeader @open-cli-docs="cliDocOpen = true" />
       <main class="flex-1 flex flex-col overflow-hidden min-w-0 relative">
         <router-view />

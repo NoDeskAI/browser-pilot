@@ -336,7 +336,7 @@ async def get_site_info(request: Request):
         "setupComplete": user_count > 0,
         "features": {
             "sso": EDITION == "ee",
-            "multiTenant": EDITION == "ee",
+            "multiTenantManagement": EDITION == "ee",
         },
         "cliCommandName": CLI_COMMAND_NAME,
         "cliInstallCommand": cli_info["shell"],

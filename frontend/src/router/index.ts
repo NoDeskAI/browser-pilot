@@ -52,4 +52,8 @@ export function invalidateSiteInfoCache() {
   _siteInfoCache = null
 }
 
+if (__EE__) {
+  import('@ee/routes').then(m => m.eeRoutes.forEach((r: any) => router.addRoute(r)))
+}
+
 export default router

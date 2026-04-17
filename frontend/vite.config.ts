@@ -15,6 +15,7 @@ export default defineConfig({
       '@': path.resolve(__dirname, './src'),
       ...(hasEE ? { '@ee': eeDir } : {}),
     },
+    dedupe: ['vue', 'vue-router', 'vue-i18n'],
   },
   define: {
     __EE__: hasEE,

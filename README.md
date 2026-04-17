@@ -2,6 +2,8 @@
 
 Remote browser automation for AI Agents. Each session runs in an isolated Docker container with Chrome, Selenium, anti-bot stealth, and a noVNC viewer — controllable via REST API, CLI, or the built-in web UI.
 
+Session Viewer
+
 ## Quick Start
 
 Requires **Docker** (with Compose v2).
@@ -14,7 +16,9 @@ cd browser-pilot
 docker compose build && docker compose up -d
 ```
 
-Open **http://localhost:8000** — you'll see the web UI with session management and a live browser viewer (noVNC).
+Open **[http://localhost:8000](http://localhost:8000)** — you'll see the web UI with session management and a live browser viewer (noVNC).
+
+Dashboard
 
 ### Apple Silicon / ARM users
 
@@ -26,7 +30,9 @@ echo 'SELENIUM_BASE_IMAGE=seleniarm/standalone-chromium:latest' > .env
 
 ## CLI
 
-Install the `bpilot` command-line tool to drive the browser from your terminal or integrate with external Agent frameworks like OpenClaw.
+Install the `bpilot` command-line tool to drive the browser from your terminal or integrate with external Agent frameworks like OpenClaw. The web UI includes a **CLI Access** button that generates a ready-to-paste command reference for your AI agent.
+
+CLI Access
 
 ```bash
 pip install bpilot-cli           # from PyPI
@@ -76,6 +82,7 @@ graph TB
 ```
 
 Each browser session gets its own Docker container with:
+
 - Isolated Chrome instance with anti-bot stealth (fingerprint spoofing, human-like input patterns)
 - Selenium WebDriver for automation
 - noVNC (port 7900) for live viewing
@@ -101,13 +108,26 @@ This starts PostgreSQL in Docker, builds the Selenium image, and runs the backen
 
 ## Configuration
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `DATABASE_URL` | `postgresql://nodeskpane:nodeskpane@localhost:5432/nodeskpane` | PostgreSQL connection string |
-| `SELENIUM_BASE_IMAGE` | `selenium/standalone-chrome:latest` | Base image for browser containers. ARM users: `seleniarm/standalone-chromium:latest` |
-| `DOCKER_HOST_ADDR` | `localhost` | How the backend reaches browser containers. Set to `host.docker.internal` in Docker deployment (auto-configured by docker-compose) |
-| `OPENAI_API_KEY` | — | Optional. When set, uses LLM to auto-name sessions on first navigation. Without it, sessions are named by page title. |
-| `LOG_LEVEL` | `INFO` | Backend log verbosity. Set to `DEBUG` for troubleshooting. |
+
+| Variable              | Default                                                        | Description                                                                                                                        |
+| --------------------- | -------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`        | `postgresql://nodeskpane:nodeskpane@localhost:5432/nodeskpane` | PostgreSQL connection string                                                                                                       |
+| `SELENIUM_BASE_IMAGE` | `selenium/standalone-chrome:latest`                            | Base image for browser containers. ARM users: `seleniarm/standalone-chromium:latest`                                               |
+| `DOCKER_HOST_ADDR`    | `localhost`                                                    | How the backend reaches browser containers. Set to `host.docker.internal` in Docker deployment (auto-configured by docker-compose) |
+| `OPENAI_API_KEY`      | —                                                              | Optional. When set, uses LLM to auto-name sessions on first navigation. Without it, sessions are named by page title.              |
+| `LOG_LEVEL`           | `INFO`                                                         | Backend log verbosity. Set to `DEBUG` for troubleshooting.                                                                         |
+
+
+## Enterprise Edition (EE)
+
+Browser Pilot EE adds SSO/OIDC and multi-tenant management. To build with EE:
+
+```bash
+git submodule update --init
+docker compose build && docker compose up -d
+```
+
+EE requires access to the [browser-pilot-ee](https://github.com/NoDeskAI/browser-pilot-ee) repository.
 
 ## Security
 
