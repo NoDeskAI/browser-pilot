@@ -118,17 +118,6 @@ cp .env.example .env
 | `OPENAI_API_KEY`      | —                                                              | 可选。设置后会用 LLM 在首次导航时自动命名会话，未设置则以页面标题命名                        |
 | `LOG_LEVEL`           | `INFO`                                                         | 后端日志级别。排查问题时可设为 `DEBUG`                                                   |
 
-## 企业版 (EE)
-
-Browser Pilot EE 增加了 SSO/OIDC 和多租户管理。启用 EE 的构建方式：
-
-```bash
-git submodule update --init
-docker compose build && docker compose up -d
-```
-
-EE 需要访问 [browser-pilot-ee](https://github.com/NoDeskAI/browser-pilot-ee) 仓库。
-
 ## 安全说明
 
 Docker Compose 部署会将 `/var/run/docker.sock` 挂载到后端容器中，使其对宿主机 Docker 守护进程拥有完全控制权。**请勿将此服务暴露在不受信任的网络上。** 远程部署时请使用带认证的反向代理。

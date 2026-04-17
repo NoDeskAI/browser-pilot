@@ -122,17 +122,6 @@ This starts PostgreSQL in Docker, builds the Selenium image, and runs the backen
 | `LOG_LEVEL`           | `INFO`                                                         | Backend log verbosity. Set to `DEBUG` for troubleshooting.                                                                         |
 
 
-## Enterprise Edition (EE)
-
-Browser Pilot EE adds SSO/OIDC and multi-tenant management. To build with EE:
-
-```bash
-git submodule update --init
-docker compose build && docker compose up -d
-```
-
-EE requires access to the [browser-pilot-ee](https://github.com/NoDeskAI/browser-pilot-ee) repository.
-
 ## Security
 
 The Docker Compose deployment mounts `/var/run/docker.sock` into the backend container, giving it full control over the host Docker daemon. **Do not expose this service on untrusted networks.** Use a reverse proxy with authentication if deploying remotely.
