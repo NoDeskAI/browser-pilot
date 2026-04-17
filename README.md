@@ -1,3 +1,5 @@
+[中文](README.zh.md)
+
 # browser-pilot
 
 Remote browser automation for AI Agents. Each session runs in an isolated Docker container with Chrome, Selenium, anti-bot stealth, and a noVNC viewer — controllable via REST API, CLI, or the built-in web UI.
@@ -80,6 +82,8 @@ graph TB
   Backend -->|"Docker socket"| dynamic
   Backend --> Postgres
 ```
+
+
 
 Each browser session gets its own Docker container with:
 
