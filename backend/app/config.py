@@ -69,6 +69,9 @@ JWT_SECRET = _resolve_jwt_secret()
 
 def _detect_edition() -> str:
     """CE or EE, detected at startup."""
+    env = _env("EDITION", "").lower()
+    if env in ("ce", "ee"):
+        return env
     ee_init = PROJECT_ROOT / "ee" / "backend" / "__init__.py"
     if not ee_init.is_file():
         return "ce"

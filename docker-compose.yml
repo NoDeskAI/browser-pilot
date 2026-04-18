@@ -1,6 +1,9 @@
 services:
   backend:
-    build: .
+    build:
+      context: .
+      args:
+        EDITION: ${EDITION:-ce}
     ports:
       - "8000:8000"
     volumes:

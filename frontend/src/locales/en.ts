@@ -207,6 +207,23 @@ export default {
     ssoMissingToken: 'Missing token',
     ssoLoginFailed: 'SSO login failed — invalid token',
   },
+  ee: {
+    tenants: {
+      title: 'Tenants',
+      description: 'Manage organizations on this instance.',
+      create: 'Create Tenant',
+      createDescription: 'Create a new organization tenant.',
+      name: 'Name',
+      namePlaceholder: 'Acme Corp',
+      slug: 'Slug',
+      createBtn: 'Create',
+      creating: 'Creating...',
+      delete: 'Delete',
+      deleteConfirm: 'Delete this tenant and all its data?',
+      empty: 'No tenants yet',
+      emptyHint: 'Create one to get started.',
+    },
+  },
   locale: {
     zh: '中文',
     en: 'EN',

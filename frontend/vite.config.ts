@@ -6,7 +6,8 @@ import vue from '@vitejs/plugin-vue'
 import tailwindcss from '@tailwindcss/vite'
 
 const eeDir = resolve(__dirname, '../ee/frontend')
-const hasEE = existsSync(eeDir)
+const edition = process.env.EDITION
+const hasEE = edition ? edition === 'ee' : existsSync(resolve(eeDir, 'index.ts'))
 
 export default defineConfig({
   plugins: [vue(), tailwindcss()],

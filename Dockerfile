@@ -1,17 +1,20 @@
+ARG EDITION=ce
+
 # Stage 0: Collect context (ensures ee/ always exists for COPY)
 FROM alpine AS context
 WORKDIR /ctx
 COPY . .
-RUN mkdir -p ee
+RUN mkdir -p ee/frontend ee/backend
 
 # Stage 1: Build frontend (with optional EE components)
 FROM node:22-slim AS frontend
+ARG EDITION
 WORKDIR /build
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
 COPY frontend/ ./
 COPY --from=context /ctx/ee/frontend/ /ee/frontend/
-RUN npm run build
+RUN EDITION=$EDITION npm run build
 
 # Stage 2: Build CLI wheel
 FROM python:3.12-slim AS cli-builder
@@ -21,11 +24,13 @@ RUN pip wheel --no-deps . -w /dist/
 
 # Stage 3: Python backend + Docker CLI
 FROM python:3.12-slim
+ARG EDITION
 
 COPY --from=docker:27-cli /usr/local/bin/docker /usr/local/bin/docker
 
 WORKDIR /app
 ENV PROJECT_ROOT=/app
+ENV EDITION=${EDITION}
 COPY backend/ ./
 RUN pip install --no-cache-dir .
 

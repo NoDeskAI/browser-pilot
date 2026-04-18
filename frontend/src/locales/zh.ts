@@ -207,6 +207,23 @@ export default {
     ssoMissingToken: '缺少登录凭证',
     ssoLoginFailed: 'SSO 登录失败 — 无效凭证',
   },
+  ee: {
+    tenants: {
+      title: '租户管理',
+      description: '管理此实例上的组织。',
+      create: '创建租户',
+      createDescription: '创建一个新的组织租户。',
+      name: '名称',
+      namePlaceholder: '示例公司',
+      slug: '标识',
+      createBtn: '创建',
+      creating: '创建中...',
+      delete: '删除',
+      deleteConfirm: '确定删除此租户及其所有数据？',
+      empty: '暂无租户',
+      emptyHint: '创建一个租户开始使用。',
+    },
+  },
   locale: {
     zh: '中文',
     en: 'EN',
