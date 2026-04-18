@@ -14,21 +14,16 @@ Requires **Docker** (with Compose v2).
 git clone https://github.com/NoDeskAI/browser-pilot.git
 cd browser-pilot
 
-# Build all images and start services
-docker compose build && docker compose up -d
+# Apple Silicon / ARM users — run this first:
+# echo 'SELENIUM_BASE_IMAGE=seleniarm/standalone-chromium:latest' > .env
+
+# Build all images (including the Selenium browser image) and start services
+docker compose --profile build build && docker compose up -d
 ```
 
 Open **[http://localhost:8000](http://localhost:8000)** — you'll see the web UI with session management and a live browser viewer (noVNC).
 
 ![Dashboard](docs/screenshots/dashboard.png)
-
-### Apple Silicon / ARM users
-
-Before building, create a `.env` file:
-
-```bash
-echo 'SELENIUM_BASE_IMAGE=seleniarm/standalone-chromium:latest' > .env
-```
 
 ## CLI
 

@@ -2,7 +2,7 @@
 FROM alpine AS context
 WORKDIR /ctx
 COPY . .
-RUN mkdir -p ee
+RUN mkdir -p ee/frontend
 
 # Stage 1: Build frontend (with optional EE components)
 FROM node:22-slim AS frontend
