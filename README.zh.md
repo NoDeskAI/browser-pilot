@@ -14,21 +14,16 @@
 git clone https://github.com/NoDeskAI/browser-pilot.git
 cd browser-pilot
 
-# 构建镜像并启动服务
-docker compose build && docker compose up -d
+# Apple Silicon / ARM 用户请先执行：
+# echo 'SELENIUM_BASE_IMAGE=seleniarm/standalone-chromium:latest' > .env
+
+# 构建所有镜像（包括 Selenium 浏览器镜像）并启动服务
+docker compose --profile build build && docker compose up -d
 ```
 
 打开 **[http://localhost:8000](http://localhost:8000)** — 即可看到带会话管理和实时浏览器查看器（noVNC）的 Web UI。
 
 ![Dashboard](docs/screenshots/dashboard.png)
-
-### Apple Silicon / ARM 用户
-
-构建前先创建 `.env` 文件：
-
-```bash
-echo 'SELENIUM_BASE_IMAGE=seleniarm/standalone-chromium:latest' > .env
-```
 
 ## 命令行工具
 
