@@ -4,7 +4,7 @@ import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useSessions } from '../composables/useSessions'
 import { useNotify } from '../composables/useNotify'
-import { Plus, Play, Pause, Trash2, Monitor } from 'lucide-vue-next'
+import { Plus, Play, Pause, Trash2, Monitor, Globe, Fingerprint, Clock } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
@@ -124,16 +124,16 @@ async function onPauseContainer(id: string) {
       <div v-if="sessions.sessions.length > 0" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
         <Card
           v-for="s in sessions.sessions" :key="s.id"
-          class="flex flex-col cursor-pointer hover:border-ring/50 transition-colors"
+          class="flex flex-col cursor-pointer transition-all hover:shadow-md hover:border-primary/30 group"
           @click="router.push(`/s/${s.id}`)"
         >
-          <div class="p-4 flex items-start justify-between gap-2">
+          <div class="p-4 pb-3 flex items-start justify-between gap-3">
             <div class="min-w-0 flex-1">
               <input
                 v-if="editingId === s.id"
                 :ref="(el) => { if (el) inputRefs[s.id] = el as HTMLInputElement }"
                 v-model="editName"
-                class="w-full text-sm font-medium bg-transparent border-b border-foreground outline-none"
+                class="w-full text-base font-medium bg-transparent border-b border-foreground outline-none"
                 @blur="commitEdit(s.id, s.name)"
                 @keydown.enter.prevent="commitEdit(s.id, s.name)"
                 @keydown.escape.prevent="editingId = null"
@@ -141,7 +141,7 @@ async function onPauseContainer(id: string) {
               />
               <h3
                 v-else
-                class="text-sm font-medium truncate"
+                class="text-base font-medium truncate tracking-tight group-hover:text-primary transition-colors"
                 @dblclick.stop="startEdit(s.id, s.name)"
                 :title="s.name + '\n' + t('session.dblClickRename')"
               >
@@ -150,39 +150,46 @@ async function onPauseContainer(id: string) {
             </div>
             <Badge
               variant="outline"
-              class="shrink-0 font-normal uppercase text-[10px] px-1.5"
+              class="shrink-0 font-medium uppercase text-[10px] px-2 py-0.5"
               :class="{
                 'bg-green-500/10 text-green-500 border-green-500/20': s.containerStatus === 'running',
                 'bg-yellow-500/10 text-yellow-500 border-yellow-500/20': s.containerStatus === 'paused',
-                'text-muted-foreground': s.containerStatus !== 'running' && s.containerStatus !== 'paused'
+                'bg-muted/50 text-muted-foreground border-border': s.containerStatus !== 'running' && s.containerStatus !== 'paused'
               }"
             >
               {{ s.containerStatus === 'running' ? t('session.running') : s.containerStatus === 'paused' ? t('session.paused') : t('session.stopped') }}
             </Badge>
           </div>
 
-          <div class="px-4 pb-4 flex-1 flex flex-col gap-1 min-h-0">
-            <div class="flex items-center gap-2">
-              <span class="text-xs text-muted-foreground shrink-0 w-8">ID</span>
+          <div class="px-4 pb-4 flex-1 flex flex-col gap-2.5 min-h-0 justify-center">
+            <div class="flex items-center gap-2.5">
+              <div class="flex items-center justify-center size-5 rounded bg-muted/50 text-muted-foreground shrink-0">
+                <Fingerprint class="size-3" />
+              </div>
               <span
-                class="text-xs font-mono text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
-                :class="copiedId === s.id ? 'text-green-500' : ''"
+                class="text-xs font-mono text-muted-foreground hover:text-foreground transition-colors cursor-pointer bg-muted/30 px-1.5 py-0.5 rounded"
+                :class="copiedId === s.id ? 'text-green-500 bg-green-500/10' : ''"
                 @click.stop="copyId(s.id)"
                 :title="t('session.copyId')"
               >
                 {{ copiedId === s.id ? t('session.copied') : s.id.slice(0, 8) }}
               </span>
             </div>
-            <div class="flex items-center gap-2 min-w-0">
-              <span class="text-xs text-muted-foreground shrink-0 w-8">URL</span>
+            <div class="flex items-center gap-2.5 min-w-0">
+              <div class="flex items-center justify-center size-5 rounded bg-muted/50 text-muted-foreground shrink-0">
+                <Globe class="size-3" />
+              </div>
               <span class="text-xs text-muted-foreground truncate flex-1 min-w-0" :title="s.currentUrl">
                 {{ formatUrl(s.currentUrl) || '-' }}
               </span>
             </div>
           </div>
 
-          <div class="p-3 border-t border-border flex items-center justify-between bg-muted/20">
-            <span class="text-xs text-muted-foreground">{{ formatRelativeTime(s.updatedAt) }}</span>
+          <div class="px-4 py-3 border-t border-border/50 flex items-center justify-between bg-muted/10">
+            <div class="flex items-center gap-1.5 text-muted-foreground">
+              <Clock class="size-3.5 opacity-70" />
+              <span class="text-[11px] font-medium">{{ formatRelativeTime(s.updatedAt) }}</span>
+            </div>
             <div class="flex items-center gap-1">
               <Button
                 v-if="s.containerStatus === 'running'"
