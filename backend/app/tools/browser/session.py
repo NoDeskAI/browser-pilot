@@ -13,7 +13,7 @@ from app.config import DOCKER_HOST_ADDR
 from app.container import ensure_container_running
 from app.db import get_pool
 from app.device_presets import get_preset, DEFAULT_PRESET
-from app.tools.browser.scripts import OBSERVE_SCRIPT
+from app.tools.browser.scripts import OBSERVE_SCRIPT, get_stealth_script
 
 logger = logging.getLogger("browser.session")
 
@@ -97,61 +97,75 @@ async def _cdp(sid: str, cmd: str, params: dict | None = None, *, base_url: str)
     }, timeout=5, base_url=base_url)
 
 
-async def _inject_stealth(sid: str, *, base_url: str, fingerprint_seed: int | None = None) -> None:
-    import secrets as _secrets
-    seed = fingerprint_seed if fingerprint_seed is not None else _secrets.randbelow(2**32)
-    script = STEALTH_SCRIPT.replace("__FP_SEED__", str(seed))
-    try:
-        await _cdp(sid, "Page.addScriptToEvaluateOnNewDocument", {"source": script}, base_url=base_url)
-        logger.info("Stealth: addScriptToEvaluateOnNewDocument OK")
-    except Exception as exc:
-        logger.warning("Stealth: CDP inject failed (%s), will rely on execute_script", exc)
+def _build_accept_language(languages: list[str]) -> str:
+    if not languages:
+        return "en-US,en;q=0.9"
+    parts = []
+    for i, lang in enumerate(languages):
+        if i == 0:
+            parts.append(lang)
+        else:
+            q = max(0.1, round(1.0 - i * 0.1, 1))
+            parts.append(f"{lang};q={q}")
+    return ",".join(parts)
+
+
+async def _inject_stealth(sid: str, *, base_url: str, fingerprint_profile: dict | None = None) -> None:
+    from app.fingerprint import generate_profile, CHROME_VERSION, CHROME_MAJOR
+
+    profile = fingerprint_profile if fingerprint_profile else generate_profile()
+    nav = profile.get("navigator", {})
+    hints = profile.get("clientHints", {})
+    tz = profile.get("timezone", "UTC")
+
+    stealth_js = get_stealth_script()
+    if stealth_js:
+        fp_decl = f"var __FP__={json.dumps(profile, separators=(',', ':'))};"
+        script = fp_decl + stealth_js
+        try:
+            await _cdp(sid, "Page.addScriptToEvaluateOnNewDocument", {"source": script}, base_url=base_url)
+            logger.info("Stealth: addScriptToEvaluateOnNewDocument OK")
+        except Exception as exc:
+            logger.warning("Stealth: CDP inject failed (%s), will rely on execute_script", exc)
+
+        try:
+            await wd_fetch(f"/session/{sid}/execute/sync", "POST", {
+                "script": f"{fp_decl}{stealth_js}", "args": [],
+            }, timeout=5, base_url=base_url)
+        except Exception:
+            pass
+
+    ua = nav.get("userAgent", f"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{CHROME_VERSION} Safari/537.36")
+    accept_lang = _build_accept_language(nav.get("languages", ["en-US", "en"]))
+    platform = nav.get("platform", "Linux x86_64")
 
     try:
-        await wd_fetch(f"/session/{sid}/execute/sync", "POST", {
-            "script": f"return {script}", "args": [],
-        }, timeout=5, base_url=base_url)
-    except Exception:
-        pass
-
-    try:
-        ua_resp = await wd_fetch(f"/session/{sid}/execute/sync", "POST", {
-            "script": "return navigator.userAgent", "args": [],
-        }, timeout=5, base_url=base_url)
-        if isinstance(ua_resp, str):
-            clean_ua = (
-                ua_resp
-                .replace("HeadlessChrome", "Chrome")
-                .replace("Headless", "")
-            )
-            if "Chrome/" not in clean_ua:
-                clean_ua = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.7680.153 Safari/537.36"
-            await _cdp(sid, "Network.setUserAgentOverride", {
-                "userAgent": clean_ua,
-                "acceptLanguage": "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7",
-                "platform": "Linux x86_64",
-                "userAgentMetadata": {
-                    "brands": [
-                        {"brand": "Chromium", "version": "146"},
-                        {"brand": "Google Chrome", "version": "146"},
-                        {"brand": "Not=A?Brand", "version": "99"},
-                    ],
-                    "fullVersionList": [
-                        {"brand": "Chromium", "version": "146.0.7680.153"},
-                        {"brand": "Google Chrome", "version": "146.0.7680.153"},
-                        {"brand": "Not=A?Brand", "version": "99.0.0.0"},
-                    ],
-                    "fullVersion": "146.0.7680.153",
-                    "platform": "Linux",
-                    "platformVersion": "6.5.0",
-                    "architecture": "x86",
-                    "model": "",
-                    "mobile": False,
-                    "bitness": "64",
-                    "wow64": False,
-                },
-            }, base_url=base_url)
-            logger.info("Stealth: UA + client hints cleaned")
+        await _cdp(sid, "Network.setUserAgentOverride", {
+            "userAgent": ua,
+            "acceptLanguage": accept_lang,
+            "platform": platform,
+            "userAgentMetadata": {
+                "brands": [
+                    {"brand": "Chromium", "version": CHROME_MAJOR},
+                    {"brand": "Google Chrome", "version": CHROME_MAJOR},
+                    {"brand": "Not=A?Brand", "version": "99"},
+                ],
+                "fullVersionList": [
+                    {"brand": "Chromium", "version": CHROME_VERSION},
+                    {"brand": "Google Chrome", "version": CHROME_VERSION},
+                    {"brand": "Not=A?Brand", "version": "99.0.0.0"},
+                ],
+                "fullVersion": CHROME_VERSION,
+                "platform": hints.get("platform", "Linux"),
+                "platformVersion": hints.get("platformVersion", "6.5.0"),
+                "architecture": hints.get("architecture", "x86"),
+                "model": "",
+                "mobile": hints.get("mobile", False),
+                "bitness": hints.get("bitness", "64"),
+                "wow64": hints.get("wow64", False),
+            },
+        }, base_url=base_url)
+        logger.info("Stealth: UA + client hints set from profile")
     except Exception:
         pass
 
@@ -161,8 +175,8 @@ async def _inject_stealth(sid: str, *, base_url: str, fingerprint_seed: int | No
         pass
 
     try:
-        await _cdp(sid, "Emulation.setTimezoneOverride", {"timezoneId": "Asia/Shanghai"}, base_url=base_url)
-        logger.info("Stealth: timezone -> Asia/Shanghai")
+        await _cdp(sid, "Emulation.setTimezoneOverride", {"timezoneId": tz}, base_url=base_url)
+        logger.info("Stealth: timezone -> %s", tz)
     except Exception:
         pass
 

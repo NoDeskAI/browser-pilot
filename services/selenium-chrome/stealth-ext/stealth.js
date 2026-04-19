@@ -4,7 +4,7 @@
   var _origOH=window.outerHeight||0,_origIH=window.innerHeight||0;
   var _chromeH=(_origOH>_origIH)?(_origOH-_origIH):0;
   try{Object.defineProperty(window,'__nwb_vp_offset',{value:{x:_origSX,y:_origSY+_chromeH},writable:false,configurable:false,enumerable:false})}catch(e){}
-  var SEED=__FP_SEED__;
+  var SEED=__FP__.seed;
   function xmur3(h){return function(){h=Math.imul(h^(h>>>16),2246822507);h=Math.imul(h^(h>>>13),3266489909);return((h^=(h>>>16))>>>0)/4294967296};}
   var rng=xmur3(SEED);
   function mn(fn,name){Object.defineProperty(fn,'toString',{value:function(){return'function '+name+'() { [native code] }'},enumerable:false});Object.defineProperty(fn,'name',{value:name,configurable:true});return fn;}
@@ -72,18 +72,7 @@
   }catch(e){}
 
   // ===== 5. Navigator properties =====
-  var navProps={
-    languages:['zh-CN','zh','en-US','en'],
-    language:'zh-CN',
-    hardwareConcurrency:8,
-    deviceMemory:8,
-    maxTouchPoints:0,
-    vendor:'Google Inc.',
-    vendorSub:'',
-    productSub:'20030107',
-    platform:'Linux x86_64',
-    appVersion:'5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36',
-  };
+  var navProps=__FP__.navigator;
   Object.keys(navProps).forEach(function(k){
     try{Object.defineProperty(Object.getPrototypeOf(navigator),k,{get:mn(function(){return navProps[k]},'get '+k),configurable:true})}catch(e){}
   });
@@ -91,14 +80,15 @@
 
   // ===== 6. Screen =====
   try{
-    var sv={width:1920,height:1080,availWidth:1920,availHeight:1040,colorDepth:24,pixelDepth:24};
-    Object.keys(sv).forEach(function(k){Object.defineProperty(screen,k,{get:function(){return sv[k]},configurable:true})});
+    var fpScreen=__FP__.screen;
+    Object.defineProperty(screen,'colorDepth',{get:function(){return fpScreen.colorDepth},configurable:true});
+    Object.defineProperty(screen,'pixelDepth',{get:function(){return fpScreen.pixelDepth},configurable:true});
     Object.defineProperty(screen,'orientation',{get:function(){return{angle:0,type:'landscape-primary',onchange:null}},configurable:true});
   }catch(e){}
   try{
     Object.defineProperty(window,'outerWidth',{get:function(){return window.innerWidth},configurable:true});
     Object.defineProperty(window,'outerHeight',{get:function(){return window.innerHeight+85},configurable:true});
-    Object.defineProperty(window,'devicePixelRatio',{get:function(){return 1},configurable:true});
+    Object.defineProperty(window,'devicePixelRatio',{get:function(){return __FP__.devicePixelRatio},configurable:true});
     Object.defineProperty(window,'screenX',{get:function(){return 0},configurable:true});
     Object.defineProperty(window,'screenY',{get:function(){return 0},configurable:true});
   }catch(e){}
@@ -141,8 +131,8 @@
 
   // ===== 8. WebGL fingerprint =====
   try{
-    var glVendor='Intel Inc.';
-    var glRenderer='Intel Iris OpenGL Engine';
+    var glVendor=__FP__.webgl.vendor;
+    var glRenderer=__FP__.webgl.renderer;
     ['WebGLRenderingContext','WebGL2RenderingContext'].forEach(function(c){
       if(!window[c])return;
       var proto=window[c].prototype;
@@ -246,10 +236,15 @@
   try{
     if(window.speechSynthesis){
       var origGV=window.speechSynthesis.getVoices;
+      var _fpLang=__FP__.navigator.language||'en-US';
+      var _isZh=_fpLang.indexOf('zh')===0;
       window.speechSynthesis.getVoices=mn(function(){
         var v=origGV.call(window.speechSynthesis);
         if(!v||v.length===0){
-          return[{voiceURI:'Google 普通话（中国大陆）',name:'Google 普通话（中国大陆）',lang:'zh-CN',localService:false,default:true},{voiceURI:'Google US English',name:'Google US English',lang:'en-US',localService:false,default:false}];
+          if(_isZh){
+            return[{voiceURI:'Google 普通话（中国大陆）',name:'Google 普通话（中国大陆）',lang:'zh-CN',localService:false,default:true},{voiceURI:'Google US English',name:'Google US English',lang:'en-US',localService:false,default:false}];
+          }
+          return[{voiceURI:'Google US English',name:'Google US English',lang:'en-US',localService:false,default:true},{voiceURI:'Google UK English Female',name:'Google UK English Female',lang:'en-GB',localService:false,default:false}];
         }
         return v;
       },'getVoices');
@@ -310,9 +305,10 @@
 
   // ===== 20. Date / Intl consistency =====
   try{
+    var _fpTz=__FP__.timezone||'UTC';
     var origDTF=Intl.DateTimeFormat;
     var dtfProxy=new Proxy(origDTF,{construct:function(t,a){
-      if(!a[1]||!a[1].timeZone)a[1]=Object.assign({},a[1]||{},{timeZone:'Asia/Shanghai'});
+      if(!a[1]||!a[1].timeZone)a[1]=Object.assign({},a[1]||{},{timeZone:_fpTz});
       return new t(...a);
     }});
     Intl.DateTimeFormat=dtfProxy;

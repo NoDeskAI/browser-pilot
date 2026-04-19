@@ -4,7 +4,7 @@ import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useSessions } from '../composables/useSessions'
 import { useNotify } from '../composables/useNotify'
-import { Plus, Play, Pause, Trash2, Monitor, Globe, Fingerprint, Clock } from 'lucide-vue-next'
+import { Plus, Play, Pause, Trash2, Monitor, Globe, Hash, Clock } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
@@ -162,9 +162,10 @@ async function onPauseContainer(id: string) {
           </div>
 
           <div class="px-4 pb-4 flex-1 flex flex-col gap-2.5 min-h-0 justify-center">
-            <div class="flex items-center gap-2.5">
-              <div class="flex items-center justify-center size-5 rounded bg-muted/50 text-muted-foreground shrink-0">
-                <Fingerprint class="size-3" />
+            <div class="flex items-center gap-2">
+              <div class="flex items-center gap-1.5 text-muted-foreground shrink-0 w-10">
+                <Hash class="size-3.5" />
+                <span class="text-[11px]">ID</span>
               </div>
               <span
                 class="text-xs font-mono text-muted-foreground hover:text-foreground transition-colors cursor-pointer bg-muted/30 px-1.5 py-0.5 rounded"
@@ -175,9 +176,10 @@ async function onPauseContainer(id: string) {
                 {{ copiedId === s.id ? t('session.copied') : s.id.slice(0, 8) }}
               </span>
             </div>
-            <div class="flex items-center gap-2.5 min-w-0">
-              <div class="flex items-center justify-center size-5 rounded bg-muted/50 text-muted-foreground shrink-0">
-                <Globe class="size-3" />
+            <div class="flex items-center gap-2 min-w-0">
+              <div class="flex items-center gap-1.5 text-muted-foreground shrink-0 w-10">
+                <Globe class="size-3.5" />
+                <span class="text-[11px]">URL</span>
               </div>
               <span class="text-xs text-muted-foreground truncate flex-1 min-w-0" :title="s.currentUrl">
                 {{ formatUrl(s.currentUrl) || '-' }}

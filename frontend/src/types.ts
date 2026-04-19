@@ -9,6 +9,7 @@ export interface Session {
   ports?: { selenium_port: number; vnc_port: number } | null
   devicePreset?: string
   proxyUrl?: string
+  fingerprintProfile?: Record<string, any> | null
 }
 
 export interface DevicePreset {

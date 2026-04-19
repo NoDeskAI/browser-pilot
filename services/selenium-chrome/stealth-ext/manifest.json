@@ -6,7 +6,7 @@
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["stealth.js"],
+      "js": ["fp-profile.js", "stealth.js"],
       "run_at": "document_start",
       "all_frames": true,
       "world": "MAIN"

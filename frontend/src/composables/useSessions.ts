@@ -92,6 +92,7 @@ async function fetchSessions(): Promise<void> {
       ports: s.ports || null,
       devicePreset: s.devicePreset || '',
       proxyUrl: s.proxyUrl || '',
+      fingerprintProfile: s.fingerprintProfile || null,
     }))
   } catch {
     // silently ignore
@@ -277,6 +278,36 @@ async function changeProxy(id: string, proxyUrl: string): Promise<void> {
   }
 }
 
+async function regenerateFingerprint(id: string): Promise<void> {
+  state.containerRestarting = true
+  try {
+    const res = await api(`/api/sessions/${id}/fingerprint`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'regenerate' }),
+    })
+    const data = await res.json()
+    if (data.ok) {
+      const s = state.sessions.find(s => s.id === id)
+      if (s) {
+        s.fingerprintProfile = data.fingerprintProfile || null
+        if (data.ports) {
+          s.ports = data.ports
+          s.containerStatus = 'running'
+        }
+      }
+      if (state.activeId === id && data.ports) {
+        state.activePorts = {
+          seleniumPort: data.ports.selenium_port,
+          vncPort: data.ports.vnc_port,
+        }
+      }
+    }
+  } finally {
+    state.containerRestarting = false
+  }
+}
+
 async function deleteSession(id: string): Promise<void> {
   await api(`/api/sessions/${id}`, { method: 'DELETE' })
   state.sessions = state.sessions.filter(s => s.id !== id)
@@ -342,5 +373,6 @@ export function useSessions() {
     stopContainer,
     changeDevicePreset,
     changeProxy,
+    regenerateFingerprint,
   }
 }

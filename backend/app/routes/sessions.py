@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import logging
-import secrets
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -21,6 +20,7 @@ from app.container import (
 )
 from app.db import get_pool
 from app.device_presets import DEVICE_PRESETS, DEFAULT_PRESET, get_preset
+from app.fingerprint import generate_profile
 
 logger = logging.getLogger("routes.sessions")
 router = APIRouter()
@@ -56,8 +56,8 @@ class ProxyBody(BaseModel):
     proxyUrl: str = ""
 
 
-class FingerprintSeedBody(BaseModel):
-    seed: int | None = None
+class FingerprintActionBody(BaseModel):
+    action: str = "regenerate"
 
 
 class AppStateBody(BaseModel):
@@ -76,14 +76,14 @@ async def list_sessions(user: CurrentUser = Depends(get_current_user)):
     if user.role in ("superadmin", "admin"):
         rows = await pool.fetch("""
             SELECT id, name, created_at, updated_at, current_url, current_title,
-                   device_preset, proxy_url, user_id, fingerprint_seed
+                   device_preset, proxy_url, user_id, fingerprint_profile
             FROM sessions WHERE tenant_id = $1
             ORDER BY updated_at DESC
         """, user.tenant_id)
     else:
         rows = await pool.fetch("""
             SELECT id, name, created_at, updated_at, current_url, current_title,
-                   device_preset, proxy_url, user_id, fingerprint_seed
+                   device_preset, proxy_url, user_id, fingerprint_profile
             FROM sessions WHERE tenant_id = $1 AND user_id = $2
             ORDER BY updated_at DESC
         """, user.tenant_id, user.id)
@@ -106,7 +106,7 @@ async def list_sessions(user: CurrentUser = Depends(get_current_user)):
             "containerStatus": container_status,
             "devicePreset": r["device_preset"] or DEFAULT_PRESET,
             "proxyUrl": r["proxy_url"] or "",
-            "fingerprintSeed": r["fingerprint_seed"],
+            "fingerprintProfile": r["fingerprint_profile"],
         }
 
         if container_status == "running":
@@ -127,13 +127,13 @@ async def create_session(body: CreateSessionBody, user: CurrentUser = Depends(ge
     pool = get_pool()
     session_id = str(uuid.uuid4())
     preset_id = body.devicePreset if body.devicePreset in DEVICE_PRESETS else DEFAULT_PRESET
-    fingerprint_seed = secrets.randbelow(2**32)
+    fp_profile = generate_profile()
     await pool.execute(
-        "INSERT INTO sessions (id, name, device_preset, proxy_url, tenant_id, user_id, fingerprint_seed) VALUES ($1, $2, $3, $4, $5, $6, $7)",
-        session_id, body.name, preset_id, body.proxyUrl, user.tenant_id, user.id, fingerprint_seed,
+        "INSERT INTO sessions (id, name, device_preset, proxy_url, tenant_id, user_id, fingerprint_profile) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)",
+        session_id, body.name, preset_id, body.proxyUrl, user.tenant_id, user.id, json.dumps(fp_profile),
     )
     logger.info("Session created: %s (%s) preset=%s", session_id, body.name, preset_id)
-    return {"id": session_id, "name": body.name, "devicePreset": preset_id, "proxyUrl": body.proxyUrl, "fingerprintSeed": fingerprint_seed}
+    return {"id": session_id, "name": body.name, "devicePreset": preset_id, "proxyUrl": body.proxyUrl, "fingerprintProfile": fp_profile}
 
 
 @router.get("/api/sessions/{session_id}")
@@ -141,7 +141,7 @@ async def get_session(session_id: str, user: CurrentUser = Depends(get_current_u
     await _verify_session_tenant(session_id, user)
     pool = get_pool()
     row = await pool.fetchrow(
-        "SELECT id, name, created_at, updated_at, current_url, current_title, device_preset, proxy_url, fingerprint_seed FROM sessions WHERE id = $1",
+        "SELECT id, name, created_at, updated_at, current_url, current_title, device_preset, proxy_url, fingerprint_profile FROM sessions WHERE id = $1",
         session_id,
     )
     if not row:
@@ -155,7 +155,7 @@ async def get_session(session_id: str, user: CurrentUser = Depends(get_current_u
         "currentTitle": row["current_title"] or "",
         "devicePreset": row["device_preset"] or DEFAULT_PRESET,
         "proxyUrl": row["proxy_url"] or "",
-        "fingerprintSeed": row["fingerprint_seed"],
+        "fingerprintProfile": row["fingerprint_profile"],
     }
 
 
@@ -251,7 +251,7 @@ async def change_device_preset(session_id: str, body: DevicePresetBody, user: Cu
     if body.preset not in DEVICE_PRESETS:
         return {"ok": False, "error": f"Unknown preset: {body.preset}"}
     pool = get_pool()
-    row = await pool.fetchrow("SELECT proxy_url, fingerprint_seed FROM sessions WHERE id = $1", session_id)
+    row = await pool.fetchrow("SELECT proxy_url, fingerprint_profile FROM sessions WHERE id = $1", session_id)
     if not row:
         return {"ok": False, "error": "Session not found"}
     await pool.execute(
@@ -260,6 +260,9 @@ async def change_device_preset(session_id: str, body: DevicePresetBody, user: Cu
     )
     preset_data = get_preset(body.preset)
     proxy = row["proxy_url"] or None
+    fp_profile = row["fingerprint_profile"]
+    if isinstance(fp_profile, str):
+        fp_profile = json.loads(fp_profile)
     from app.tools.browser.session import invalidate_session_cache
     invalidate_session_cache(session_id)
     ports = await recreate_container(
@@ -268,7 +271,7 @@ async def change_device_preset(session_id: str, body: DevicePresetBody, user: Cu
         height=preset_data["height"],
         user_agent=preset_data.get("user_agent"),
         proxy=proxy,
-        fingerprint_seed=row["fingerprint_seed"],
+        fingerprint_profile=fp_profile,
     )
     return {"ok": True, "ports": ports, "devicePreset": body.preset}
 
@@ -280,7 +283,7 @@ async def change_proxy(session_id: str, body: ProxyBody, user: CurrentUser = Dep
     if proxy_url and not proxy_url.startswith(_VALID_PROXY_SCHEMES):
         return {"ok": False, "error": "Proxy URL must start with http://, https://, socks4://, or socks5://"}
     pool = get_pool()
-    row = await pool.fetchrow("SELECT device_preset, fingerprint_seed FROM sessions WHERE id = $1", session_id)
+    row = await pool.fetchrow("SELECT device_preset, fingerprint_profile FROM sessions WHERE id = $1", session_id)
     if not row:
         return {"ok": False, "error": "Session not found"}
     await pool.execute(
@@ -288,6 +291,9 @@ async def change_proxy(session_id: str, body: ProxyBody, user: CurrentUser = Dep
         proxy_url, session_id,
     )
     preset_data = get_preset(row["device_preset"] or DEFAULT_PRESET)
+    fp_profile = row["fingerprint_profile"]
+    if isinstance(fp_profile, str):
+        fp_profile = json.loads(fp_profile)
     from app.tools.browser.session import invalidate_session_cache
     invalidate_session_cache(session_id)
     ports = await recreate_container(
@@ -296,22 +302,22 @@ async def change_proxy(session_id: str, body: ProxyBody, user: CurrentUser = Dep
         height=preset_data["height"],
         user_agent=preset_data.get("user_agent"),
         proxy=proxy_url or None,
-        fingerprint_seed=row["fingerprint_seed"],
+        fingerprint_profile=fp_profile,
     )
     return {"ok": True, "ports": ports, "proxyUrl": proxy_url}
 
 
-@router.post("/api/sessions/{session_id}/fingerprint-seed")
-async def change_fingerprint_seed(session_id: str, body: FingerprintSeedBody, user: CurrentUser = Depends(get_current_user)):
+@router.post("/api/sessions/{session_id}/fingerprint")
+async def regenerate_fingerprint(session_id: str, body: FingerprintActionBody, user: CurrentUser = Depends(get_current_user)):
     await _verify_session_tenant(session_id, user)
     pool = get_pool()
     row = await pool.fetchrow("SELECT device_preset, proxy_url FROM sessions WHERE id = $1", session_id)
     if not row:
         return {"ok": False, "error": "Session not found"}
-    new_seed = body.seed if body.seed is not None else secrets.randbelow(2**32)
+    fp_profile = generate_profile()
     await pool.execute(
-        "UPDATE sessions SET fingerprint_seed = $1, updated_at = NOW() WHERE id = $2",
-        new_seed, session_id,
+        "UPDATE sessions SET fingerprint_profile = $1::jsonb, updated_at = NOW() WHERE id = $2",
+        json.dumps(fp_profile), session_id,
     )
     preset_data = get_preset(row["device_preset"] or DEFAULT_PRESET)
     proxy = row["proxy_url"] or None
@@ -323,9 +329,9 @@ async def change_fingerprint_seed(session_id: str, body: FingerprintSeedBody, us
         height=preset_data["height"],
         user_agent=preset_data.get("user_agent"),
         proxy=proxy,
-        fingerprint_seed=new_seed,
+        fingerprint_profile=fp_profile,
     )
-    return {"ok": True, "ports": ports, "fingerprintSeed": new_seed}
+    return {"ok": True, "ports": ports, "fingerprintProfile": fp_profile}
 
 
 # -----------------------------------------------------------------------

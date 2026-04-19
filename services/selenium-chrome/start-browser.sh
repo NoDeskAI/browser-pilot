@@ -18,8 +18,10 @@ if [ -n "${BROWSER_PROXY:-}" ]; then
   EXTRA_ARGS="${EXTRA_ARGS} --proxy-server=${BROWSER_PROXY}"
 fi
 
-FP_SEED=${FINGERPRINT_SEED:-$RANDOM}
-sed -i "s/__FP_SEED__/${FP_SEED}/" /opt/stealth-ext/stealth.js
+if [ -n "${FINGERPRINT_PROFILE:-}" ]; then
+  FP_JSON=$(echo "$FINGERPRINT_PROFILE" | base64 -d)
+  echo "var __FP__=${FP_JSON};" > /opt/stealth-ext/fp-profile.js
+fi
 
 exec /usr/lib/chromium/chromium \
   --no-sandbox \

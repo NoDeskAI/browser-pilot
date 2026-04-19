@@ -6,7 +6,7 @@ import { useSessions } from '../composables/useSessions'
 import { api } from '../lib/api'
 import {
   Clipboard, Maximize, Minimize, Eye, MousePointer,
-  Globe, Network, Loader2,
+  Globe, Network, Loader2, Fingerprint,
 } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
@@ -24,7 +24,7 @@ import {
 import { Toggle } from '@/components/ui/toggle'
 
 const { t } = useI18n()
-const { state: sessState, changeDevicePreset, changeProxy } = useSessions()
+const { state: sessState, changeDevicePreset, changeProxy, regenerateFingerprint } = useSessions()
 
 const props = defineProps<{
   wsUrl: string
@@ -59,10 +59,12 @@ const LANG_OPTIONS = [
 const reconnectExhausted = ref(false)
 const proxyOpen = ref(false)
 const proxyInput = ref('')
+const fpOpen = ref(false)
 
 const currentSession = computed(() => sessState.sessions.find(s => s.id === props.sessionId))
 const currentPreset = computed(() => currentSession.value?.devicePreset || 'desktop-1920x1080')
 const currentProxy = computed(() => currentSession.value?.proxyUrl || '')
+const fpProfile = computed(() => currentSession.value?.fingerprintProfile || null)
 const desktopPresets = computed(() => sessState.devicePresets.filter(p => p.category === 'desktop'))
 const mobilePresets = computed(() => sessState.devicePresets.filter(p => p.category === 'mobile'))
 
@@ -327,6 +329,20 @@ async function clearProxy() {
   await changeProxy(props.sessionId, '')
 }
 
+async function regenerateFp() {
+  if (sessState.containerRestarting) return
+  fpOpen.value = false
+  await regenerateFingerprint(props.sessionId)
+}
+
+function fpPlatformLabel(profile: Record<string, any>): string {
+  const p = profile?.navigator?.platform || ''
+  if (p === 'Win32') return 'Windows'
+  if (p === 'MacIntel') return 'macOS'
+  if (p.startsWith('Linux')) return 'Linux'
+  return p
+}
+
 defineExpose({ navigate })
 
 onMounted(() => {
@@ -542,6 +558,59 @@ watch(qualityLevel, applyQuality)
                 class="flex-1 h-6 text-[10px] border-destructive/30 text-destructive hover:bg-destructive/10"
               >{{ t('vnc.proxyClear') }}</Button>
             </div>
+          </PopoverContent>
+        </Popover>
+
+        <!-- Fingerprint popover -->
+        <Popover :open="fpOpen" @update:open="(o: boolean) => fpOpen = o">
+          <Tooltip>
+            <TooltipTrigger as-child>
+              <PopoverTrigger as-child>
+                <Button
+                  variant="ghost" size="sm"
+                  :disabled="sessState.containerRestarting"
+                  class="h-5 px-1.5 text-[10px] gap-1"
+                  :class="fpProfile ? 'text-violet-400' : ''"
+                >
+                  <Fingerprint class="size-3" />
+                  {{ t('vnc.fingerprint') }}
+                </Button>
+              </PopoverTrigger>
+            </TooltipTrigger>
+            <TooltipContent>{{ t('vnc.fingerprintTitle') }}</TooltipContent>
+          </Tooltip>
+          <PopoverContent class="w-72 p-3" align="start">
+            <template v-if="fpProfile">
+              <div class="space-y-1.5 text-xs">
+                <div class="flex justify-between">
+                  <span class="text-muted-foreground">{{ t('vnc.fpPlatform') }}</span>
+                  <span class="font-mono">{{ fpPlatformLabel(fpProfile) }}</span>
+                </div>
+                <div class="flex justify-between">
+                  <span class="text-muted-foreground">{{ t('vnc.fpGpu') }}</span>
+                  <span class="font-mono truncate max-w-[160px]" :title="fpProfile.webgl?.renderer">{{ fpProfile.webgl?.renderer?.split(',')[0] || '-' }}</span>
+                </div>
+                <div class="flex justify-between">
+                  <span class="text-muted-foreground">{{ t('vnc.fpMemory') }}</span>
+                  <span class="font-mono">{{ fpProfile.navigator?.deviceMemory }} GB · {{ fpProfile.navigator?.hardwareConcurrency }} cores</span>
+                </div>
+                <div class="flex justify-between">
+                  <span class="text-muted-foreground">{{ t('vnc.fpTimezone') }}</span>
+                  <span class="font-mono">{{ fpProfile.timezone }}</span>
+                </div>
+                <div class="flex justify-between">
+                  <span class="text-muted-foreground">{{ t('vnc.fpSeed') }}</span>
+                  <span class="font-mono text-muted-foreground">{{ fpProfile.seed }}</span>
+                </div>
+              </div>
+              <Button
+                @click="regenerateFp"
+                :disabled="sessState.containerRestarting"
+                variant="outline" size="sm"
+                class="w-full mt-3 h-7 text-[11px] border-violet-600/30 text-violet-400 hover:bg-violet-600/10"
+              >{{ sessState.containerRestarting ? t('vnc.fpRegenerating') : t('vnc.fpRegenerate') }}</Button>
+            </template>
+            <span v-else class="text-xs text-muted-foreground">-</span>
           </PopoverContent>
         </Popover>
 
