@@ -186,7 +186,7 @@ STEALTH_SCRIPT = r"""(function(){
   var _origOH=window.outerHeight||0,_origIH=window.innerHeight||0;
   var _chromeH=(_origOH>_origIH)?(_origOH-_origIH):0;
   try{Object.defineProperty(window,'__nwb_vp_offset',{value:{x:_origSX,y:_origSY+_chromeH},writable:false,configurable:false,enumerable:false})}catch(e){}
-  var SEED=Date.now()^(Math.random()*4294967296>>>0);
+  var SEED=__FP_SEED__;
   function xmur3(h){return function(){h=Math.imul(h^(h>>>16),2246822507);h=Math.imul(h^(h>>>13),3266489909);return((h^=(h>>>16))>>>0)/4294967296};}
   var rng=xmur3(SEED);
   function mn(fn,name){Object.defineProperty(fn,'toString',{value:function(){return'function '+name+'() { [native code] }'},enumerable:false});Object.defineProperty(fn,'name',{value:name,configurable:true});return fn;}

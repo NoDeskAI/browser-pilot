@@ -97,16 +97,19 @@ async def _cdp(sid: str, cmd: str, params: dict | None = None, *, base_url: str)
     }, timeout=5, base_url=base_url)
 
 
-async def _inject_stealth(sid: str, *, base_url: str) -> None:
+async def _inject_stealth(sid: str, *, base_url: str, fingerprint_seed: int | None = None) -> None:
+    import secrets as _secrets
+    seed = fingerprint_seed if fingerprint_seed is not None else _secrets.randbelow(2**32)
+    script = STEALTH_SCRIPT.replace("__FP_SEED__", str(seed))
     try:
-        await _cdp(sid, "Page.addScriptToEvaluateOnNewDocument", {"source": STEALTH_SCRIPT}, base_url=base_url)
+        await _cdp(sid, "Page.addScriptToEvaluateOnNewDocument", {"source": script}, base_url=base_url)
         logger.info("Stealth: addScriptToEvaluateOnNewDocument OK")
     except Exception as exc:
         logger.warning("Stealth: CDP inject failed (%s), will rely on execute_script", exc)
 
     try:
         await wd_fetch(f"/session/{sid}/execute/sync", "POST", {
-            "script": f"return {STEALTH_SCRIPT}", "args": [],
+            "script": f"return {script}", "args": [],
         }, timeout=5, base_url=base_url)
     except Exception:
         pass

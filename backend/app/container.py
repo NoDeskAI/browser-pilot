@@ -66,6 +66,7 @@ async def create_container(
     height: int = 1080,
     user_agent: str | None = None,
     proxy: str | None = None,
+    fingerprint_seed: int | None = None,
 ) -> str:
     name = container_name(session_id)
     vol_name = f"{name}-data"
@@ -78,6 +79,8 @@ async def create_container(
         env["BROWSER_UA"] = user_agent
     if proxy:
         env["BROWSER_PROXY"] = proxy
+    if fingerprint_seed is not None:
+        env["FINGERPRINT_SEED"] = str(fingerprint_seed)
     env_args = " ".join(f"-e {k}='{v}'" for k, v in env.items())
     cmd = (
         f"docker run -d --name {name} "
@@ -218,27 +221,27 @@ async def _wait_grid_ready(selenium_port: int) -> None:
     logger.warning("Grid readiness timeout on port %d after %.1fs", selenium_port, elapsed)
 
 
-async def _session_container_params(session_id: str) -> tuple[int, int, str | None, str | None]:
-    """Read device_preset + proxy_url from DB and resolve to container params."""
+async def _session_container_params(session_id: str) -> tuple[int, int, str | None, str | None, int | None]:
+    """Read device_preset + proxy_url + fingerprint_seed from DB and resolve to container params."""
     pool = get_pool()
     row = await pool.fetchrow(
-        "SELECT device_preset, proxy_url FROM sessions WHERE id = $1",
+        "SELECT device_preset, proxy_url, fingerprint_seed FROM sessions WHERE id = $1",
         session_id,
     )
     if not row:
         preset_data = get_preset(DEFAULT_PRESET)
-        return preset_data["width"], preset_data["height"], None, None
+        return preset_data["width"], preset_data["height"], None, None, None
     preset_data = get_preset(row["device_preset"] or DEFAULT_PRESET)
     proxy = row["proxy_url"] or None
-    return preset_data["width"], preset_data["height"], preset_data.get("user_agent"), proxy
+    return preset_data["width"], preset_data["height"], preset_data.get("user_agent"), proxy, row["fingerprint_seed"]
 
 
 async def ensure_container_running(session_id: str) -> dict[str, int]:
     status = await get_container_status(session_id)
 
     if status == "not_found":
-        width, height, ua, proxy = await _session_container_params(session_id)
-        await create_container(session_id, width=width, height=height, user_agent=ua, proxy=proxy)
+        width, height, ua, proxy, fp_seed = await _session_container_params(session_id)
+        await create_container(session_id, width=width, height=height, user_agent=ua, proxy=proxy, fingerprint_seed=fp_seed)
         ports = await get_container_ports(session_id)
         await _wait_grid_ready(ports["selenium_port"])
         return ports
@@ -262,6 +265,7 @@ async def recreate_container(
     height: int,
     user_agent: str | None = None,
     proxy: str | None = None,
+    fingerprint_seed: int | None = None,
 ) -> dict[str, int]:
     """Stop, remove (keep volume), create with new params, wait for grid."""
     try:
@@ -269,7 +273,7 @@ async def recreate_container(
     except Exception:
         pass
     await remove_container(session_id, keep_volume=True)
-    await create_container(session_id, width=width, height=height, user_agent=user_agent, proxy=proxy)
+    await create_container(session_id, width=width, height=height, user_agent=user_agent, proxy=proxy, fingerprint_seed=fingerprint_seed)
     ports = await get_container_ports(session_id)
     await _wait_grid_ready(ports["selenium_port"])
     return ports

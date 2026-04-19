@@ -18,6 +18,9 @@ if [ -n "${BROWSER_PROXY:-}" ]; then
   EXTRA_ARGS="${EXTRA_ARGS} --proxy-server=${BROWSER_PROXY}"
 fi
 
+FP_SEED=${FINGERPRINT_SEED:-$RANDOM}
+sed -i "s/__FP_SEED__/${FP_SEED}/" /opt/stealth-ext/stealth.js
+
 exec /usr/lib/chromium/chromium \
   --no-sandbox \
   --test-type \
