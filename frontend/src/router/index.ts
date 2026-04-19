@@ -11,6 +11,7 @@ const router = createRouter({
     { path: '/account', component: () => import('../views/AccountView.vue'), meta: { requiresAuth: true } },
     { path: '/login', component: () => import('../views/LoginView.vue') },
     { path: '/setup', component: () => import('../views/SetupView.vue') },
+    { path: '/:pathMatch(.*)*', redirect: '/' },
   ],
 })
 

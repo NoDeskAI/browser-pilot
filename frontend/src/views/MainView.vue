@@ -4,7 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useSessions } from '../composables/useSessions'
 import { useNotify } from '../composables/useNotify'
-import { Play, Pause, Trash2, ChevronRight } from 'lucide-vue-next'
+import { Play, Pause, Trash2, ChevronRight, Monitor } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import NoVNCViewer from '../components/NoVNCViewer.vue'
@@ -101,7 +101,7 @@ async function onPauseContainer() {
           v-else
           class="text-sm font-medium truncate cursor-pointer hover:underline decoration-muted-foreground/30 underline-offset-4"
           @dblclick="startEdit"
-          :title="activeSession.name"
+          :title="activeSession.name + '\n' + t('session.dblClickRename')"
         >
           {{ activeSession.name }}
         </h2>
@@ -114,7 +114,7 @@ async function onPauseContainer() {
             'text-muted-foreground': activeSession.containerStatus !== 'running' && activeSession.containerStatus !== 'paused'
           }"
         >
-          {{ activeSession.containerStatus === 'running' ? 'Running' : activeSession.containerStatus === 'paused' ? 'Paused' : 'Stopped' }}
+          {{ activeSession.containerStatus === 'running' ? t('session.running') : activeSession.containerStatus === 'paused' ? t('session.paused') : t('session.stopped') }}
         </Badge>
       </div>
 

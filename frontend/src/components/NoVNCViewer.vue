@@ -56,6 +56,7 @@ const LANG_OPTIONS = [
   { value: 'es', label: 'Español' },
   { value: 'ru', label: 'Русский' },
 ]
+const reconnectExhausted = ref(false)
 const proxyOpen = ref(false)
 const proxyInput = ref('')
 
@@ -150,6 +151,7 @@ function connectRFB() {
   rfb.addEventListener('connect', () => {
     connected.value = true
     reconnectAttempts = 0
+    reconnectExhausted.value = false
   })
 
   rfb.addEventListener('disconnect', (e: CustomEvent<{ clean: boolean }>) => {
@@ -157,6 +159,8 @@ function connectRFB() {
     if (!e.detail.clean && reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
       reconnectAttempts++
       scheduleReconnect()
+    } else if (!e.detail.clean) {
+      reconnectExhausted.value = true
     }
   })
 
@@ -167,6 +171,12 @@ function connectRFB() {
   rfb.addEventListener('credentialsrequired', () => {
     if (rfb) rfb.sendCredentials({ password: '' })
   })
+}
+
+function manualReconnect() {
+  reconnectAttempts = 0
+  reconnectExhausted.value = false
+  connectRFB()
 }
 
 function scheduleReconnect() {
@@ -200,7 +210,10 @@ async function pasteClipboard() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sessionId: props.sessionId, action: 'paste', text: clipboardText.value }),
     })
-  } catch { /* ignore */ }
+  } catch {
+    const { toast } = await import('vue-sonner')
+    toast.error(t('vnc.clipboardError'))
+  }
   clipLoading.value = false
 }
 
@@ -351,11 +364,18 @@ watch(qualityLevel, applyQuality)
           <TooltipTrigger as-child>
             <span class="flex items-center gap-1 shrink-0 px-1">
               <span class="size-1.5 rounded-full" :class="connected ? 'bg-emerald-400' : 'bg-red-400 animate-pulse'" />
-              <span class="text-[10px]" :class="connected ? 'text-emerald-400' : 'text-red-400'">{{ connected ? 'Connected' : 'Disconnected' }}</span>
+              <span class="text-[10px]" :class="connected ? 'text-emerald-400' : 'text-red-400'">{{ connected ? t('vnc.connected') : t('vnc.disconnected') }}</span>
             </span>
           </TooltipTrigger>
           <TooltipContent v-if="desktopName">{{ desktopName }}</TooltipContent>
         </Tooltip>
+
+        <Button
+          v-if="!connected && reconnectExhausted"
+          variant="ghost" size="sm"
+          class="h-5 px-1.5 text-[10px] text-red-400 hover:text-red-300"
+          @click="manualReconnect"
+        >{{ t('vnc.reconnect') }}</Button>
 
         <Separator orientation="vertical" class="h-3.5" />
 
@@ -375,7 +395,7 @@ watch(qualityLevel, applyQuality)
               <PopoverTrigger as-child>
                 <Button variant="ghost" size="sm" class="h-5 px-1.5 text-[10px] gap-1" :class="clipboardOpen ? 'text-lime-400' : ''">
                   <Clipboard class="size-3" />
-                  Clip
+                  {{ t('vnc.clip') }}
                 </Button>
               </PopoverTrigger>
             </TooltipTrigger>

@@ -172,6 +172,7 @@ onUnmounted(() => {
               v-for="f in FILTERS"
               :key="f.key ?? 'all'"
               @click="activeFilter = f.key; fetchLogs()"
+              :aria-pressed="activeFilter === f.key"
               class="px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors"
               :class="activeFilter === f.key
                 ? 'bg-primary/15 text-primary'

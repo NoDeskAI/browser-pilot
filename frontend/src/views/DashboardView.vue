@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, nextTick } from 'vue'
+import { ref, nextTick, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useSessions } from '../composables/useSessions'
@@ -19,8 +19,19 @@ const notify = useNotify()
 const {
   state: sessions,
   createSession, deleteSession, renameSession,
-  startContainer, pauseContainer,
+  startContainer, pauseContainer, fetchSessions,
 } = useSessions()
+
+const isMac = navigator.platform.includes('Mac')
+const shortcutLabel = isMac ? '⌘N' : 'Ctrl+N'
+
+let refreshTimer: ReturnType<typeof setInterval> | null = null
+onMounted(() => {
+  refreshTimer = setInterval(fetchSessions, 3000)
+})
+onUnmounted(() => {
+  if (refreshTimer) clearInterval(refreshTimer)
+})
 
 const editingId = ref<string | null>(null)
 const editName = ref('')
@@ -106,7 +117,7 @@ async function onPauseContainer(id: string) {
         <Button @click="handleCreateSession" class="gap-2">
           <Plus class="size-4" />
           {{ t('dashboard.create') }}
-          <kbd class="ml-1 text-[10px] opacity-60 font-sans tracking-widest">⌘N</kbd>
+          <kbd class="ml-1 text-[10px] opacity-60 font-sans tracking-widest">{{ shortcutLabel }}</kbd>
         </Button>
       </div>
 
@@ -132,7 +143,7 @@ async function onPauseContainer(id: string) {
                 v-else
                 class="text-sm font-medium truncate"
                 @dblclick.stop="startEdit(s.id, s.name)"
-                :title="s.name"
+                :title="s.name + '\n' + t('session.dblClickRename')"
               >
                 {{ s.name }}
               </h3>
@@ -146,7 +157,7 @@ async function onPauseContainer(id: string) {
                 'text-muted-foreground': s.containerStatus !== 'running' && s.containerStatus !== 'paused'
               }"
             >
-              {{ s.containerStatus === 'running' ? 'Running' : s.containerStatus === 'paused' ? 'Paused' : 'Stopped' }}
+              {{ s.containerStatus === 'running' ? t('session.running') : s.containerStatus === 'paused' ? t('session.paused') : t('session.stopped') }}
             </Badge>
           </div>
 
@@ -221,7 +232,7 @@ async function onPauseContainer(id: string) {
         <Button @click="handleCreateSession" class="gap-2">
           <Plus class="size-4" />
           {{ t('dashboard.create') }}
-          <kbd class="ml-1 text-[10px] opacity-60 font-sans tracking-widest">⌘N</kbd>
+          <kbd class="ml-1 text-[10px] opacity-60 font-sans tracking-widest">{{ shortcutLabel }}</kbd>
         </Button>
       </div>
     </div>

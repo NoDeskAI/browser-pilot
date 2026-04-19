@@ -22,6 +22,9 @@ export default {
     expandSidebar: '展开侧边栏',
     cliAccess: 'CLI 接入',
     settings: '设置',
+    containerStartError: '启动浏览器失败',
+    containerPauseError: '休眠浏览器失败',
+    containerStopError: '停止浏览器失败',
   },
   dashboard: {
     title: '会话',
@@ -50,6 +53,7 @@ export default {
     minutesAgo: '{n}分钟',
     hoursAgo: '{n}小时',
     daysAgo: '{n}天',
+    dblClickRename: '双击重命名',
   },
   vnc: {
     clipboard: '剪贴板',
@@ -84,6 +88,11 @@ export default {
     proxyClear: '清除',
     proxySaving: '保存中...',
     proxyActive: '代理已启用',
+    connected: '已连接',
+    disconnected: '未连接',
+    clip: '剪贴',
+    reconnect: '重新连接',
+    clipboardError: '剪贴板操作失败',
   },
   logs: {
     title: '运行日志',

@@ -22,6 +22,9 @@ export default {
     expandSidebar: 'Expand sidebar',
     cliAccess: 'CLI Access',
     settings: 'Settings',
+    containerStartError: 'Failed to start browser',
+    containerPauseError: 'Failed to hibernate browser',
+    containerStopError: 'Failed to stop browser',
   },
   dashboard: {
     title: 'Sessions',
@@ -50,6 +53,7 @@ export default {
     minutesAgo: '{n}m',
     hoursAgo: '{n}h',
     daysAgo: '{n}d',
+    dblClickRename: 'Double-click to rename',
   },
   vnc: {
     clipboard: 'Clipboard',
@@ -84,6 +88,11 @@ export default {
     proxyClear: 'Clear',
     proxySaving: 'Saving...',
     proxyActive: 'Proxy active',
+    connected: 'Connected',
+    disconnected: 'Disconnected',
+    clip: 'Clip',
+    reconnect: 'Reconnect',
+    clipboardError: 'Clipboard operation failed',
   },
   logs: {
     title: 'Runtime Logs',

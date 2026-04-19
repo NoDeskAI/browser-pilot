@@ -1,6 +1,7 @@
 import { reactive, readonly } from 'vue'
 import type { Session, DevicePreset } from '../types'
 import i18n from '../i18n'
+import { toast } from 'vue-sonner'
 import { api } from '../lib/api'
 
 interface SiteInfo {
@@ -139,7 +140,7 @@ async function _startContainerForSession(id: string): Promise<void> {
       }
     }
   } catch {
-    // container start failed silently
+    toast.error(i18n.global.t('app.containerStartError'))
   } finally {
     state.containerLoading = false
   }
@@ -200,7 +201,7 @@ async function pauseContainer(id: string): Promise<void> {
       state.activePorts = null
     }
   } catch {
-    // silently ignore
+    toast.error(i18n.global.t('app.containerPauseError'))
   }
 }
 
@@ -216,7 +217,7 @@ async function stopContainer(id: string): Promise<void> {
       state.activePorts = null
     }
   } catch {
-    // silently ignore
+    toast.error(i18n.global.t('app.containerStopError'))
   }
 }
 

@@ -6,6 +6,7 @@ import { useAuth } from './composables/useAuth'
 import AppHeader from './components/AppHeader.vue'
 import CliDocModal from './components/CliDocModal.vue'
 import { Toaster } from '@/components/ui/sonner'
+import { Loader2 } from 'lucide-vue-next'
 
 const route = useRoute()
 const router = useRouter()
@@ -60,6 +61,11 @@ watch(() => brand.appTitle, (title) => {
         <router-view />
       </main>
       <CliDocModal :open="cliDocOpen" @close="cliDocOpen = false" />
+    </template>
+    <template v-else>
+      <div class="flex-1 flex items-center justify-center">
+        <Loader2 class="size-6 animate-spin text-muted-foreground" />
+      </div>
     </template>
     
     <!-- 全局组件 -->
