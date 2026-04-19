@@ -96,6 +96,14 @@ async def list_sessions(user: CurrentUser = Depends(get_current_user)):
         sid_prefix = sid[:12]
         container_status = all_statuses.get(sid_prefix, "not_found")
 
+        fp = r["fingerprint_profile"]
+        if fp is None:
+            fp = generate_profile()
+            await pool.execute(
+                "UPDATE sessions SET fingerprint_profile = $1::jsonb WHERE id = $2",
+                fp, sid,
+            )
+
         entry: dict = {
             "id": sid,
             "name": r["name"],
@@ -106,7 +114,7 @@ async def list_sessions(user: CurrentUser = Depends(get_current_user)):
             "containerStatus": container_status,
             "devicePreset": r["device_preset"] or DEFAULT_PRESET,
             "proxyUrl": r["proxy_url"] or "",
-            "fingerprintProfile": r["fingerprint_profile"],
+            "fingerprintProfile": fp,
         }
 
         if container_status == "running":
@@ -130,7 +138,7 @@ async def create_session(body: CreateSessionBody, user: CurrentUser = Depends(ge
     fp_profile = generate_profile()
     await pool.execute(
         "INSERT INTO sessions (id, name, device_preset, proxy_url, tenant_id, user_id, fingerprint_profile) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)",
-        session_id, body.name, preset_id, body.proxyUrl, user.tenant_id, user.id, json.dumps(fp_profile),
+        session_id, body.name, preset_id, body.proxyUrl, user.tenant_id, user.id, fp_profile,
     )
     logger.info("Session created: %s (%s) preset=%s", session_id, body.name, preset_id)
     return {"id": session_id, "name": body.name, "devicePreset": preset_id, "proxyUrl": body.proxyUrl, "fingerprintProfile": fp_profile}
@@ -146,6 +154,13 @@ async def get_session(session_id: str, user: CurrentUser = Depends(get_current_u
     )
     if not row:
         raise HTTPException(status_code=404, detail="Session not found")
+    fp = row["fingerprint_profile"]
+    if fp is None:
+        fp = generate_profile()
+        await pool.execute(
+            "UPDATE sessions SET fingerprint_profile = $1::jsonb WHERE id = $2",
+            fp, session_id,
+        )
     return {
         "id": row["id"],
         "name": row["name"],
@@ -155,7 +170,7 @@ async def get_session(session_id: str, user: CurrentUser = Depends(get_current_u
         "currentTitle": row["current_title"] or "",
         "devicePreset": row["device_preset"] or DEFAULT_PRESET,
         "proxyUrl": row["proxy_url"] or "",
-        "fingerprintProfile": row["fingerprint_profile"],
+        "fingerprintProfile": fp,
     }
 
 
@@ -261,8 +276,6 @@ async def change_device_preset(session_id: str, body: DevicePresetBody, user: Cu
     preset_data = get_preset(body.preset)
     proxy = row["proxy_url"] or None
     fp_profile = row["fingerprint_profile"]
-    if isinstance(fp_profile, str):
-        fp_profile = json.loads(fp_profile)
     from app.tools.browser.session import invalidate_session_cache
     invalidate_session_cache(session_id)
     ports = await recreate_container(
@@ -292,8 +305,6 @@ async def change_proxy(session_id: str, body: ProxyBody, user: CurrentUser = Dep
     )
     preset_data = get_preset(row["device_preset"] or DEFAULT_PRESET)
     fp_profile = row["fingerprint_profile"]
-    if isinstance(fp_profile, str):
-        fp_profile = json.loads(fp_profile)
     from app.tools.browser.session import invalidate_session_cache
     invalidate_session_cache(session_id)
     ports = await recreate_container(
@@ -317,7 +328,7 @@ async def regenerate_fingerprint(session_id: str, body: FingerprintActionBody, u
     fp_profile = generate_profile()
     await pool.execute(
         "UPDATE sessions SET fingerprint_profile = $1::jsonb, updated_at = NOW() WHERE id = $2",
-        json.dumps(fp_profile), session_id,
+        fp_profile, session_id,
     )
     preset_data = get_preset(row["device_preset"] or DEFAULT_PRESET)
     proxy = row["proxy_url"] or None

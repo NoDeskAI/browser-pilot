@@ -102,6 +102,7 @@ export default {
     clip: 'Clip',
     reconnect: 'Reconnect',
     clipboardError: 'Clipboard operation failed',
+    fullscreenUnavailable: 'Fullscreen unavailable in this environment, please open in browser',
   },
   logs: {
     title: 'Runtime Logs',

@@ -259,13 +259,20 @@ function applyQuality() {
   }
 }
 
-function toggleFullscreen() {
+async function toggleFullscreen() {
   const el = viewerRoot.value
   if (!el) return
-  if (!document.fullscreenElement) {
-    el.requestFullscreen().then(() => { isFullscreen.value = true }).catch(() => {})
-  } else {
-    document.exitFullscreen().then(() => { isFullscreen.value = false }).catch(() => {})
+  try {
+    if (!document.fullscreenElement) {
+      await el.requestFullscreen()
+      isFullscreen.value = true
+    } else {
+      await document.exitFullscreen()
+      isFullscreen.value = false
+    }
+  } catch {
+    const { toast } = await import('vue-sonner')
+    toast.error(t('vnc.fullscreenUnavailable'))
   }
 }
 
@@ -406,17 +413,12 @@ watch(qualityLevel, applyQuality)
 
         <!-- Clipboard popover -->
         <Popover :open="clipboardOpen" @update:open="onClipboardOpenChange">
-          <Tooltip>
-            <TooltipTrigger as-child>
-              <PopoverTrigger as-child>
-                <Button variant="ghost" size="sm" class="h-5 px-1.5 text-[10px] gap-1" :class="clipboardOpen ? 'text-lime-400' : ''">
-                  <Clipboard class="size-3" />
-                  {{ t('vnc.clip') }}
-                </Button>
-              </PopoverTrigger>
-            </TooltipTrigger>
-            <TooltipContent>{{ t('vnc.clipboard') }}</TooltipContent>
-          </Tooltip>
+          <PopoverTrigger as-child>
+            <Button variant="ghost" size="sm" class="h-5 px-1.5 text-[10px] gap-1" :class="clipboardOpen ? 'text-lime-400' : ''" :title="t('vnc.clipboard')">
+              <Clipboard class="size-3" />
+              {{ t('vnc.clip') }}
+            </Button>
+          </PopoverTrigger>
           <PopoverContent class="w-64 p-2" align="start">
             <textarea
               v-model="clipboardText"
@@ -445,8 +447,8 @@ watch(qualityLevel, applyQuality)
         <Tooltip>
           <TooltipTrigger as-child>
             <Toggle
-              :pressed="scaleMode === 'scale'"
-              @update:pressed="toggleScaleMode"
+              :model-value="scaleMode === 'scale'"
+              @update:model-value="toggleScaleMode"
               size="sm"
               class="h-5 px-1.5 text-[10px] data-[state=on]:text-blue-400"
             >{{ scaleMode === 'scale' ? t('vnc.scaleFit') : t('vnc.scaleNative') }}</Toggle>
@@ -470,8 +472,8 @@ watch(qualityLevel, applyQuality)
         <Tooltip>
           <TooltipTrigger as-child>
             <Toggle
-              :pressed="viewOnly"
-              @update:pressed="toggleViewOnly"
+              :model-value="viewOnly"
+              @update:model-value="toggleViewOnly"
               size="sm"
               class="h-5 px-1.5 text-[10px] gap-1 data-[state=on]:text-amber-400"
             >
@@ -520,22 +522,18 @@ watch(qualityLevel, applyQuality)
 
         <!-- Proxy popover -->
         <Popover :open="proxyOpen" @update:open="onProxyOpenChange">
-          <Tooltip>
-            <TooltipTrigger as-child>
-              <PopoverTrigger as-child>
-                <Button
-                  variant="ghost" size="sm"
-                  :disabled="sessState.containerRestarting"
-                  class="h-5 px-1.5 text-[10px] gap-1"
-                  :class="currentProxy ? 'text-emerald-400' : ''"
-                >
-                  <Network class="size-3" />
-                  {{ t('vnc.proxy') }}
-                </Button>
-              </PopoverTrigger>
-            </TooltipTrigger>
-            <TooltipContent>{{ currentProxy ? t('vnc.proxyActive') + ': ' + currentProxy : t('vnc.proxy') }}</TooltipContent>
-          </Tooltip>
+          <PopoverTrigger as-child>
+            <Button
+              variant="ghost" size="sm"
+              :disabled="sessState.containerRestarting"
+              class="h-5 px-1.5 text-[10px] gap-1"
+              :class="currentProxy ? 'text-emerald-400' : ''"
+              :title="currentProxy ? t('vnc.proxyActive') + ': ' + currentProxy : t('vnc.proxy')"
+            >
+              <Network class="size-3" />
+              {{ t('vnc.proxy') }}
+            </Button>
+          </PopoverTrigger>
           <PopoverContent class="w-64 p-2" align="start">
             <Input
               v-model="proxyInput"
@@ -563,22 +561,18 @@ watch(qualityLevel, applyQuality)
 
         <!-- Fingerprint popover -->
         <Popover :open="fpOpen" @update:open="(o: boolean) => fpOpen = o">
-          <Tooltip>
-            <TooltipTrigger as-child>
-              <PopoverTrigger as-child>
-                <Button
-                  variant="ghost" size="sm"
-                  :disabled="sessState.containerRestarting"
-                  class="h-5 px-1.5 text-[10px] gap-1"
-                  :class="fpProfile ? 'text-violet-400' : ''"
-                >
-                  <Fingerprint class="size-3" />
-                  {{ t('vnc.fingerprint') }}
-                </Button>
-              </PopoverTrigger>
-            </TooltipTrigger>
-            <TooltipContent>{{ t('vnc.fingerprintTitle') }}</TooltipContent>
-          </Tooltip>
+          <PopoverTrigger as-child>
+            <Button
+              variant="ghost" size="sm"
+              :disabled="sessState.containerRestarting"
+              class="h-5 px-1.5 text-[10px] gap-1"
+              :class="fpProfile ? 'text-violet-400' : ''"
+              :title="t('vnc.fingerprintTitle')"
+            >
+              <Fingerprint class="size-3" />
+              {{ t('vnc.fingerprint') }}
+            </Button>
+          </PopoverTrigger>
           <PopoverContent class="w-72 p-3" align="start">
             <template v-if="fpProfile">
               <div class="space-y-1.5 text-xs">

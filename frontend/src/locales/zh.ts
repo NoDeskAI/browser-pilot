@@ -102,6 +102,7 @@ export default {
     clip: '剪贴',
     reconnect: '重新连接',
     clipboardError: '剪贴板操作失败',
+    fullscreenUnavailable: '当前环境不支持全屏，请在浏览器中打开',
   },
   logs: {
     title: '运行日志',
