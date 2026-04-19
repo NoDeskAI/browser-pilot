@@ -124,7 +124,7 @@ async function onPauseContainer(id: string) {
       <div v-if="sessions.sessions.length > 0" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
         <Card
           v-for="s in sessions.sessions" :key="s.id"
-          class="flex flex-col cursor-pointer transition-all hover:shadow-md hover:border-primary/30 group"
+          class="flex flex-col cursor-pointer transition-all hover:shadow-md hover:border-primary/30 group p-0 gap-0"
           @click="router.push(`/s/${s.id}`)"
         >
           <div class="p-4 pb-3 flex items-start justify-between gap-3">
