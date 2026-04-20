@@ -31,6 +31,8 @@ export default {
     create: 'Create Session',
     empty: 'No sessions yet',
     emptyHint: 'Create your first browser session to get started',
+    autoRefresh: 'Auto Refresh',
+    refresh: 'Refresh',
   },
   session: {
     sessions: 'Sessions',
@@ -212,6 +214,7 @@ export default {
     tokenDeleted: 'Token deleted',
     tokenDeleteError: 'Failed to delete token',
     tokenSessionBadge: 'Session',
+    tokenDocs: 'Documentation',
   },
   auth: {
     loginTitle: 'Sign In',

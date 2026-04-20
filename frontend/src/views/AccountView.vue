@@ -3,7 +3,7 @@ import { ref, watch, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAuth } from '../composables/useAuth'
 import { api } from '../lib/api'
-import { Loader2, Plus, Trash2, Copy, Check, Key } from 'lucide-vue-next'
+import { Loader2, Plus, Trash2, Copy, Check, Key, BookOpen } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -272,10 +272,18 @@ function roleBadgeVariant(role?: string) {
                 <CardTitle>{{ t('account.tokensTitle') }}</CardTitle>
                 <CardDescription>{{ t('account.tokensDescription') }}</CardDescription>
               </div>
-              <Button size="sm" @click="createDialogOpen = true">
-                <Plus class="size-4 mr-1.5" />
-                {{ t('account.tokenCreate') }}
-              </Button>
+              <div class="flex items-center gap-2">
+                <RouterLink to="/docs/api-token">
+                  <Button variant="outline" size="sm">
+                    <BookOpen class="size-4 mr-1.5" />
+                    {{ t('account.tokenDocs') }}
+                  </Button>
+                </RouterLink>
+                <Button size="sm" @click="createDialogOpen = true">
+                  <Plus class="size-4 mr-1.5" />
+                  {{ t('account.tokenCreate') }}
+                </Button>
+              </div>
             </div>
           </CardHeader>
           <CardContent>

@@ -1,13 +1,14 @@
 <script setup lang="ts">
-import { ref, nextTick, onMounted, onUnmounted } from 'vue'
+import { ref, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useSessions } from '../composables/useSessions'
 import { useNotify } from '../composables/useNotify'
-import { Plus, Play, Pause, Trash2, Monitor, Globe, Hash, Clock } from 'lucide-vue-next'
+import { Plus, Play, Pause, Trash2, Monitor, Globe, Hash, Clock, RefreshCw } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
+import { Switch } from '@/components/ui/switch'
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
@@ -25,13 +26,24 @@ const {
 const isMac = navigator.platform.includes('Mac')
 const shortcutLabel = isMac ? '⌘N' : 'Ctrl+N'
 
+const autoRefresh = ref(localStorage.getItem('bp_auto_refresh') === 'true')
 let refreshTimer: ReturnType<typeof setInterval> | null = null
-onMounted(() => {
+
+function startTimer() {
+  stopTimer()
   refreshTimer = setInterval(fetchSessions, 3000)
+}
+function stopTimer() {
+  if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null }
+}
+
+watch(autoRefresh, (on) => {
+  localStorage.setItem('bp_auto_refresh', String(on))
+  on ? startTimer() : stopTimer()
 })
-onUnmounted(() => {
-  if (refreshTimer) clearInterval(refreshTimer)
-})
+
+onMounted(() => { if (autoRefresh.value) startTimer() })
+onUnmounted(stopTimer)
 
 const editingId = ref<string | null>(null)
 const editName = ref('')
@@ -114,11 +126,20 @@ async function onPauseContainer(id: string) {
     <div class="max-w-6xl mx-auto px-6 py-8 space-y-6">
       <div class="flex items-center justify-between">
         <h2 class="text-xl font-semibold">{{ t('dashboard.title') }}</h2>
-        <Button @click="handleCreateSession" class="gap-2">
-          <Plus class="size-4" />
-          {{ t('dashboard.create') }}
-          <kbd class="ml-1 text-[10px] opacity-60 font-sans tracking-widest">{{ shortcutLabel }}</kbd>
-        </Button>
+        <div class="flex items-center gap-3">
+          <Button variant="outline" size="sm" :disabled="autoRefresh" @click="fetchSessions" :title="t('dashboard.refresh')">
+            <RefreshCw class="size-4" />
+          </Button>
+          <label class="flex items-center gap-1.5 text-sm text-muted-foreground cursor-pointer select-none">
+            <Switch :checked="autoRefresh" @update:checked="autoRefresh = $event" />
+            {{ t('dashboard.autoRefresh') }}
+          </label>
+          <Button @click="handleCreateSession" class="gap-2">
+            <Plus class="size-4" />
+            {{ t('dashboard.create') }}
+            <kbd class="ml-1 text-[10px] opacity-60 font-sans tracking-widest">{{ shortcutLabel }}</kbd>
+          </Button>
+        </div>
       </div>
 
       <div v-if="sessions.sessions.length > 0" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">

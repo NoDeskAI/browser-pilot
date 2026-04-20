@@ -31,6 +31,8 @@ export default {
     create: '创建会话',
     empty: '暂无会话',
     emptyHint: '创建第一个浏览器会话开始使用',
+    autoRefresh: '自动刷新',
+    refresh: '刷新',
   },
   session: {
     sessions: '会话',
@@ -212,6 +214,7 @@ export default {
     tokenDeleted: 'Token 已删除',
     tokenDeleteError: '删除 Token 失败',
     tokenSessionBadge: '会话',
+    tokenDocs: '使用文档',
   },
   auth: {
     loginTitle: '登录',
