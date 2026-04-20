@@ -133,4 +133,10 @@ async def docker_browser_lang(body: BrowserLangRequest, _user: CurrentUser = Dep
     stdout, stderr, rc = await _exec_in_container(cname, bash_cmd, timeout=10)
     if rc != 0 and "timeout" in stderr:
         return {"ok": False, "error": "command timed out"}
+    from app.db import get_pool
+    pool = get_pool()
+    await pool.execute(
+        "UPDATE sessions SET browser_lang = $1 WHERE id = $2",
+        safe_lang, body.sessionId,
+    )
     return {"ok": True, "lang": safe_lang}

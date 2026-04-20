@@ -93,18 +93,22 @@ async function fetchSessions(): Promise<void> {
       devicePreset: s.devicePreset || '',
       proxyUrl: s.proxyUrl || '',
       fingerprintProfile: s.fingerprintProfile || null,
+      browserLang: s.browserLang || 'zh-CN',
     }))
   } catch {
     // silently ignore
   }
 }
 
+const _LOCALE_TO_BROWSER_LANG: Record<string, string> = { zh: 'zh-CN', en: 'en-US' }
+
 async function createSession(name?: string): Promise<Session> {
   if (!name) name = i18n.global.t('session.defaultName')
+  const browserLang = _LOCALE_TO_BROWSER_LANG[(i18n.global.locale as any).value] ?? 'en-US'
   const res = await api('/api/sessions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name }),
+    body: JSON.stringify({ name, browserLang }),
   })
   const data = await res.json()
   const session: Session = {
@@ -116,6 +120,8 @@ async function createSession(name?: string): Promise<Session> {
     currentTitle: '',
     containerStatus: 'not_found',
     ports: null,
+    fingerprintProfile: data.fingerprintProfile || null,
+    browserLang: data.browserLang || browserLang,
   }
   state.sessions.unshift(session)
   return session

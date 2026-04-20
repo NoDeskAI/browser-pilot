@@ -69,6 +69,7 @@ async def create_container(
     user_agent: str | None = None,
     proxy: str | None = None,
     fingerprint_profile: dict | None = None,
+    browser_lang: str = "zh-CN",
 ) -> str:
     name = container_name(session_id)
     vol_name = f"{name}-data"
@@ -76,6 +77,7 @@ async def create_container(
         **_STATIC_ENV,
         "SE_SCREEN_WIDTH": str(width),
         "SE_SCREEN_HEIGHT": str(height),
+        "BROWSER_LANG": browser_lang,
     }
     if user_agent:
         env["BROWSER_UA"] = user_agent
@@ -225,39 +227,38 @@ async def _wait_grid_ready(selenium_port: int) -> None:
     logger.warning("Grid readiness timeout on port %d after %.1fs", selenium_port, elapsed)
 
 
-async def _session_container_params(session_id: str) -> tuple[int, int, str | None, str | None, dict | None]:
-    """Read device_preset + proxy_url + fingerprint_profile from DB and resolve to container params."""
+async def _session_container_params(session_id: str) -> tuple[int, int, str | None, str | None, dict | None, str]:
+    """Read device_preset + proxy_url + fingerprint_profile + browser_lang from DB and resolve to container params."""
     pool = get_pool()
     row = await pool.fetchrow(
-        "SELECT device_preset, proxy_url, fingerprint_profile FROM sessions WHERE id = $1",
+        "SELECT device_preset, proxy_url, fingerprint_profile, browser_lang, tenant_id FROM sessions WHERE id = $1",
         session_id,
     )
     if not row:
         preset_data = get_preset(DEFAULT_PRESET)
-        return preset_data["width"], preset_data["height"], None, None, None
+        return preset_data["width"], preset_data["height"], None, None, None, "zh-CN"
     preset_data = get_preset(row["device_preset"] or DEFAULT_PRESET)
     proxy = row["proxy_url"] or None
+    browser_lang = row["browser_lang"] or "zh-CN"
 
     fp_profile = row["fingerprint_profile"]
-    if fp_profile is None:
-        fp_profile = generate_profile()
+    if fp_profile is None and row["tenant_id"]:
+        fp_profile = await generate_profile(row["tenant_id"])
         await pool.execute(
             "UPDATE sessions SET fingerprint_profile = $1::jsonb WHERE id = $2",
-            json.dumps(fp_profile), session_id,
+            fp_profile, session_id,
         )
         logger.info("Lazy-generated fingerprint profile for session %s", session_id)
-    elif isinstance(fp_profile, str):
-        fp_profile = json.loads(fp_profile)
 
-    return preset_data["width"], preset_data["height"], preset_data.get("user_agent"), proxy, fp_profile
+    return preset_data["width"], preset_data["height"], preset_data.get("user_agent"), proxy, fp_profile, browser_lang
 
 
 async def ensure_container_running(session_id: str) -> dict[str, int]:
     status = await get_container_status(session_id)
 
     if status == "not_found":
-        width, height, ua, proxy, fp_profile = await _session_container_params(session_id)
-        await create_container(session_id, width=width, height=height, user_agent=ua, proxy=proxy, fingerprint_profile=fp_profile)
+        width, height, ua, proxy, fp_profile, lang = await _session_container_params(session_id)
+        await create_container(session_id, width=width, height=height, user_agent=ua, proxy=proxy, fingerprint_profile=fp_profile, browser_lang=lang)
         ports = await get_container_ports(session_id)
         await _wait_grid_ready(ports["selenium_port"])
         return ports
@@ -282,6 +283,7 @@ async def recreate_container(
     user_agent: str | None = None,
     proxy: str | None = None,
     fingerprint_profile: dict | None = None,
+    browser_lang: str = "zh-CN",
 ) -> dict[str, int]:
     """Stop, remove (keep volume), create with new params, wait for grid."""
     try:
@@ -289,7 +291,7 @@ async def recreate_container(
     except Exception:
         pass
     await remove_container(session_id, keep_volume=True)
-    await create_container(session_id, width=width, height=height, user_agent=user_agent, proxy=proxy, fingerprint_profile=fingerprint_profile)
+    await create_container(session_id, width=width, height=height, user_agent=user_agent, proxy=proxy, fingerprint_profile=fingerprint_profile, browser_lang=browser_lang)
     ports = await get_container_ports(session_id)
     await _wait_grid_ready(ports["selenium_port"])
     return ports

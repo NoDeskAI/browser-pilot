@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from pathlib import Path
 
@@ -23,6 +24,11 @@ def _run_migrations() -> None:
     command.upgrade(cfg, "head")
 
 
+async def _init_connection(conn: asyncpg.Connection) -> None:
+    await conn.set_type_codec("jsonb", encoder=json.dumps, decoder=json.loads, schema="pg_catalog")
+    await conn.set_type_codec("json", encoder=json.dumps, decoder=json.loads, schema="pg_catalog")
+
+
 async def init_db() -> None:
     global _pool, _db_ready
     backoff = 1.0
@@ -31,7 +37,7 @@ async def init_db() -> None:
         attempt += 1
         try:
             await asyncio.to_thread(_run_migrations)
-            _pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=5)
+            _pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=5, init=_init_connection)
             _db_ready = True
             logger.info("Database ready (attempt %d)", attempt)
             return

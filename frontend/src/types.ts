@@ -10,6 +10,7 @@ export interface Session {
   devicePreset?: string
   proxyUrl?: string
   fingerprintProfile?: Record<string, any> | null
+  browserLang?: string
 }
 
 export interface DevicePreset {

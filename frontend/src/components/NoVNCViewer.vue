@@ -43,7 +43,8 @@ const clipboardText = ref('')
 const clipboardOpen = ref(false)
 const clipLoading = ref(false)
 const isFullscreen = ref(false)
-const browserLang = ref('zh-CN')
+const activeSession = computed(() => sessState.sessions.find(s => s.id === props.sessionId))
+const browserLang = ref(activeSession.value?.browserLang || 'zh-CN')
 const langLoading = ref(false)
 const langError = ref('')
 const LANG_OPTIONS = [
@@ -373,6 +374,10 @@ watch(() => props.wsUrl, () => {
   reconnectAttempts = 0
   connectRFB()
 })
+
+watch(() => activeSession.value?.browserLang, (lang) => {
+  if (lang) browserLang.value = lang
+}, { once: true })
 
 watch(qualityLevel, applyQuality)
 </script>

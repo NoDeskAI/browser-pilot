@@ -6,7 +6,7 @@ rm -f /home/seluser/chrome-data/manual/SingletonLock \
       /home/seluser/chrome-data/manual/SingletonSocket 2>/dev/null
 W=${SE_SCREEN_WIDTH:-1280}
 H=${SE_SCREEN_HEIGHT:-800}
-LANG_CODE=$(cat /tmp/browser-lang 2>/dev/null || echo "zh-CN")
+LANG_CODE=$(cat /tmp/browser-lang 2>/dev/null || echo "${BROWSER_LANG:-zh-CN}")
 LOCALE_ID=$(echo "$LANG_CODE" | sed 's/-/_/')
 export LANGUAGE="${LOCALE_ID}"
 

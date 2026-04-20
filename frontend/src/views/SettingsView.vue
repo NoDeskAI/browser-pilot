@@ -3,6 +3,7 @@ import { ref, defineAsyncComponent } from 'vue'
 import { useI18n } from 'vue-i18n'
 import StorageSettings from '../components/StorageSettings.vue'
 import OrgSettings from '../components/OrgSettings.vue'
+import FingerprintPoolSettings from '../components/FingerprintPoolSettings.vue'
 
 const isEE = __EE__
 const SsoConfigPanel = isEE
@@ -40,6 +41,13 @@ const activeTab = ref('organization')
               {{ t('settings.fileStorage') }}
             </button>
             <button
+              @click="activeTab = 'fingerprintPool'"
+              class="px-3 py-2 text-sm rounded-md transition-colors text-left whitespace-nowrap"
+              :class="activeTab === 'fingerprintPool' ? 'bg-accent text-accent-foreground font-medium' : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground'"
+            >
+              {{ t('settings.fingerprintPool') }}
+            </button>
+            <button
               v-if="isEE"
               @click="activeTab = 'sso'"
               class="px-3 py-2 text-sm rounded-md transition-colors text-left whitespace-nowrap"
@@ -61,6 +69,7 @@ const activeTab = ref('organization')
           <div class="flex-1 min-w-0">
             <OrgSettings v-if="activeTab === 'organization'" />
             <StorageSettings v-else-if="activeTab === 'storage'" />
+            <FingerprintPoolSettings v-else-if="activeTab === 'fingerprintPool'" />
             <component v-else-if="isEE && activeTab === 'sso' && SsoConfigPanel" :is="SsoConfigPanel" />
             <component v-else-if="isEE && activeTab === 'tenants' && TenantManager" :is="TenantManager" />
           </div>

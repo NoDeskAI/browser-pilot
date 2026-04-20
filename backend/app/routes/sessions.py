@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -20,7 +21,7 @@ from app.container import (
 )
 from app.db import get_pool
 from app.device_presets import DEVICE_PRESETS, DEFAULT_PRESET, get_preset
-from app.fingerprint import generate_profile
+from app.fingerprint import PoolEmptyError, generate_profile, resolve_timezone
 
 logger = logging.getLogger("routes.sessions")
 router = APIRouter()
@@ -42,6 +43,7 @@ class CreateSessionBody(BaseModel):
     name: str = "新会话"
     devicePreset: str = DEFAULT_PRESET
     proxyUrl: str = ""
+    browserLang: str = "zh-CN"
 
 
 class UpdateSessionBody(BaseModel):
@@ -76,14 +78,14 @@ async def list_sessions(user: CurrentUser = Depends(get_current_user)):
     if user.role in ("superadmin", "admin"):
         rows = await pool.fetch("""
             SELECT id, name, created_at, updated_at, current_url, current_title,
-                   device_preset, proxy_url, user_id, fingerprint_profile
+                   device_preset, proxy_url, user_id, fingerprint_profile, browser_lang
             FROM sessions WHERE tenant_id = $1
             ORDER BY updated_at DESC
         """, user.tenant_id)
     else:
         rows = await pool.fetch("""
             SELECT id, name, created_at, updated_at, current_url, current_title,
-                   device_preset, proxy_url, user_id, fingerprint_profile
+                   device_preset, proxy_url, user_id, fingerprint_profile, browser_lang
             FROM sessions WHERE tenant_id = $1 AND user_id = $2
             ORDER BY updated_at DESC
         """, user.tenant_id, user.id)
@@ -98,11 +100,14 @@ async def list_sessions(user: CurrentUser = Depends(get_current_user)):
 
         fp = r["fingerprint_profile"]
         if fp is None:
-            fp = generate_profile()
-            await pool.execute(
-                "UPDATE sessions SET fingerprint_profile = $1::jsonb WHERE id = $2",
-                fp, sid,
-            )
+            try:
+                fp = await generate_profile(user.tenant_id)
+                await pool.execute(
+                    "UPDATE sessions SET fingerprint_profile = $1::jsonb WHERE id = $2",
+                    fp, sid,
+                )
+            except PoolEmptyError:
+                pass
 
         entry: dict = {
             "id": sid,
@@ -115,6 +120,7 @@ async def list_sessions(user: CurrentUser = Depends(get_current_user)):
             "devicePreset": r["device_preset"] or DEFAULT_PRESET,
             "proxyUrl": r["proxy_url"] or "",
             "fingerprintProfile": fp,
+            "browserLang": r["browser_lang"] or "zh-CN",
         }
 
         if container_status == "running":
@@ -135,13 +141,18 @@ async def create_session(body: CreateSessionBody, user: CurrentUser = Depends(ge
     pool = get_pool()
     session_id = str(uuid.uuid4())
     preset_id = body.devicePreset if body.devicePreset in DEVICE_PRESETS else DEFAULT_PRESET
-    fp_profile = generate_profile()
+    safe_lang = re.sub(r"[^a-zA-Z0-9_-]", "", body.browserLang or "zh-CN") or "zh-CN"
+    try:
+        fp_profile = await generate_profile(user.tenant_id)
+    except PoolEmptyError as exc:
+        raise HTTPException(422, f"Fingerprint pool group '{exc.group}' has no enabled entries") from exc
+    fp_profile["timezone"] = await resolve_timezone(body.proxyUrl or None)
     await pool.execute(
-        "INSERT INTO sessions (id, name, device_preset, proxy_url, tenant_id, user_id, fingerprint_profile) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)",
-        session_id, body.name, preset_id, body.proxyUrl, user.tenant_id, user.id, fp_profile,
+        "INSERT INTO sessions (id, name, device_preset, proxy_url, tenant_id, user_id, fingerprint_profile, browser_lang) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8)",
+        session_id, body.name, preset_id, body.proxyUrl, user.tenant_id, user.id, fp_profile, safe_lang,
     )
-    logger.info("Session created: %s (%s) preset=%s", session_id, body.name, preset_id)
-    return {"id": session_id, "name": body.name, "devicePreset": preset_id, "proxyUrl": body.proxyUrl, "fingerprintProfile": fp_profile}
+    logger.info("Session created: %s (%s) preset=%s lang=%s", session_id, body.name, preset_id, safe_lang)
+    return {"id": session_id, "name": body.name, "devicePreset": preset_id, "proxyUrl": body.proxyUrl, "fingerprintProfile": fp_profile, "browserLang": safe_lang}
 
 
 @router.get("/api/sessions/{session_id}")
@@ -149,18 +160,21 @@ async def get_session(session_id: str, user: CurrentUser = Depends(get_current_u
     await _verify_session_tenant(session_id, user)
     pool = get_pool()
     row = await pool.fetchrow(
-        "SELECT id, name, created_at, updated_at, current_url, current_title, device_preset, proxy_url, fingerprint_profile FROM sessions WHERE id = $1",
+        "SELECT id, name, created_at, updated_at, current_url, current_title, device_preset, proxy_url, fingerprint_profile, browser_lang FROM sessions WHERE id = $1",
         session_id,
     )
     if not row:
         raise HTTPException(status_code=404, detail="Session not found")
     fp = row["fingerprint_profile"]
     if fp is None:
-        fp = generate_profile()
-        await pool.execute(
-            "UPDATE sessions SET fingerprint_profile = $1::jsonb WHERE id = $2",
-            fp, session_id,
-        )
+        try:
+            fp = await generate_profile(user.tenant_id)
+            await pool.execute(
+                "UPDATE sessions SET fingerprint_profile = $1::jsonb WHERE id = $2",
+                fp, session_id,
+            )
+        except PoolEmptyError:
+            pass
     return {
         "id": row["id"],
         "name": row["name"],
@@ -171,6 +185,7 @@ async def get_session(session_id: str, user: CurrentUser = Depends(get_current_u
         "devicePreset": row["device_preset"] or DEFAULT_PRESET,
         "proxyUrl": row["proxy_url"] or "",
         "fingerprintProfile": fp,
+        "browserLang": row["browser_lang"] or "zh-CN",
     }
 
 
@@ -266,7 +281,7 @@ async def change_device_preset(session_id: str, body: DevicePresetBody, user: Cu
     if body.preset not in DEVICE_PRESETS:
         return {"ok": False, "error": f"Unknown preset: {body.preset}"}
     pool = get_pool()
-    row = await pool.fetchrow("SELECT proxy_url, fingerprint_profile FROM sessions WHERE id = $1", session_id)
+    row = await pool.fetchrow("SELECT proxy_url, fingerprint_profile, browser_lang FROM sessions WHERE id = $1", session_id)
     if not row:
         return {"ok": False, "error": "Session not found"}
     await pool.execute(
@@ -285,6 +300,7 @@ async def change_device_preset(session_id: str, body: DevicePresetBody, user: Cu
         user_agent=preset_data.get("user_agent"),
         proxy=proxy,
         fingerprint_profile=fp_profile,
+        browser_lang=row["browser_lang"] or "zh-CN",
     )
     return {"ok": True, "ports": ports, "devicePreset": body.preset}
 
@@ -296,15 +312,17 @@ async def change_proxy(session_id: str, body: ProxyBody, user: CurrentUser = Dep
     if proxy_url and not proxy_url.startswith(_VALID_PROXY_SCHEMES):
         return {"ok": False, "error": "Proxy URL must start with http://, https://, socks4://, or socks5://"}
     pool = get_pool()
-    row = await pool.fetchrow("SELECT device_preset, fingerprint_profile FROM sessions WHERE id = $1", session_id)
+    row = await pool.fetchrow("SELECT device_preset, fingerprint_profile, browser_lang FROM sessions WHERE id = $1", session_id)
     if not row:
         return {"ok": False, "error": "Session not found"}
+    fp_profile = row["fingerprint_profile"] or {}
+    tz = await resolve_timezone(proxy_url or None)
+    fp_profile["timezone"] = tz
     await pool.execute(
-        "UPDATE sessions SET proxy_url = $1, updated_at = NOW() WHERE id = $2",
-        proxy_url, session_id,
+        "UPDATE sessions SET proxy_url = $1, fingerprint_profile = $2::jsonb, updated_at = NOW() WHERE id = $3",
+        proxy_url, fp_profile, session_id,
     )
     preset_data = get_preset(row["device_preset"] or DEFAULT_PRESET)
-    fp_profile = row["fingerprint_profile"]
     from app.tools.browser.session import invalidate_session_cache
     invalidate_session_cache(session_id)
     ports = await recreate_container(
@@ -314,6 +332,7 @@ async def change_proxy(session_id: str, body: ProxyBody, user: CurrentUser = Dep
         user_agent=preset_data.get("user_agent"),
         proxy=proxy_url or None,
         fingerprint_profile=fp_profile,
+        browser_lang=row["browser_lang"] or "zh-CN",
     )
     return {"ok": True, "ports": ports, "proxyUrl": proxy_url}
 
@@ -322,16 +341,20 @@ async def change_proxy(session_id: str, body: ProxyBody, user: CurrentUser = Dep
 async def regenerate_fingerprint(session_id: str, body: FingerprintActionBody, user: CurrentUser = Depends(get_current_user)):
     await _verify_session_tenant(session_id, user)
     pool = get_pool()
-    row = await pool.fetchrow("SELECT device_preset, proxy_url FROM sessions WHERE id = $1", session_id)
+    row = await pool.fetchrow("SELECT device_preset, proxy_url, browser_lang FROM sessions WHERE id = $1", session_id)
     if not row:
         return {"ok": False, "error": "Session not found"}
-    fp_profile = generate_profile()
+    proxy = row["proxy_url"] or None
+    try:
+        fp_profile = await generate_profile(user.tenant_id)
+    except PoolEmptyError as exc:
+        return {"ok": False, "error": f"Pool group '{exc.group}' has no enabled entries"}
+    fp_profile["timezone"] = await resolve_timezone(proxy)
     await pool.execute(
         "UPDATE sessions SET fingerprint_profile = $1::jsonb, updated_at = NOW() WHERE id = $2",
         fp_profile, session_id,
     )
     preset_data = get_preset(row["device_preset"] or DEFAULT_PRESET)
-    proxy = row["proxy_url"] or None
     from app.tools.browser.session import invalidate_session_cache
     invalidate_session_cache(session_id)
     ports = await recreate_container(
@@ -341,6 +364,7 @@ async def regenerate_fingerprint(session_id: str, body: FingerprintActionBody, u
         user_agent=preset_data.get("user_agent"),
         proxy=proxy,
         fingerprint_profile=fp_profile,
+        browser_lang=row["browser_lang"] or "zh-CN",
     )
     return {"ok": True, "ports": ports, "fingerprintProfile": fp_profile}
 

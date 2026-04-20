@@ -111,9 +111,11 @@ def _build_accept_language(languages: list[str]) -> str:
 
 
 async def _inject_stealth(sid: str, *, base_url: str, fingerprint_profile: dict | None = None) -> None:
-    from app.fingerprint import generate_profile, CHROME_VERSION, CHROME_MAJOR
+    from app.fingerprint import CHROME_VERSION, CHROME_MAJOR
 
-    profile = fingerprint_profile if fingerprint_profile else generate_profile()
+    if not fingerprint_profile:
+        raise ValueError("fingerprint_profile is required")
+    profile = fingerprint_profile
     nav = profile.get("navigator", {})
     hints = profile.get("clientHints", {})
     tz = profile.get("timezone", "UTC")
