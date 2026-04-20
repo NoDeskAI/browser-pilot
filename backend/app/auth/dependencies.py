@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Sequence
 
 import jwt
@@ -22,6 +22,7 @@ class CurrentUser:
     name: str
     role: str  # superadmin | admin | member
     created_at: str
+    session_scope: str | None = field(default=None)
 
 
 def _extract_token(request: Request) -> str | None:
@@ -37,7 +38,8 @@ async def _resolve_api_token(raw: str) -> CurrentUser | None:
     pool = get_pool()
     row = await pool.fetchrow(
         """
-        SELECT t.user_id, t.tenant_id, u.email, u.name, u.role, u.created_at
+        SELECT t.user_id, t.tenant_id, t.session_id,
+               u.email, u.name, u.role, u.created_at
         FROM api_tokens t JOIN users u ON t.user_id = u.id
         WHERE t.token_hash = $1 AND u.is_active = TRUE
         """,
@@ -56,23 +58,22 @@ async def _resolve_api_token(raw: str) -> CurrentUser | None:
         name=row["name"],
         role=row["role"],
         created_at=row["created_at"].isoformat(),
+        session_scope=row["session_id"],
     )
 
 
-async def get_current_user(request: Request) -> CurrentUser:
-    """FastAPI dependency: require a valid JWT or API token."""
+async def _resolve_user(request: Request) -> CurrentUser:
+    """Resolve the caller identity from JWT or API token. No scope rejection."""
     raw = _extract_token(request)
     if not raw:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
-    # API token (bp_ prefix)
     if raw.startswith("bp_"):
         user = await _resolve_api_token(raw)
         if not user:
             raise HTTPException(status_code=401, detail="Invalid API token")
         return user
 
-    # JWT
     try:
         payload = decode_access_token(raw)
     except jwt.PyJWTError:
@@ -101,6 +102,19 @@ async def get_current_user(request: Request) -> CurrentUser:
     )
 
 
+async def get_current_user(request: Request) -> CurrentUser:
+    """Require a valid JWT or *user-level* API token. Session-scoped tokens are rejected."""
+    user = await _resolve_user(request)
+    if user.session_scope:
+        raise HTTPException(status_code=403, detail="Session-scoped tokens cannot access this endpoint")
+    return user
+
+
+async def get_session_aware_user(request: Request) -> CurrentUser:
+    """Like get_current_user but also accepts session-scoped tokens."""
+    return await _resolve_user(request)
+
+
 async def get_optional_user(request: Request) -> CurrentUser | None:
     """Same as get_current_user but returns None instead of raising 401."""
     raw = _extract_token(request)
@@ -119,3 +133,22 @@ def require_role(allowed: Sequence[str]):
             raise HTTPException(status_code=403, detail="Insufficient permissions")
         return user
     return _check
+
+
+async def verify_session_access(session_id: str, user: CurrentUser) -> None:
+    """Check the caller is allowed to operate on the given session.
+
+    - User-level tokens: verify tenant ownership (query DB).
+    - Session-scoped tokens: verify exact session_id match.
+    """
+    if user.session_scope:
+        if session_id != user.session_scope:
+            raise HTTPException(status_code=403, detail="Token not authorized for this session")
+        return
+
+    pool = get_pool()
+    row = await pool.fetchrow("SELECT tenant_id FROM sessions WHERE id = $1", session_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if row["tenant_id"] and row["tenant_id"] != user.tenant_id:
+        raise HTTPException(status_code=404, detail="Session not found")

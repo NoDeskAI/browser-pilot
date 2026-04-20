@@ -4,11 +4,17 @@ import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useSessions } from '../composables/useSessions'
 import { useNotify } from '../composables/useNotify'
-import { Play, Pause, Trash2, ChevronRight, Monitor } from 'lucide-vue-next'
+import { api } from '../lib/api'
+import { Play, Pause, Trash2, ChevronRight, Monitor, Key, Loader2, Copy, Check } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import NoVNCViewer from '../components/NoVNCViewer.vue'
 import BrowserLogPanel from '../components/BrowserLogPanel.vue'
+import {
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+} from '@/components/ui/dialog'
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
@@ -30,6 +36,50 @@ const editing = ref(false)
 const editName = ref('')
 const inputRef = ref<HTMLInputElement>()
 const deleteDialogOpen = ref(false)
+
+// Session Token
+const tokenDialogOpen = ref(false)
+const tokenName = ref('')
+const tokenLoading = ref(false)
+const createdToken = ref<string | null>(null)
+const tokenCopied = ref(false)
+
+async function handleCreateSessionToken() {
+  if (!activeSession.value || !tokenName.value.trim()) return
+  tokenLoading.value = true
+  try {
+    const res = await api('/api/auth/tokens', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: tokenName.value.trim(), sessionId: activeSession.value.id }),
+    })
+    if (!res.ok) {
+      notify.error(t('account.tokenCreateError'))
+      return
+    }
+    const data = await res.json()
+    createdToken.value = data.token
+  } catch {
+    notify.error(t('account.tokenCreateError'))
+  } finally {
+    tokenLoading.value = false
+  }
+}
+
+function closeTokenDialog() {
+  tokenDialogOpen.value = false
+  createdToken.value = null
+  tokenName.value = ''
+  tokenCopied.value = false
+}
+
+async function copySessionToken() {
+  if (!createdToken.value) return
+  await navigator.clipboard.writeText(createdToken.value)
+  tokenCopied.value = true
+  notify.success(t('session.copied'))
+  setTimeout(() => { tokenCopied.value = false }, 2000)
+}
 
 watch(() => route.params.id as string | undefined, async (id) => {
   if (!id) return
@@ -136,6 +186,14 @@ async function onPauseContainer() {
           {{ activeSession.containerStatus === 'paused' ? t('session.resumeFromHibernate') : t('session.startContainer') }}
         </Button>
 
+        <Button
+          variant="outline" size="sm" class="h-8 px-2.5 text-muted-foreground hover:text-foreground"
+          @click="tokenDialogOpen = true"
+          :title="t('session.generateToken')"
+        >
+          <Key class="size-3.5" />
+        </Button>
+
         <AlertDialog v-model:open="deleteDialogOpen">
           <AlertDialogTrigger as-child>
             <Button variant="outline" size="sm" class="h-8 px-2.5 text-muted-foreground hover:text-destructive hover:bg-destructive/10 hover:border-destructive/20 transition-colors">
@@ -157,6 +215,46 @@ async function onPauseContainer() {
         </AlertDialog>
       </div>
     </header>
+
+    <!-- Session Token Dialog -->
+    <Dialog :open="tokenDialogOpen" @update:open="(v: boolean) => { if (!v) closeTokenDialog() }">
+      <DialogContent class="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>{{ t('session.generateToken') }}</DialogTitle>
+          <DialogDescription>{{ t('session.generateTokenHint') }}</DialogDescription>
+        </DialogHeader>
+        <template v-if="!createdToken">
+          <form @submit.prevent="handleCreateSessionToken" class="space-y-4">
+            <div class="space-y-2">
+              <Label>{{ t('account.tokenName') }}</Label>
+              <Input v-model="tokenName" :placeholder="t('account.tokenNamePlaceholder')" required autofocus />
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="outline" @click="closeTokenDialog">{{ t('session.cancel') }}</Button>
+              <Button type="submit" :disabled="tokenLoading || !tokenName.trim()">
+                <Loader2 v-if="tokenLoading" class="size-4 mr-2 animate-spin" />
+                {{ t('account.tokenCreate') }}
+              </Button>
+            </DialogFooter>
+          </form>
+        </template>
+        <template v-else>
+          <div class="space-y-3">
+            <p class="text-sm text-amber-500 dark:text-amber-400 font-medium">{{ t('account.tokenCopyWarning') }}</p>
+            <div class="flex items-center gap-2">
+              <code class="flex-1 bg-muted px-3 py-2 rounded text-xs font-mono break-all select-all">{{ createdToken }}</code>
+              <Button variant="outline" size="icon" class="shrink-0" @click="copySessionToken">
+                <Check v-if="tokenCopied" class="size-4 text-green-500" />
+                <Copy v-else class="size-4" />
+              </Button>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button @click="closeTokenDialog">{{ t('account.tokenDone') }}</Button>
+          </DialogFooter>
+        </template>
+      </DialogContent>
+    </Dialog>
 
     <div class="flex-1 relative overflow-hidden min-h-0 bg-muted/10">
       <NoVNCViewer v-if="vncUrl && sessions.activeId" :key="vncUrl" :ws-url="vncUrl" :session-id="sessions.activeId" />

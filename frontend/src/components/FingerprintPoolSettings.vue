@@ -14,10 +14,22 @@ import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { Badge } from '@/components/ui/badge'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Toggle } from '@/components/ui/toggle'
 
 const { t } = useI18n()
 const { user } = useAuth()
 const isAdmin = computed(() => user.value?.role === 'superadmin' || user.value?.role === 'admin')
+
+const WIN_FONTS_DEFAULT = ['Arial', 'Calibri', 'Cambria', 'Consolas', 'Segoe UI', 'Tahoma', 'Verdana', 'Georgia', 'Impact', 'Trebuchet MS', 'Times New Roman', 'Courier New', 'Lucida Console', 'Comic Sans MS', 'Palatino Linotype']
+const MAC_FONTS_DEFAULT = ['Helvetica Neue', 'Menlo', 'Monaco', 'Avenir', 'Avenir Next', 'Futura', 'Gill Sans', 'Optima', 'Palatino', 'American Typewriter', 'Apple SD Gothic Neo', 'Noteworthy', 'Phosphate']
+
+const WEBGL_PARAMS_DEFAULT = {
+  maxTextureSize: 16384, maxRenderbufferSize: 16384, maxViewportDims: [32768, 32768] as [number, number],
+  maxVertexAttribs: 16, maxVaryingVectors: 30, maxVertexUniformVectors: 4096,
+  maxFragmentUniformVectors: 1024, maxTextureImageUnits: 16,
+  maxCombinedTextureImageUnits: 80, maxVertexTextureImageUnits: 32,
+  aliasedLineWidthRange: [1, 1] as [number, number], aliasedPointSizeRange: [1, 1024] as [number, number],
+}
 
 interface PoolEntry {
   id: string
@@ -100,8 +112,20 @@ const formEnabled = ref(true)
 
 const formPlatformNav = ref({ userAgent: '', platform: 'Win32', appVersion: '' })
 const formClientHints = ref({ platform: 'Windows', platformVersion: '', architecture: 'x86', bitness: '64', mobile: false, wow64: false })
-const formGpu = ref({ vendor: '', renderer: '' })
-const formHardware = ref({ hardwareConcurrency: 8, deviceMemory: 16 })
+const formFonts = ref<string[]>([])
+const fontsText = computed({
+  get: () => formFonts.value.join(', '),
+  set: (v: string) => { formFonts.value = v.split(',').map(s => s.trim()).filter(Boolean) },
+})
+const formGpu = ref({
+  vendor: '', renderer: '',
+  webglParams: { ...WEBGL_PARAMS_DEFAULT },
+})
+const formHardware = ref({
+  hardwareConcurrency: 8, deviceMemory: 8,
+  audio: { sampleRate: 48000, maxChannelCount: 2, channelCount: 2, baseLatency: 0.01, outputLatency: 0.04 },
+  connection: { effectiveType: '4g' as string, rtt: 50, downlink: 10, saveData: false },
+})
 const formScreen = ref({ colorDepth: 24, pixelDepth: 24, devicePixelRatio: 1 })
 
 function openAdd(group: GroupName) {
@@ -109,12 +133,17 @@ function openAdd(group: GroupName) {
   dialogGroup.value = group
   editingId.value = ''
   formLabel.value = ''
-  formTags.value = group === 'hardware' ? [] : ['windows']
+  formTags.value = group === 'hardware' ? ['windows'] : ['windows', 'macos']
   formEnabled.value = true
   formPlatformNav.value = { userAgent: '', platform: 'Win32', appVersion: '' }
   formClientHints.value = { platform: 'Windows', platformVersion: '15.0.0', architecture: 'x86', bitness: '64', mobile: false, wow64: false }
-  formGpu.value = { vendor: '', renderer: '' }
-  formHardware.value = { hardwareConcurrency: 8, deviceMemory: 16 }
+  formFonts.value = [...WIN_FONTS_DEFAULT]
+  formGpu.value = { vendor: '', renderer: '', webglParams: { ...WEBGL_PARAMS_DEFAULT } }
+  formHardware.value = {
+    hardwareConcurrency: 8, deviceMemory: 8,
+    audio: { sampleRate: 48000, maxChannelCount: 2, channelCount: 2, baseLatency: 0.01, outputLatency: 0.04 },
+    connection: { effectiveType: '4g', rtt: 50, downlink: 10, saveData: false },
+  }
   formScreen.value = { colorDepth: 24, pixelDepth: 24, devicePixelRatio: 1 }
   showDialog.value = true
 }
@@ -130,10 +159,19 @@ function openEdit(entry: PoolEntry) {
   if (entry.groupName === 'platform') {
     formPlatformNav.value = { ...entry.data.navigator }
     formClientHints.value = { ...entry.data.clientHints }
+    formFonts.value = entry.data.fonts ?? []
   } else if (entry.groupName === 'gpu') {
-    formGpu.value = { vendor: entry.data.vendor || '', renderer: entry.data.renderer || '' }
+    formGpu.value = {
+      vendor: entry.data.vendor || '', renderer: entry.data.renderer || '',
+      webglParams: entry.data.webglParams ? { ...entry.data.webglParams } : { ...WEBGL_PARAMS_DEFAULT },
+    }
   } else if (entry.groupName === 'hardware') {
-    formHardware.value = { hardwareConcurrency: entry.data.hardwareConcurrency ?? 8, deviceMemory: entry.data.deviceMemory ?? 16 }
+    formHardware.value = {
+      hardwareConcurrency: entry.data.hardwareConcurrency ?? 8,
+      deviceMemory: entry.data.deviceMemory ?? 8,
+      audio: entry.data.audio ?? { sampleRate: 48000, maxChannelCount: 2, channelCount: 2, baseLatency: 0.01, outputLatency: 0.04 },
+      connection: entry.data.connection ?? { effectiveType: '4g', rtt: 50, downlink: 10, saveData: false },
+    }
   } else if (entry.groupName === 'screen') {
     formScreen.value = { colorDepth: entry.data.colorDepth ?? 24, pixelDepth: entry.data.pixelDepth ?? 24, devicePixelRatio: entry.data.devicePixelRatio ?? 1 }
   }
@@ -143,11 +181,11 @@ function openEdit(entry: PoolEntry) {
 function buildData(): Record<string, any> {
   switch (dialogGroup.value) {
     case 'platform':
-      return { navigator: { ...formPlatformNav.value }, clientHints: { ...formClientHints.value } }
+      return { navigator: { ...formPlatformNav.value }, clientHints: { ...formClientHints.value }, fonts: formFonts.value }
     case 'gpu':
-      return { ...formGpu.value }
+      return { vendor: formGpu.value.vendor, renderer: formGpu.value.renderer, webglParams: { ...formGpu.value.webglParams } }
     case 'hardware':
-      return { ...formHardware.value }
+      return { ...formHardware.value, deviceMemory: Math.min(formHardware.value.deviceMemory, 8), audio: { ...formHardware.value.audio }, connection: { ...formHardware.value.connection } }
     case 'screen':
       return { ...formScreen.value }
   }
@@ -197,7 +235,7 @@ function entrySummary(entry: PoolEntry): string {
     case 'gpu':
       return (d.renderer || '').slice(0, 60) + ((d.renderer || '').length > 60 ? '...' : '')
     case 'hardware':
-      return `${d.hardwareConcurrency}C / ${d.deviceMemory}GB`
+      return `${d.hardwareConcurrency}C / ${d.deviceMemory}GB` + (d.audio ? ` / ${(d.audio.sampleRate / 1000)}kHz` : '') + (d.connection ? ` / ${d.connection.effectiveType}` : '')
     case 'screen':
       return `${d.colorDepth}bit / DPR ${d.devicePixelRatio}`
     default:
@@ -211,10 +249,12 @@ function onPlatformPresetChange(val: any) {
     formClientHints.value.platform = 'Windows'
     formClientHints.value.architecture = 'x86'
     formTags.value = ['windows']
+    formFonts.value = [...WIN_FONTS_DEFAULT]
   } else {
     formPlatformNav.value.platform = 'MacIntel'
     formClientHints.value.platform = 'macOS'
     formTags.value = ['macos']
+    formFonts.value = [...MAC_FONTS_DEFAULT]
   }
 }
 </script>
@@ -240,7 +280,7 @@ function onPlatformPresetChange(val: any) {
                 <TableRow>
                   <TableHead>{{ t('fingerprintPool.name') }}</TableHead>
                   <TableHead>{{ t('fingerprintPool.info') }}</TableHead>
-                  <TableHead v-if="group.key !== 'hardware'">{{ t('fingerprintPool.platform') }}</TableHead>
+                  <TableHead>{{ t('fingerprintPool.platform') }}</TableHead>
                   <TableHead class="w-[80px]">{{ t('fingerprintPool.enabled') }}</TableHead>
                   <TableHead v-if="isAdmin" class="w-[100px]" />
                 </TableRow>
@@ -249,7 +289,7 @@ function onPlatformPresetChange(val: any) {
                 <TableRow v-for="entry in pool[group.key]" :key="entry.id">
                   <TableCell class="font-medium">{{ entry.label }}</TableCell>
                   <TableCell class="text-muted-foreground text-xs font-mono max-w-[300px] truncate">{{ entrySummary(entry) }}</TableCell>
-                  <TableCell v-if="group.key !== 'hardware'">
+                  <TableCell>
                     <Badge v-for="tag in entry.tags" :key="tag" variant="secondary" class="mr-1 text-xs">{{ tag }}</Badge>
                     <span v-if="!entry.tags?.length" class="text-muted-foreground text-xs">{{ t('fingerprintPool.allPlatforms') }}</span>
                   </TableCell>
@@ -262,7 +302,7 @@ function onPlatformPresetChange(val: any) {
                   </TableCell>
                 </TableRow>
                 <TableRow v-if="!pool[group.key]?.length">
-                  <TableCell :colspan="(group.key === 'hardware' ? 3 : 4) + (isAdmin ? 1 : 0)" class="text-center text-muted-foreground py-6">
+                  <TableCell :colspan="4 + (isAdmin ? 1 : 0)" class="text-center text-muted-foreground py-6">
                     {{ t('fingerprintPool.empty') }}
                   </TableCell>
                 </TableRow>
@@ -355,6 +395,10 @@ function onPlatformPresetChange(val: any) {
                 </Select>
               </div>
             </div>
+            <div>
+              <Label>{{ t('fingerprintPool.fonts') }}</Label>
+              <textarea v-model="fontsText" class="mt-1 w-full rounded-lg border border-input bg-transparent px-2.5 py-1.5 font-mono text-xs focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 outline-none resize-y" rows="3" :placeholder="t('fingerprintPool.fontsHelp')" />
+            </div>
           </template>
 
           <!-- GPU form -->
@@ -369,15 +413,42 @@ function onPlatformPresetChange(val: any) {
             </div>
             <div>
               <Label>{{ t('fingerprintPool.compatPlatform') }}</Label>
-              <div class="flex gap-3 mt-1">
-                <label class="flex items-center gap-1.5 text-sm">
-                  <input type="checkbox" :checked="formTags.includes('windows')" @change="e => { if ((e.target as HTMLInputElement).checked) { if (!formTags.includes('windows')) formTags.push('windows') } else { formTags = formTags.filter(t => t !== 'windows') } }" />
+              <div class="flex gap-2 mt-1">
+                <Toggle
+                  :pressed="formTags.includes('windows')"
+                  @update:pressed="(p) => { if (p) { if (!formTags.includes('windows')) formTags.push('windows') } else { formTags = formTags.filter(t => t !== 'windows') } }"
+                  variant="outline"
+                  size="sm"
+                  class="data-[state=on]:bg-primary/10 data-[state=on]:text-primary data-[state=on]:border-primary"
+                >
                   Windows
-                </label>
-                <label class="flex items-center gap-1.5 text-sm">
-                  <input type="checkbox" :checked="formTags.includes('macos')" @change="e => { if ((e.target as HTMLInputElement).checked) { if (!formTags.includes('macos')) formTags.push('macos') } else { formTags = formTags.filter(t => t !== 'macos') } }" />
+                </Toggle>
+                <Toggle
+                  :pressed="formTags.includes('macos')"
+                  @update:pressed="(p) => { if (p) { if (!formTags.includes('macos')) formTags.push('macos') } else { formTags = formTags.filter(t => t !== 'macos') } }"
+                  variant="outline"
+                  size="sm"
+                  class="data-[state=on]:bg-primary/10 data-[state=on]:text-primary data-[state=on]:border-primary"
+                >
                   macOS
-                </label>
+                </Toggle>
+              </div>
+            </div>
+            <div class="border-t pt-3 mt-3">
+              <Label class="text-xs text-muted-foreground">{{ t('fingerprintPool.webglParams') }}</Label>
+              <div class="grid grid-cols-3 gap-2 mt-2">
+                <div><Label class="text-xs">maxTextureSize</Label><Input v-model.number="formGpu.webglParams.maxTextureSize" type="number" class="mt-0.5 h-7 text-xs" /></div>
+                <div><Label class="text-xs">maxRenderbufferSize</Label><Input v-model.number="formGpu.webglParams.maxRenderbufferSize" type="number" class="mt-0.5 h-7 text-xs" /></div>
+                <div><Label class="text-xs">maxVertexAttribs</Label><Input v-model.number="formGpu.webglParams.maxVertexAttribs" type="number" class="mt-0.5 h-7 text-xs" /></div>
+                <div><Label class="text-xs">maxVaryingVectors</Label><Input v-model.number="formGpu.webglParams.maxVaryingVectors" type="number" class="mt-0.5 h-7 text-xs" /></div>
+                <div><Label class="text-xs">maxVertexUniformVec</Label><Input v-model.number="formGpu.webglParams.maxVertexUniformVectors" type="number" class="mt-0.5 h-7 text-xs" /></div>
+                <div><Label class="text-xs">maxFragUniformVec</Label><Input v-model.number="formGpu.webglParams.maxFragmentUniformVectors" type="number" class="mt-0.5 h-7 text-xs" /></div>
+                <div><Label class="text-xs">maxTexImageUnits</Label><Input v-model.number="formGpu.webglParams.maxTextureImageUnits" type="number" class="mt-0.5 h-7 text-xs" /></div>
+                <div><Label class="text-xs">maxCombinedTexUnits</Label><Input v-model.number="formGpu.webglParams.maxCombinedTextureImageUnits" type="number" class="mt-0.5 h-7 text-xs" /></div>
+                <div><Label class="text-xs">maxVertexTexUnits</Label><Input v-model.number="formGpu.webglParams.maxVertexTextureImageUnits" type="number" class="mt-0.5 h-7 text-xs" /></div>
+                <div><Label class="text-xs">viewportDims W</Label><Input v-model.number="formGpu.webglParams.maxViewportDims[0]" type="number" class="mt-0.5 h-7 text-xs" /></div>
+                <div><Label class="text-xs">viewportDims H</Label><Input v-model.number="formGpu.webglParams.maxViewportDims[1]" type="number" class="mt-0.5 h-7 text-xs" /></div>
+                <div><Label class="text-xs">pointSizeMax</Label><Input v-model.number="formGpu.webglParams.aliasedPointSizeRange[1]" type="number" class="mt-0.5 h-7 text-xs" /></div>
               </div>
             </div>
           </template>
@@ -391,7 +462,67 @@ function onPlatformPresetChange(val: any) {
               </div>
               <div>
                 <Label>{{ t('fingerprintPool.memoryGb') }}</Label>
-                <Input v-model.number="formHardware.deviceMemory" type="number" class="mt-1" />
+                <Input v-model.number="formHardware.deviceMemory" type="number" max="8" class="mt-1" />
+                <span class="text-[10px] text-muted-foreground">Chrome max: 8</span>
+              </div>
+            </div>
+            <div>
+              <Label>{{ t('fingerprintPool.compatPlatform') }}</Label>
+              <div class="flex gap-2 mt-1">
+                <Toggle
+                  :pressed="formTags.includes('windows')"
+                  @update:pressed="(p) => { if (p) { if (!formTags.includes('windows')) formTags.push('windows') } else { formTags = formTags.filter(t => t !== 'windows') } }"
+                  variant="outline" size="sm"
+                  class="data-[state=on]:bg-primary/10 data-[state=on]:text-primary data-[state=on]:border-primary"
+                >Windows</Toggle>
+                <Toggle
+                  :pressed="formTags.includes('macos')"
+                  @update:pressed="(p) => { if (p) { if (!formTags.includes('macos')) formTags.push('macos') } else { formTags = formTags.filter(t => t !== 'macos') } }"
+                  variant="outline" size="sm"
+                  class="data-[state=on]:bg-primary/10 data-[state=on]:text-primary data-[state=on]:border-primary"
+                >macOS</Toggle>
+              </div>
+            </div>
+            <div class="border-t pt-3 mt-3">
+              <Label class="text-xs text-muted-foreground">{{ t('fingerprintPool.audioParams') }}</Label>
+              <div class="grid grid-cols-2 gap-2 mt-2">
+                <div>
+                  <Label class="text-xs">{{ t('fingerprintPool.sampleRate') }}</Label>
+                  <Select :model-value="String(formHardware.audio.sampleRate)" @update:model-value="v => formHardware.audio.sampleRate = Number(v)">
+                    <SelectTrigger class="mt-0.5 h-7 text-xs"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="44100">44100</SelectItem>
+                      <SelectItem value="48000">48000</SelectItem>
+                      <SelectItem value="96000">96000</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div><Label class="text-xs">{{ t('fingerprintPool.maxChannelCount') }}</Label><Input v-model.number="formHardware.audio.maxChannelCount" type="number" class="mt-0.5 h-7 text-xs" /></div>
+                <div><Label class="text-xs">{{ t('fingerprintPool.channelCount') }}</Label><Input v-model.number="formHardware.audio.channelCount" type="number" class="mt-0.5 h-7 text-xs" /></div>
+                <div><Label class="text-xs">{{ t('fingerprintPool.baseLatency') }}</Label><Input v-model.number="formHardware.audio.baseLatency" type="number" step="0.001" class="mt-0.5 h-7 text-xs" /></div>
+                <div><Label class="text-xs">{{ t('fingerprintPool.outputLatency') }}</Label><Input v-model.number="formHardware.audio.outputLatency" type="number" step="0.001" class="mt-0.5 h-7 text-xs" /></div>
+              </div>
+            </div>
+            <div class="border-t pt-3 mt-3">
+              <Label class="text-xs text-muted-foreground">{{ t('fingerprintPool.connectionParams') }}</Label>
+              <div class="grid grid-cols-2 gap-2 mt-2">
+                <div>
+                  <Label class="text-xs">{{ t('fingerprintPool.effectiveType') }}</Label>
+                  <Select v-model="formHardware.connection.effectiveType">
+                    <SelectTrigger class="mt-0.5 h-7 text-xs"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="4g">4g</SelectItem>
+                      <SelectItem value="3g">3g</SelectItem>
+                      <SelectItem value="2g">2g</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div><Label class="text-xs">{{ t('fingerprintPool.rtt') }}</Label><Input v-model.number="formHardware.connection.rtt" type="number" class="mt-0.5 h-7 text-xs" /></div>
+                <div><Label class="text-xs">{{ t('fingerprintPool.downlink') }}</Label><Input v-model.number="formHardware.connection.downlink" type="number" step="0.5" class="mt-0.5 h-7 text-xs" /></div>
+                <div class="flex items-end gap-2 pb-0.5">
+                  <Label class="text-xs">{{ t('fingerprintPool.saveData') }}</Label>
+                  <Switch v-model="formHardware.connection.saveData" />
+                </div>
               </div>
             </div>
           </template>
@@ -414,15 +545,25 @@ function onPlatformPresetChange(val: any) {
             </div>
             <div>
               <Label>{{ t('fingerprintPool.compatPlatform') }}</Label>
-              <div class="flex gap-3 mt-1">
-                <label class="flex items-center gap-1.5 text-sm">
-                  <input type="checkbox" :checked="formTags.includes('windows')" @change="e => { if ((e.target as HTMLInputElement).checked) { if (!formTags.includes('windows')) formTags.push('windows') } else { formTags = formTags.filter(t => t !== 'windows') } }" />
+              <div class="flex gap-2 mt-1">
+                <Toggle
+                  :pressed="formTags.includes('windows')"
+                  @update:pressed="(p) => { if (p) { if (!formTags.includes('windows')) formTags.push('windows') } else { formTags = formTags.filter(t => t !== 'windows') } }"
+                  variant="outline"
+                  size="sm"
+                  class="data-[state=on]:bg-primary/10 data-[state=on]:text-primary data-[state=on]:border-primary"
+                >
                   Windows
-                </label>
-                <label class="flex items-center gap-1.5 text-sm">
-                  <input type="checkbox" :checked="formTags.includes('macos')" @change="e => { if ((e.target as HTMLInputElement).checked) { if (!formTags.includes('macos')) formTags.push('macos') } else { formTags = formTags.filter(t => t !== 'macos') } }" />
+                </Toggle>
+                <Toggle
+                  :pressed="formTags.includes('macos')"
+                  @update:pressed="(p) => { if (p) { if (!formTags.includes('macos')) formTags.push('macos') } else { formTags = formTags.filter(t => t !== 'macos') } }"
+                  variant="outline"
+                  size="sm"
+                  class="data-[state=on]:bg-primary/10 data-[state=on]:text-primary data-[state=on]:border-primary"
+                >
                   macOS
-                </label>
+                </Toggle>
               </div>
             </div>
           </template>

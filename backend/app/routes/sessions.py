@@ -8,7 +8,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
-from app.auth.dependencies import CurrentUser, get_current_user, require_role
+from app.auth.dependencies import CurrentUser, get_current_user, get_session_aware_user, require_role, verify_session_access
 from app.container import (
     ensure_container_running,
     exec_in_container,
@@ -156,8 +156,8 @@ async def create_session(body: CreateSessionBody, user: CurrentUser = Depends(ge
 
 
 @router.get("/api/sessions/{session_id}")
-async def get_session(session_id: str, user: CurrentUser = Depends(get_current_user)):
-    await _verify_session_tenant(session_id, user)
+async def get_session(session_id: str, user: CurrentUser = Depends(get_session_aware_user)):
+    await verify_session_access(session_id, user)
     pool = get_pool()
     row = await pool.fetchrow(
         "SELECT id, name, created_at, updated_at, current_url, current_title, device_preset, proxy_url, fingerprint_profile, browser_lang FROM sessions WHERE id = $1",
@@ -215,8 +215,8 @@ async def delete_session(session_id: str, user: CurrentUser = Depends(get_curren
 # -----------------------------------------------------------------------
 
 @router.post("/api/sessions/{session_id}/container/start")
-async def start_session_container(session_id: str, user: CurrentUser = Depends(get_current_user)):
-    await _verify_session_tenant(session_id, user)
+async def start_session_container(session_id: str, user: CurrentUser = Depends(get_session_aware_user)):
+    await verify_session_access(session_id, user)
     try:
         ports = await ensure_container_running(session_id)
         return {"ok": True, "ports": ports}
@@ -226,8 +226,8 @@ async def start_session_container(session_id: str, user: CurrentUser = Depends(g
 
 
 @router.post("/api/sessions/{session_id}/container/stop")
-async def stop_session_container(session_id: str, user: CurrentUser = Depends(get_current_user)):
-    await _verify_session_tenant(session_id, user)
+async def stop_session_container(session_id: str, user: CurrentUser = Depends(get_session_aware_user)):
+    await verify_session_access(session_id, user)
     try:
         await stop_container(session_id)
         return {"ok": True}
@@ -237,8 +237,8 @@ async def stop_session_container(session_id: str, user: CurrentUser = Depends(ge
 
 
 @router.post("/api/sessions/{session_id}/container/pause")
-async def pause_session_container(session_id: str, user: CurrentUser = Depends(get_current_user)):
-    await _verify_session_tenant(session_id, user)
+async def pause_session_container(session_id: str, user: CurrentUser = Depends(get_session_aware_user)):
+    await verify_session_access(session_id, user)
     try:
         await pause_container(session_id)
         return {"ok": True}
@@ -248,8 +248,8 @@ async def pause_session_container(session_id: str, user: CurrentUser = Depends(g
 
 
 @router.post("/api/sessions/{session_id}/container/unpause")
-async def unpause_session_container(session_id: str, user: CurrentUser = Depends(get_current_user)):
-    await _verify_session_tenant(session_id, user)
+async def unpause_session_container(session_id: str, user: CurrentUser = Depends(get_session_aware_user)):
+    await verify_session_access(session_id, user)
     try:
         ports = await ensure_container_running(session_id)
         return {"ok": True, "ports": ports}
@@ -374,8 +374,8 @@ async def regenerate_fingerprint(session_id: str, body: FingerprintActionBody, u
 # -----------------------------------------------------------------------
 
 @router.get("/api/sessions/{session_id}/logs")
-async def get_session_logs(session_id: str, tail: int = 200, log_type: str | None = None, user: CurrentUser = Depends(get_current_user)):
-    await _verify_session_tenant(session_id, user)
+async def get_session_logs(session_id: str, tail: int = 200, log_type: str | None = None, user: CurrentUser = Depends(get_session_aware_user)):
+    await verify_session_access(session_id, user)
     try:
         stdout = await exec_in_container(
             session_id, f"tail -n {min(tail, 1000)} /tmp/cdp-events.jsonl"

@@ -33,6 +33,7 @@ class SetupBody(BaseModel):
 
 class CreateTokenBody(BaseModel):
     name: str
+    sessionId: str | None = None
 
 
 # --------------- Login ---------------
@@ -129,23 +130,35 @@ async def create_api_token(
     body: CreateTokenBody,
     user: CurrentUser = Depends(get_current_user),
 ):
+    pool = get_pool()
+
+    session_id = body.sessionId
+    if session_id:
+        row = await pool.fetchrow(
+            "SELECT tenant_id FROM sessions WHERE id = $1", session_id,
+        )
+        if not row or (row["tenant_id"] and row["tenant_id"] != user.tenant_id):
+            raise HTTPException(status_code=404, detail="Session not found")
+
     raw_token = f"bp_{secrets.token_urlsafe(32)}"
     token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
     token_id = str(uuid.uuid4())
-    pool = get_pool()
     await pool.execute(
-        """INSERT INTO api_tokens (id, user_id, tenant_id, name, token_hash)
-           VALUES ($1, $2, $3, $4, $5)""",
-        token_id, user.id, user.tenant_id, body.name.strip(), token_hash,
+        """INSERT INTO api_tokens (id, user_id, tenant_id, name, token_hash, session_id)
+           VALUES ($1, $2, $3, $4, $5, $6)""",
+        token_id, user.id, user.tenant_id, body.name.strip(), token_hash, session_id,
     )
-    return {"id": token_id, "name": body.name.strip(), "token": raw_token}
+    return {"id": token_id, "name": body.name.strip(), "token": raw_token, "sessionId": session_id}
 
 
 @router.get("/tokens")
 async def list_api_tokens(user: CurrentUser = Depends(get_current_user)):
     pool = get_pool()
     rows = await pool.fetch(
-        "SELECT id, name, created_at, last_used_at FROM api_tokens WHERE user_id = $1 ORDER BY created_at DESC",
+        """SELECT t.id, t.name, t.created_at, t.last_used_at, t.session_id,
+                  s.name AS session_name
+           FROM api_tokens t LEFT JOIN sessions s ON t.session_id = s.id
+           WHERE t.user_id = $1 ORDER BY t.created_at DESC""",
         user.id,
     )
     return {
@@ -155,6 +168,8 @@ async def list_api_tokens(user: CurrentUser = Depends(get_current_user)):
                 "name": r["name"],
                 "createdAt": r["created_at"].isoformat(),
                 "lastUsedAt": r["last_used_at"].isoformat() if r["last_used_at"] else None,
+                "sessionId": r["session_id"],
+                "sessionName": r["session_name"],
             }
             for r in rows
         ]

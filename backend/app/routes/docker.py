@@ -8,7 +8,7 @@ import re
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 
-from app.auth.dependencies import CurrentUser, get_current_user
+from app.auth.dependencies import CurrentUser, get_session_aware_user, verify_session_access
 from app.container import container_name
 from app.i18n import t
 
@@ -53,7 +53,8 @@ class NavigateRequest(BaseModel):
 
 
 @router.post("/api/docker/navigate")
-async def docker_navigate(body: NavigateRequest, request: Request, _user: CurrentUser = Depends(get_current_user)):
+async def docker_navigate(body: NavigateRequest, request: Request, user: CurrentUser = Depends(get_session_aware_user)):
+    await verify_session_access(body.sessionId, user)
     cname = container_name(body.sessionId)
     logger.info("navigate [%s] -> %s", cname, body.url)
 
@@ -93,7 +94,8 @@ class ClipboardRequest(BaseModel):
 
 
 @router.post("/api/docker/clipboard")
-async def docker_clipboard(body: ClipboardRequest, request: Request, _user: CurrentUser = Depends(get_current_user)):
+async def docker_clipboard(body: ClipboardRequest, request: Request, user: CurrentUser = Depends(get_session_aware_user)):
+    await verify_session_access(body.sessionId, user)
     cname = container_name(body.sessionId)
 
     if body.action == "paste":
@@ -125,7 +127,8 @@ class BrowserLangRequest(BaseModel):
 
 
 @router.post("/api/docker/browser-lang")
-async def docker_browser_lang(body: BrowserLangRequest, _user: CurrentUser = Depends(get_current_user)):
+async def docker_browser_lang(body: BrowserLangRequest, user: CurrentUser = Depends(get_session_aware_user)):
+    await verify_session_access(body.sessionId, user)
     cname = container_name(body.sessionId)
     safe_lang = re.sub(r"[^a-zA-Z0-9_-]", "", body.lang or "zh-CN")
     logger.info("browser-lang [%s]: switching to %s", cname, safe_lang)

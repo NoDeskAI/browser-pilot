@@ -59,6 +59,17 @@ _MAC_AV = (
     f"(KHTML, like Gecko) Chrome/{_CHROME_VERSION} Safari/537.36"
 )
 
+_WIN_FONTS = [
+    "Arial", "Calibri", "Cambria", "Consolas", "Segoe UI", "Tahoma",
+    "Verdana", "Georgia", "Impact", "Trebuchet MS", "Times New Roman",
+    "Courier New", "Lucida Console", "Comic Sans MS", "Palatino Linotype",
+]
+_MAC_FONTS = [
+    "Helvetica Neue", "Menlo", "Monaco", "Avenir", "Avenir Next",
+    "Futura", "Gill Sans", "Optima", "Palatino", "American Typewriter",
+    "Apple SD Gothic Neo", "Noteworthy", "Phosphate",
+]
+
 _DEFAULT_POOL: list[dict[str, Any]] = [
     # -- platform ----------------------------------------------------------
     {
@@ -71,6 +82,7 @@ _DEFAULT_POOL: list[dict[str, Any]] = [
                 "platform": "Windows", "platformVersion": "10.0.0",
                 "architecture": "x86", "bitness": "64", "mobile": False, "wow64": False,
             },
+            "fonts": _WIN_FONTS,
         },
     },
     {
@@ -83,6 +95,7 @@ _DEFAULT_POOL: list[dict[str, Any]] = [
                 "platform": "Windows", "platformVersion": "15.0.0",
                 "architecture": "x86", "bitness": "64", "mobile": False, "wow64": False,
             },
+            "fonts": _WIN_FONTS,
         },
     },
     {
@@ -95,6 +108,7 @@ _DEFAULT_POOL: list[dict[str, Any]] = [
                 "platform": "macOS", "platformVersion": "14.5.0",
                 "architecture": "arm", "bitness": "64", "mobile": False, "wow64": False,
             },
+            "fonts": _MAC_FONTS,
         },
     },
     {
@@ -107,6 +121,7 @@ _DEFAULT_POOL: list[dict[str, Any]] = [
                 "platform": "macOS", "platformVersion": "13.6.0",
                 "architecture": "x86", "bitness": "64", "mobile": False, "wow64": False,
             },
+            "fonts": _MAC_FONTS,
         },
     },
     # -- gpu ---------------------------------------------------------------
@@ -117,6 +132,14 @@ _DEFAULT_POOL: list[dict[str, Any]] = [
         "data": {
             "vendor": "Google Inc. (NVIDIA)",
             "renderer": "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)",
+            "webglParams": {
+                "maxTextureSize": 16384, "maxRenderbufferSize": 16384,
+                "maxViewportDims": [32768, 32768], "maxVertexAttribs": 16,
+                "maxVaryingVectors": 30, "maxVertexUniformVectors": 4096,
+                "maxFragmentUniformVectors": 1024, "maxTextureImageUnits": 16,
+                "maxCombinedTextureImageUnits": 80, "maxVertexTextureImageUnits": 32,
+                "aliasedLineWidthRange": [1, 1], "aliasedPointSizeRange": [1, 1024],
+            },
         },
     },
     {
@@ -126,6 +149,14 @@ _DEFAULT_POOL: list[dict[str, Any]] = [
         "data": {
             "vendor": "Google Inc. (Intel)",
             "renderer": "ANGLE (Intel, Intel(R) UHD Graphics 770 Direct3D11 vs_5_0 ps_5_0, D3D11)",
+            "webglParams": {
+                "maxTextureSize": 16384, "maxRenderbufferSize": 16384,
+                "maxViewportDims": [16384, 16384], "maxVertexAttribs": 16,
+                "maxVaryingVectors": 16, "maxVertexUniformVectors": 1024,
+                "maxFragmentUniformVectors": 1024, "maxTextureImageUnits": 16,
+                "maxCombinedTextureImageUnits": 48, "maxVertexTextureImageUnits": 16,
+                "aliasedLineWidthRange": [1, 1], "aliasedPointSizeRange": [1, 1024],
+            },
         },
     },
     {
@@ -135,6 +166,14 @@ _DEFAULT_POOL: list[dict[str, Any]] = [
         "data": {
             "vendor": "Google Inc. (AMD)",
             "renderer": "ANGLE (AMD, AMD Radeon RX 6700 XT Direct3D11 vs_5_0 ps_5_0, D3D11)",
+            "webglParams": {
+                "maxTextureSize": 16384, "maxRenderbufferSize": 16384,
+                "maxViewportDims": [32768, 32768], "maxVertexAttribs": 16,
+                "maxVaryingVectors": 32, "maxVertexUniformVectors": 4096,
+                "maxFragmentUniformVectors": 1024, "maxTextureImageUnits": 16,
+                "maxCombinedTextureImageUnits": 80, "maxVertexTextureImageUnits": 32,
+                "aliasedLineWidthRange": [1, 1], "aliasedPointSizeRange": [1, 1024],
+            },
         },
     },
     {
@@ -144,6 +183,14 @@ _DEFAULT_POOL: list[dict[str, Any]] = [
         "data": {
             "vendor": "Google Inc. (NVIDIA)",
             "renderer": "ANGLE (NVIDIA, NVIDIA GeForce RTX 4070 Direct3D11 vs_5_0 ps_5_0, D3D11)",
+            "webglParams": {
+                "maxTextureSize": 32768, "maxRenderbufferSize": 32768,
+                "maxViewportDims": [32768, 32768], "maxVertexAttribs": 16,
+                "maxVaryingVectors": 30, "maxVertexUniformVectors": 4096,
+                "maxFragmentUniformVectors": 1024, "maxTextureImageUnits": 16,
+                "maxCombinedTextureImageUnits": 80, "maxVertexTextureImageUnits": 32,
+                "aliasedLineWidthRange": [1, 1], "aliasedPointSizeRange": [1, 1024],
+            },
         },
     },
     {
@@ -153,6 +200,14 @@ _DEFAULT_POOL: list[dict[str, Any]] = [
         "data": {
             "vendor": "Google Inc. (Apple)",
             "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M1, Unspecified Version)",
+            "webglParams": {
+                "maxTextureSize": 16384, "maxRenderbufferSize": 16384,
+                "maxViewportDims": [16384, 16384], "maxVertexAttribs": 16,
+                "maxVaryingVectors": 15, "maxVertexUniformVectors": 256,
+                "maxFragmentUniformVectors": 224, "maxTextureImageUnits": 16,
+                "maxCombinedTextureImageUnits": 32, "maxVertexTextureImageUnits": 16,
+                "aliasedLineWidthRange": [1, 1], "aliasedPointSizeRange": [1, 511],
+            },
         },
     },
     {
@@ -162,6 +217,14 @@ _DEFAULT_POOL: list[dict[str, Any]] = [
         "data": {
             "vendor": "Google Inc. (Apple)",
             "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M2 Pro, Unspecified Version)",
+            "webglParams": {
+                "maxTextureSize": 16384, "maxRenderbufferSize": 16384,
+                "maxViewportDims": [16384, 16384], "maxVertexAttribs": 16,
+                "maxVaryingVectors": 15, "maxVertexUniformVectors": 256,
+                "maxFragmentUniformVectors": 224, "maxTextureImageUnits": 16,
+                "maxCombinedTextureImageUnits": 32, "maxVertexTextureImageUnits": 16,
+                "aliasedLineWidthRange": [1, 1], "aliasedPointSizeRange": [1, 511],
+            },
         },
     },
     {
@@ -171,14 +234,43 @@ _DEFAULT_POOL: list[dict[str, Any]] = [
         "data": {
             "vendor": "Google Inc. (Intel)",
             "renderer": "ANGLE (Intel, Intel(R) Iris(TM) Plus Graphics 645, OpenGL 4.1)",
+            "webglParams": {
+                "maxTextureSize": 16384, "maxRenderbufferSize": 16384,
+                "maxViewportDims": [16384, 16384], "maxVertexAttribs": 16,
+                "maxVaryingVectors": 16, "maxVertexUniformVectors": 1024,
+                "maxFragmentUniformVectors": 1024, "maxTextureImageUnits": 16,
+                "maxCombinedTextureImageUnits": 48, "maxVertexTextureImageUnits": 16,
+                "aliasedLineWidthRange": [1, 1], "aliasedPointSizeRange": [1, 255],
+            },
         },
     },
     # -- hardware ----------------------------------------------------------
-    {"group_name": "hardware", "label": "4C / 8 GB", "tags": [], "data": {"hardwareConcurrency": 4, "deviceMemory": 8}},
-    {"group_name": "hardware", "label": "8C / 8 GB", "tags": [], "data": {"hardwareConcurrency": 8, "deviceMemory": 8}},
-    {"group_name": "hardware", "label": "8C / 16 GB", "tags": [], "data": {"hardwareConcurrency": 8, "deviceMemory": 16}},
-    {"group_name": "hardware", "label": "12C / 16 GB", "tags": [], "data": {"hardwareConcurrency": 12, "deviceMemory": 16}},
-    {"group_name": "hardware", "label": "16C / 32 GB", "tags": [], "data": {"hardwareConcurrency": 16, "deviceMemory": 32}},
+    # deviceMemory: Chrome caps at 8 (valid: 0.25, 0.5, 1, 2, 4, 8)
+    {"group_name": "hardware", "label": "Mac M1 8C / 8GB", "tags": ["macos"], "data": {
+        "hardwareConcurrency": 8, "deviceMemory": 8,
+        "audio": {"sampleRate": 48000, "maxChannelCount": 2, "channelCount": 2, "baseLatency": 0.005333, "outputLatency": 0.021333},
+        "connection": {"effectiveType": "4g", "rtt": 50, "downlink": 10, "saveData": False},
+    }},
+    {"group_name": "hardware", "label": "Mac M2P 12C / 16GB", "tags": ["macos"], "data": {
+        "hardwareConcurrency": 12, "deviceMemory": 8,
+        "audio": {"sampleRate": 48000, "maxChannelCount": 2, "channelCount": 2, "baseLatency": 0.005333, "outputLatency": 0.021333},
+        "connection": {"effectiveType": "4g", "rtt": 50, "downlink": 10, "saveData": False},
+    }},
+    {"group_name": "hardware", "label": "Win i5 4C / 8GB", "tags": ["windows"], "data": {
+        "hardwareConcurrency": 4, "deviceMemory": 8,
+        "audio": {"sampleRate": 48000, "maxChannelCount": 6, "channelCount": 2, "baseLatency": 0.01, "outputLatency": 0.04},
+        "connection": {"effectiveType": "4g", "rtt": 50, "downlink": 10, "saveData": False},
+    }},
+    {"group_name": "hardware", "label": "Win i7 8C / 16GB", "tags": ["windows"], "data": {
+        "hardwareConcurrency": 8, "deviceMemory": 8,
+        "audio": {"sampleRate": 48000, "maxChannelCount": 6, "channelCount": 2, "baseLatency": 0.01, "outputLatency": 0.04},
+        "connection": {"effectiveType": "4g", "rtt": 50, "downlink": 10, "saveData": False},
+    }},
+    {"group_name": "hardware", "label": "Win i9 16C / 32GB", "tags": ["windows"], "data": {
+        "hardwareConcurrency": 16, "deviceMemory": 8,
+        "audio": {"sampleRate": 48000, "maxChannelCount": 6, "channelCount": 2, "baseLatency": 0.01, "outputLatency": 0.04},
+        "connection": {"effectiveType": "4g", "rtt": 50, "downlink": 10, "saveData": False},
+    }},
     # -- screen ------------------------------------------------------------
     {"group_name": "screen", "label": "24-bit / DPR 1", "tags": ["windows"], "data": {"colorDepth": 24, "pixelDepth": 24, "devicePixelRatio": 1}},
     {"group_name": "screen", "label": "30-bit Retina / DPR 2", "tags": ["macos"], "data": {"colorDepth": 30, "pixelDepth": 30, "devicePixelRatio": 2}},
@@ -260,7 +352,13 @@ async def generate_profile(tenant_id: str) -> dict[str, Any]:
         raise PoolEmptyError("gpu")
     gpu_entry = secrets.choice(compatible_gpus)
 
-    hardware_entry = secrets.choice(by_group["hardware"])
+    compatible_hw = [
+        e for e in by_group["hardware"]
+        if not e["tags"] or (e["tags"] & platform_tags)
+    ]
+    if not compatible_hw:
+        raise PoolEmptyError("hardware")
+    hardware_entry = secrets.choice(compatible_hw)
 
     compatible_screens = [
         e for e in by_group["screen"]
@@ -290,7 +388,14 @@ async def generate_profile(tenant_id: str) -> dict[str, Any]:
             "pixelDepth": s_data["pixelDepth"],
         },
         "devicePixelRatio": s_data["devicePixelRatio"],
-        "webgl": {"vendor": g_data["vendor"], "renderer": g_data["renderer"]},
+        "webgl": {
+            "vendor": g_data["vendor"],
+            "renderer": g_data["renderer"],
+            "params": g_data.get("webglParams", {}),
+        },
+        "audio": h_data.get("audio", {}),
+        "connection": h_data.get("connection", {}),
+        "fonts": p_data.get("fonts", []),
         "timezone": "UTC",
         "clientHints": p_data["clientHints"],
     }

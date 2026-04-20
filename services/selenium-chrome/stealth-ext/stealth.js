@@ -76,7 +76,7 @@
   Object.keys(navProps).forEach(function(k){
     try{Object.defineProperty(Object.getPrototypeOf(navigator),k,{get:mn(function(){return navProps[k]},'get '+k),configurable:true})}catch(e){}
   });
-  try{Object.defineProperty(Object.getPrototypeOf(navigator),'connection',{get:mn(function(){return{effectiveType:'4g',rtt:50,downlink:10,saveData:false,onchange:null,addEventListener:function(){},removeEventListener:function(){}}},'get connection'),configurable:true})}catch(e){}
+  try{var fpConn=__FP__.connection||{effectiveType:'4g',rtt:50,downlink:10,saveData:false};Object.defineProperty(Object.getPrototypeOf(navigator),'connection',{get:mn(function(){return{effectiveType:fpConn.effectiveType,rtt:fpConn.rtt,downlink:fpConn.downlink,saveData:fpConn.saveData,onchange:null,addEventListener:function(){},removeEventListener:function(){}}},'get connection'),configurable:true})}catch(e){}
 
   // ===== 6. Screen =====
   try{
@@ -133,11 +133,30 @@
   try{
     var glVendor=__FP__.webgl.vendor;
     var glRenderer=__FP__.webgl.renderer;
+    var webglP=__FP__.webgl.params;
+    var glMap=null;
+    if(webglP){
+      glMap={
+        0x0D33:function(){return webglP.maxTextureSize},
+        0x84E8:function(){return webglP.maxRenderbufferSize},
+        0x0D3D:function(){return new Int32Array(webglP.maxViewportDims)},
+        0x8869:function(){return webglP.maxVertexAttribs},
+        0x8DFC:function(){return webglP.maxVaryingVectors},
+        0x8DFB:function(){return webglP.maxVertexUniformVectors},
+        0x8DFD:function(){return webglP.maxFragmentUniformVectors},
+        0x8872:function(){return webglP.maxTextureImageUnits},
+        0x8B4D:function(){return webglP.maxCombinedTextureImageUnits},
+        0x8B4C:function(){return webglP.maxVertexTextureImageUnits},
+        0x846E:function(){return new Float32Array(webglP.aliasedLineWidthRange)},
+        0x8460:function(){return new Float32Array(webglP.aliasedPointSizeRange)}
+      };
+    }
     ['WebGLRenderingContext','WebGL2RenderingContext'].forEach(function(c){
       if(!window[c])return;
       var proto=window[c].prototype;
       var origGP=proto.getParameter;
       proto.getParameter=mn(function(p){
+        if(glMap&&glMap[p])return glMap[p]();
         if(p===0x9245)return glVendor;
         if(p===0x9246)return glRenderer;
         if(p===0x1F00)return glVendor;
@@ -187,6 +206,25 @@
           origCPN.call(this,dest,ch,off);
           if(dest&&dest.length>100){for(var i=0;i<Math.min(dest.length,512);i++){dest[i]+=(rng()-0.5)*1e-7}}
         },'copyFromChannel');
+      }
+    }
+  }catch(e){}
+
+  // ===== 9b. AudioContext property overrides =====
+  try{
+    var fpAudio=__FP__.audio;
+    if(fpAudio&&fpAudio.sampleRate){
+      if(window.AudioContext){
+        var OrigAudioCtx=window.AudioContext;
+        window.AudioContext=mn(function(opts){return new OrigAudioCtx(Object.assign({},opts,{sampleRate:fpAudio.sampleRate}))},'AudioContext');
+        window.AudioContext.prototype=OrigAudioCtx.prototype;
+        Object.defineProperty(OrigAudioCtx.prototype,'baseLatency',{get:mn(function(){return fpAudio.baseLatency},'get baseLatency'),configurable:true});
+        Object.defineProperty(OrigAudioCtx.prototype,'outputLatency',{get:mn(function(){return fpAudio.outputLatency},'get outputLatency'),configurable:true});
+      }
+      var OrigOAC=window.OfflineAudioContext||window.webkitOfflineAudioContext;
+      if(OrigOAC){
+        window.OfflineAudioContext=mn(function(channels,length,sr){return new OrigOAC(channels,length,fpAudio.sampleRate)},'OfflineAudioContext');
+        window.OfflineAudioContext.prototype=OrigOAC.prototype;
       }
     }
   }catch(e){}
@@ -337,6 +375,25 @@
     Object.defineProperty(document,'hidden',{get:function(){return false},configurable:true});
     Object.defineProperty(document,'visibilityState',{get:function(){return'visible'},configurable:true});
     Object.defineProperty(document,'hasFocus',{value:mn(function(){return true},'hasFocus'),configurable:true});
+  }catch(e){}
+
+  // ===== 24. Font list spoofing =====
+  try{
+    var fpFonts=__FP__.fonts;
+    if(fpFonts&&fpFonts.length&&document.fonts&&document.fonts.check){
+      var fontSet={};
+      fpFonts.forEach(function(f){fontSet[f.toLowerCase()]=true});
+      var origCheck=document.fonts.check.bind(document.fonts);
+      document.fonts.check=mn(function(font,text){
+        var familyStr=font.replace(/^.*?\d+(\.\d+)?(px|pt|em|rem|%|vw|vh)\s*/i,'');
+        var families=familyStr.split(',');
+        for(var i=0;i<families.length;i++){
+          var f=families[i].trim().replace(/^['"]|['"]$/g,'').toLowerCase();
+          if(f&&fontSet[f])return true;
+        }
+        return false;
+      },'check');
+    }
   }catch(e){}
 
 })()

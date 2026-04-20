@@ -6,7 +6,7 @@ import logging
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 
-from app.auth.dependencies import CurrentUser, get_current_user
+from app.auth.dependencies import CurrentUser, get_session_aware_user, verify_session_access
 from app.auto_name import maybe_auto_name
 from app.db import get_pool
 from app.tools.browser.scripts import CLICK_ELEMENT_SCRIPT, OBSERVE_SCRIPT
@@ -84,7 +84,8 @@ class SwitchTabBody(BaseModel):
 # ---------------------------------------------------------------------------
 
 @router.post("/api/browser/navigate")
-async def api_navigate(body: NavigateBody, _user: CurrentUser = Depends(get_current_user)):
+async def api_navigate(body: NavigateBody, user: CurrentUser = Depends(get_session_aware_user)):
+    await verify_session_access(body.sessionId, user)
     try:
         async with browser_session(body.sessionId) as (sid, base):
             await wd_fetch(
@@ -106,7 +107,8 @@ async def api_navigate(body: NavigateBody, _user: CurrentUser = Depends(get_curr
 # ---------------------------------------------------------------------------
 
 @router.get("/api/browser/current")
-async def api_current(sessionId: str = Query(...), _user: CurrentUser = Depends(get_current_user)):
+async def api_current(sessionId: str = Query(...), user: CurrentUser = Depends(get_session_aware_user)):
+    await verify_session_access(sessionId, user)
     try:
         async with browser_session(sessionId) as (sid, base):
             url = await wd_fetch(f"/session/{sid}/url", timeout=5, base_url=base)
@@ -121,7 +123,8 @@ async def api_current(sessionId: str = Query(...), _user: CurrentUser = Depends(
 # ---------------------------------------------------------------------------
 
 @router.post("/api/browser/observe")
-async def api_observe(body: SessionBody, _user: CurrentUser = Depends(get_current_user)):
+async def api_observe(body: SessionBody, user: CurrentUser = Depends(get_session_aware_user)):
+    await verify_session_access(body.sessionId, user)
     try:
         async with browser_session(body.sessionId) as (sid, base):
             result = await wd_fetch(
@@ -141,7 +144,8 @@ async def api_observe(body: SessionBody, _user: CurrentUser = Depends(get_curren
 # ---------------------------------------------------------------------------
 
 @router.post("/api/browser/click")
-async def api_click(body: ClickBody, _user: CurrentUser = Depends(get_current_user)):
+async def api_click(body: ClickBody, user: CurrentUser = Depends(get_session_aware_user)):
+    await verify_session_access(body.sessionId, user)
     try:
         async with browser_session(body.sessionId) as (sid, base):
             x, y = body.x, body.y
@@ -172,7 +176,8 @@ async def api_click(body: ClickBody, _user: CurrentUser = Depends(get_current_us
 # ---------------------------------------------------------------------------
 
 @router.post("/api/browser/click-element")
-async def api_click_element(body: ClickElementBody, _user: CurrentUser = Depends(get_current_user)):
+async def api_click_element(body: ClickElementBody, user: CurrentUser = Depends(get_session_aware_user)):
+    await verify_session_access(body.sessionId, user)
     try:
         async with browser_session(body.sessionId) as (sid, base):
             handles_before = await wd_fetch(
@@ -209,7 +214,8 @@ async def api_click_element(body: ClickElementBody, _user: CurrentUser = Depends
 # ---------------------------------------------------------------------------
 
 @router.post("/api/browser/type")
-async def api_type(body: TypeBody, _user: CurrentUser = Depends(get_current_user)):
+async def api_type(body: TypeBody, user: CurrentUser = Depends(get_session_aware_user)):
+    await verify_session_access(body.sessionId, user)
     try:
         async with browser_session(body.sessionId) as (sid, base):
             await wd_fetch(f"/session/{sid}/actions", "POST", {
@@ -231,7 +237,8 @@ async def api_type(body: TypeBody, _user: CurrentUser = Depends(get_current_user
 # ---------------------------------------------------------------------------
 
 @router.post("/api/browser/key")
-async def api_key(body: KeyBody, _user: CurrentUser = Depends(get_current_user)):
+async def api_key(body: KeyBody, user: CurrentUser = Depends(get_session_aware_user)):
+    await verify_session_access(body.sessionId, user)
     try:
         async with browser_session(body.sessionId) as (sid, base):
             key_value = KEY_MAP.get(body.key, body.key)
@@ -258,7 +265,8 @@ async def api_key(body: KeyBody, _user: CurrentUser = Depends(get_current_user))
 # ---------------------------------------------------------------------------
 
 @router.post("/api/browser/scroll")
-async def api_scroll(body: ScrollBody, _user: CurrentUser = Depends(get_current_user)):
+async def api_scroll(body: ScrollBody, user: CurrentUser = Depends(get_session_aware_user)):
+    await verify_session_access(body.sessionId, user)
     try:
         async with browser_session(body.sessionId) as (sid, base):
             await wd_fetch(f"/session/{sid}/actions", "POST", {
@@ -286,7 +294,8 @@ async def api_scroll(body: ScrollBody, _user: CurrentUser = Depends(get_current_
 # ---------------------------------------------------------------------------
 
 @router.get("/api/browser/tabs")
-async def api_tabs(sessionId: str = Query(...), _user: CurrentUser = Depends(get_current_user)):
+async def api_tabs(sessionId: str = Query(...), user: CurrentUser = Depends(get_session_aware_user)):
+    await verify_session_access(sessionId, user)
     try:
         async with browser_session(sessionId) as (sid, base):
             handles = await wd_fetch(
@@ -318,7 +327,8 @@ async def api_tabs(sessionId: str = Query(...), _user: CurrentUser = Depends(get
 # ---------------------------------------------------------------------------
 
 @router.post("/api/browser/switch-tab")
-async def api_switch_tab(body: SwitchTabBody, _user: CurrentUser = Depends(get_current_user)):
+async def api_switch_tab(body: SwitchTabBody, user: CurrentUser = Depends(get_session_aware_user)):
+    await verify_session_access(body.sessionId, user)
     try:
         async with browser_session(body.sessionId) as (sid, base):
             handles = await wd_fetch(
@@ -354,7 +364,8 @@ async def api_switch_tab(body: SwitchTabBody, _user: CurrentUser = Depends(get_c
 # ---------------------------------------------------------------------------
 
 @router.get("/api/browser/screenshot")
-async def api_screenshot(sessionId: str = Query(...), _user: CurrentUser = Depends(get_current_user)):
+async def api_screenshot(sessionId: str = Query(...), user: CurrentUser = Depends(get_session_aware_user)):
+    await verify_session_access(sessionId, user)
     try:
         async with browser_session(sessionId) as (sid, base):
             b64 = await wd_fetch(f"/session/{sid}/screenshot", base_url=base)
