@@ -1,0 +1,36 @@
+---
+description: 浏览器指纹多维度一致性同步规范
+globs: 
+  - "backend/app/fingerprint.py"
+  - "services/selenium-chrome/stealth-ext/stealth.js"
+  - "frontend/src/components/FingerprintPoolSettings.vue"
+  - "frontend/src/components/NoVNCViewer.vue"
+alwaysApply: false
+---
+# 指纹维度适配与同步规范
+
+## 问题背景
+指纹伪造是一个涉及前后端、扩展注入以及UI展示的全链路功能。一旦新增、删除或重命名某一个指纹维度时，很容易在各个环节出现不同步的问题（如：后端输出了数据但前端UI未能配置，或注入脚本没有生效，或状态栏指纹弹窗未能展示该维度）。
+
+## 核心原则：四端一致性
+当你需要修改指纹维度（如添加新的 CPU 参数、网络参数、字体信息等）时，**必须同时更新以下四个文件**，以保持全链路一致：
+
+1. **后端生成源**: `backend/app/fingerprint.py`
+   - 修改 `_DEFAULT_POOL` 数据字典。
+   - 必须确保在 `generate_profile()` 的返回值中包含该字段，供下游使用。
+
+2. **浏览器注入脚本**: `services/selenium-chrome/stealth-ext/stealth.js`
+   - 拦截并覆盖相关浏览器 API。
+   - 必须从注入的全局变量 `__FP__` 中读取由 `generate_profile()` 输出的具体维度值，进行真实的指纹伪造。
+
+3. **前端指纹池配置表单**: `frontend/src/components/FingerprintPoolSettings.vue`
+   - 增加表单双向绑定的输入组件（使用恰当的 input 类型或组件）。
+   - 更新 Vue 的 state ref 默认值以及 `openAdd()`、`openEdit()` 和 `buildData()` 里的数据结构解析和组装逻辑。
+
+4. **状态栏指纹弹窗展示**: `frontend/src/components/NoVNCViewer.vue`
+   - 在弹窗 `fpProfile` 详情区增加该维度的只读展示。
+   - 需确保与 `generate_profile()` 输出对齐，展示相应的指标概要信息，并在对应的 `en.ts` / `zh.ts` 文件中补充 i18n 国际化键。
+
+## 注意事项
+- 在展示和注入时要注意数据格式的兼容性和判空，对于不存在的新增字段使用可选链 `?.` 或 `v-if` 进行容错降级。
+- WebGL 和 Audio 等高阶维度的拦截必须使用与之匹配的数据类型（如 TypedArray）。

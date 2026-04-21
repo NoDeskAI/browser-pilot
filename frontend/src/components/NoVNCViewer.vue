@@ -61,6 +61,7 @@ const reconnectExhausted = ref(false)
 const proxyOpen = ref(false)
 const proxyInput = ref('')
 const fpOpen = ref(false)
+const fpConfirmRegenerate = ref(false)
 
 const currentSession = computed(() => sessState.sessions.find(s => s.id === props.sessionId))
 const currentPreset = computed(() => currentSession.value?.devicePreset || 'desktop-1920x1080')
@@ -339,7 +340,12 @@ async function clearProxy() {
 
 async function regenerateFp() {
   if (sessState.containerRestarting) return
+  if (!fpConfirmRegenerate.value) {
+    fpConfirmRegenerate.value = true
+    return
+  }
   fpOpen.value = false
+  fpConfirmRegenerate.value = false
   await regenerateFingerprint(props.sessionId)
 }
 
@@ -565,7 +571,7 @@ watch(qualityLevel, applyQuality)
         </Popover>
 
         <!-- Fingerprint popover -->
-        <Popover :open="fpOpen" @update:open="(o: boolean) => fpOpen = o">
+        <Popover :open="fpOpen" @update:open="(o: boolean) => { fpOpen = o; if (!o) fpConfirmRegenerate = false }">
           <PopoverTrigger as-child>
             <Button
               variant="ghost" size="sm"
@@ -574,7 +580,7 @@ watch(qualityLevel, applyQuality)
               :class="fpProfile ? 'text-violet-400' : ''"
               :title="t('vnc.fingerprintTitle')"
             >
-              <Fingerprint class="size-3" />
+              <Fingerprint class="size-3.5" />
               {{ t('vnc.fingerprint') }}
             </Button>
           </PopoverTrigger>
@@ -590,8 +596,51 @@ watch(qualityLevel, applyQuality)
                   <span class="font-mono truncate max-w-[160px]" :title="fpProfile.webgl?.renderer">{{ fpProfile.webgl?.renderer?.split(',')[0] || '-' }}</span>
                 </div>
                 <div class="flex justify-between">
+                  <span class="text-muted-foreground">{{ t('vnc.fpCpu') }}</span>
+                  <span class="font-mono">{{ fpProfile.navigator?.hardwareConcurrency || '-' }} cores</span>
+                </div>
+                <div class="flex justify-between">
                   <span class="text-muted-foreground">{{ t('vnc.fpMemory') }}</span>
-                  <span class="font-mono">{{ fpProfile.navigator?.deviceMemory }} GB · {{ fpProfile.navigator?.hardwareConcurrency }} cores</span>
+                  <span class="font-mono">{{ fpProfile.navigator?.deviceMemory || '-' }} GB</span>
+                </div>
+                <div class="flex justify-between">
+                  <span class="text-muted-foreground">{{ t('vnc.fpScreen') }}</span>
+                  <span class="font-mono">{{ fpProfile.screen?.colorDepth || '-' }}bit / DPR {{ fpProfile.devicePixelRatio || '-' }}</span>
+                </div>
+                <div class="flex justify-between">
+                  <span class="text-muted-foreground">{{ t('vnc.fpAudio') }}</span>
+                  <span class="font-mono">{{ fpProfile.audio?.sampleRate ? `${fpProfile.audio.sampleRate} Hz / ${fpProfile.audio.baseLatency}s` : '-' }}</span>
+                </div>
+                <div class="flex justify-between">
+                  <span class="text-muted-foreground">{{ t('vnc.fpNetwork') }}</span>
+                  <span class="font-mono">{{ fpProfile.connection?.effectiveType ? `${fpProfile.connection.effectiveType} / ${fpProfile.connection.rtt}ms` : '-' }}</span>
+                </div>
+                <div class="flex justify-between">
+                  <span class="text-muted-foreground">{{ t('vnc.fpFonts') }}</span>
+                  <Tooltip v-if="fpProfile.fonts?.length">
+                    <TooltipTrigger as-child>
+                      <span class="font-mono cursor-help border-b border-dashed border-muted-foreground/50">{{ t('vnc.fpFontsCount', { count: fpProfile.fonts.length }) }}</span>
+                    </TooltipTrigger>
+                    <TooltipContent side="left" align="start" class="max-w-[200px] break-words text-[10px]">{{ fpProfile.fonts.join(', ') }}</TooltipContent>
+                  </Tooltip>
+                  <span v-else class="font-mono">-</span>
+                </div>
+                <div class="flex justify-between">
+                  <span class="text-muted-foreground">{{ t('vnc.fpWebglParams') }}</span>
+                  <Tooltip v-if="fpProfile.webgl?.params && Object.keys(fpProfile.webgl.params).length">
+                    <TooltipTrigger as-child>
+                      <span class="font-mono cursor-help border-b border-dashed border-muted-foreground/50">{{ t('vnc.fpWebglParamsCount', { count: Object.keys(fpProfile.webgl.params).length }) }}</span>
+                    </TooltipTrigger>
+                    <TooltipContent side="left" align="start" class="max-w-[200px] text-[10px]">
+                      <div class="grid grid-cols-2 gap-x-2 gap-y-0.5">
+                        <template v-for="(v, k) in fpProfile.webgl.params" :key="k">
+                          <span class="text-muted-foreground truncate" :title="k">{{ k }}</span>
+                          <span class="font-mono truncate" :title="String(v)">{{ Array.isArray(v) ? v.join('x') : v }}</span>
+                        </template>
+                      </div>
+                    </TooltipContent>
+                  </Tooltip>
+                  <span v-else class="font-mono">-</span>
                 </div>
                 <div class="flex justify-between">
                   <span class="text-muted-foreground">{{ t('vnc.fpTimezone') }}</span>
@@ -602,7 +651,14 @@ watch(qualityLevel, applyQuality)
                   <span class="font-mono text-muted-foreground">{{ fpProfile.seed }}</span>
                 </div>
               </div>
-              <Button
+              <div v-if="fpConfirmRegenerate" class="mt-3 p-2 bg-amber-500/10 border border-amber-500/20 rounded-md space-y-2">
+                <p class="text-[10px] text-amber-500 leading-tight">{{ t('vnc.fpRegenerateWarn') }}</p>
+                <div class="flex gap-1.5">
+                  <Button variant="outline" size="sm" class="flex-1 h-6 text-[10px]" @click="fpConfirmRegenerate = false">{{ t('session.cancel') }}</Button>
+                  <Button variant="outline" size="sm" class="flex-1 h-6 text-[10px] border-amber-500/30 text-amber-500 hover:bg-amber-500/10" @click="regenerateFp">{{ t('vnc.fpRegenerateConfirm') }}</Button>
+                </div>
+              </div>
+              <Button v-else
                 @click="regenerateFp"
                 :disabled="sessState.containerRestarting"
                 variant="outline" size="sm"
