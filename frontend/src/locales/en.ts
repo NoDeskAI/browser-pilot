@@ -42,7 +42,8 @@ export default {
     running: 'Running',
     paused: 'Hibernated',
     stopped: 'Stopped',
-    hibernate: 'Hibernate — freeze browser, preserve full state',
+    hibernate: 'Hibernate',
+    hibernateHint: 'Freeze browser, preserve full state',
     resumeFromHibernate: 'Resume from hibernation',
     startContainer: 'Start container',
     copyCli: 'Copy CLI command',
@@ -129,6 +130,10 @@ export default {
     error: 'Error',
     clear: 'Clear',
     empty: 'No logs yet',
+  },
+  docs: {
+    title: 'Documentation',
+    cliAccess: 'CLI Access',
   },
   cliDoc: {
     title: 'CLI Access',

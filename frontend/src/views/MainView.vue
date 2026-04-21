@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import NoVNCViewer from '../components/NoVNCViewer.vue'
 import BrowserLogPanel from '../components/BrowserLogPanel.vue'
 import {
@@ -169,30 +170,44 @@ async function onPauseContainer() {
       </div>
 
       <div class="flex items-center gap-1.5 shrink-0 ml-4">
-        <Button
-          v-if="activeSession.containerStatus === 'running'"
-          variant="outline" size="sm" class="h-8 gap-1.5 text-muted-foreground hover:text-foreground"
-          @click="onPauseContainer"
-        >
-          <Pause class="size-3.5" />
-          {{ t('session.hibernate') }}
-        </Button>
-        <Button
-          v-else
-          variant="default" size="sm" class="h-8 gap-1.5"
-          @click="onStartContainer"
-        >
-          <Play class="size-3.5" />
-          {{ activeSession.containerStatus === 'paused' ? t('session.resumeFromHibernate') : t('session.startContainer') }}
-        </Button>
+        <Tooltip v-if="activeSession.containerStatus === 'running'">
+          <TooltipTrigger as-child>
+            <Button
+              variant="outline" size="sm" class="h-8 gap-1.5 text-muted-foreground hover:text-foreground"
+              @click="onPauseContainer"
+            >
+              <Pause class="size-3.5" />
+              {{ t('session.hibernate') }}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>{{ t('session.hibernateHint') }}</TooltipContent>
+        </Tooltip>
+        
+        <Tooltip v-else>
+          <TooltipTrigger as-child>
+            <Button
+              variant="default" size="sm" class="h-8 gap-1.5"
+              @click="onStartContainer"
+            >
+              <Play class="size-3.5" />
+              {{ activeSession.containerStatus === 'paused' ? t('session.resumeFromHibernate') : t('session.startContainer') }}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>{{ activeSession.containerStatus === 'paused' ? t('session.resumeFromHibernate') : t('session.startContainer') }}</TooltipContent>
+        </Tooltip>
 
-        <Button
-          variant="outline" size="sm" class="h-8 px-2.5 text-muted-foreground hover:text-foreground"
-          @click="tokenDialogOpen = true"
-          :title="t('session.generateToken')"
-        >
-          <Key class="size-3.5" />
-        </Button>
+        <Tooltip>
+          <TooltipTrigger as-child>
+            <Button
+              variant="outline" size="sm" class="h-8 gap-1.5 text-muted-foreground hover:text-foreground"
+              @click="tokenDialogOpen = true"
+            >
+              <Key class="size-3.5" />
+              API Token
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>{{ t('session.generateTokenHint') }}</TooltipContent>
+        </Tooltip>
 
         <AlertDialog v-model:open="deleteDialogOpen">
           <AlertDialogTrigger as-child>

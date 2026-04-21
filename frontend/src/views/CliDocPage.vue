@@ -4,13 +4,8 @@ import { useI18n } from 'vue-i18n'
 import { Copy, Check, SquareTerminal } from 'lucide-vue-next'
 import { useSessions } from '../composables/useSessions'
 import { Button } from '@/components/ui/button'
-import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
-} from '@/components/ui/dialog'
 
 const { t, locale } = useI18n()
-const props = defineProps<{ open: boolean }>()
-const emit = defineEmits<{ (e: 'close'): void }>()
 
 const { brand } = useSessions()
 const apiUrl = computed(() => location.origin)
@@ -158,37 +153,35 @@ function copyDoc() {
 </script>
 
 <template>
-  <Dialog :open="open" @update:open="(v: boolean) => { if (!v) emit('close') }">
-    <DialogContent class="max-w-3xl sm:max-w-3xl">
-      <DialogHeader>
-        <DialogTitle class="flex items-center gap-2">
-          <SquareTerminal class="size-4 text-primary" />
-          {{ t('cliDoc.title') }}
-        </DialogTitle>
-        <DialogDescription>{{ t('cliDoc.description') }}</DialogDescription>
-      </DialogHeader>
+  <div class="max-w-4xl mx-auto px-6 py-8">
+    <div class="mb-6">
+      <h2 class="text-lg font-semibold flex items-center gap-2 mb-2">
+        <SquareTerminal class="size-5 text-primary" />
+        {{ t('cliDoc.title') }}
+      </h2>
+      <p class="text-sm text-muted-foreground">{{ t('cliDoc.description') }}</p>
+    </div>
 
-      <Button
-        @click="copyDoc"
-        :variant="docCopied ? 'outline' : 'default'"
-        class="w-full gap-2"
-        :class="docCopied ? 'text-green-500 border-green-500/30 bg-background' : ''"
-      >
-        <Check v-if="docCopied" class="size-4" />
-        <Copy v-else class="size-4" />
-        {{ docCopied ? t('cliDoc.copiedBtn') : t('cliDoc.copyBtn') }}
-      </Button>
+    <Button
+      @click="copyDoc"
+      :variant="docCopied ? 'outline' : 'default'"
+      class="w-full gap-2 mb-6"
+      :class="docCopied ? 'text-green-500 border-green-500/30 bg-background' : ''"
+    >
+      <Check v-if="docCopied" class="size-4" />
+      <Copy v-else class="size-4" />
+      {{ docCopied ? t('cliDoc.copiedBtn') : t('cliDoc.copyBtn') }}
+    </Button>
 
-      <div class="rounded-md border border-border bg-muted/30 overflow-hidden flex flex-col">
-        <div class="max-h-[60vh] overflow-auto min-w-0">
-          <div class="p-4 text-[11px] font-mono text-muted-foreground leading-relaxed w-fit min-w-full">
-            <div v-for="(line, index) in docLines" :key="index" class="flex">
-              <span class="select-none opacity-50 w-6 shrink-0 text-right mr-3 pr-3 border-r border-border">{{ index + 1 }}</span>
-              <span class="whitespace-pre">{{ line }}</span>
-            </div>
+    <div class="rounded-md border border-border bg-muted/30 overflow-hidden flex flex-col">
+      <div class="overflow-auto min-w-0">
+        <div class="p-4 text-[11px] font-mono text-muted-foreground leading-relaxed w-fit min-w-full">
+          <div v-for="(line, index) in docLines" :key="index" class="flex">
+            <span class="select-none opacity-50 w-6 shrink-0 text-right mr-3 pr-3 border-r border-border">{{ index + 1 }}</span>
+            <span class="whitespace-pre">{{ line }}</span>
           </div>
         </div>
       </div>
-    </DialogContent>
-  </Dialog>
+    </div>
+  </div>
 </template>

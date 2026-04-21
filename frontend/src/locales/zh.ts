@@ -42,7 +42,8 @@ export default {
     running: '运行中',
     paused: '已休眠',
     stopped: '已停止',
-    hibernate: '休眠 — 冻结浏览器，保留完整状态',
+    hibernate: '休眠',
+    hibernateHint: '冻结浏览器，保留完整状态',
     resumeFromHibernate: '从休眠恢复',
     startContainer: '启动容器',
     copyCli: '复制 CLI 接入命令',
@@ -129,6 +130,10 @@ export default {
     error: '错误',
     clear: '清空',
     empty: '暂无日志',
+  },
+  docs: {
+    title: '文档',
+    cliAccess: 'CLI 接入',
   },
   cliDoc: {
     title: 'CLI 接入',

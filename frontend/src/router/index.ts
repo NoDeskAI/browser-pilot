@@ -9,7 +9,16 @@ const router = createRouter({
     { path: '/settings', component: () => import('../views/SettingsView.vue'), meta: { requiresAuth: true } },
     { path: '/users', component: () => import('../views/UsersView.vue'), meta: { requiresAuth: true } },
     { path: '/account', component: () => import('../views/AccountView.vue'), meta: { requiresAuth: true } },
-    { path: '/docs/api-token', component: () => import('../views/ApiTokenDocView.vue'), meta: { requiresAuth: true } },
+    {
+      path: '/docs',
+      component: () => import('../views/DocsView.vue'),
+      meta: { requiresAuth: true },
+      redirect: '/docs/cli',
+      children: [
+        { path: 'cli', component: () => import('../views/CliDocPage.vue') },
+        { path: 'api-token', component: () => import('../views/ApiTokenDocView.vue') },
+      ],
+    },
     { path: '/login', component: () => import('../views/LoginView.vue') },
     { path: '/setup', component: () => import('../views/SetupView.vue') },
     { path: '/:pathMatch(.*)*', redirect: '/' },

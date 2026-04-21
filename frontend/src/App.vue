@@ -4,8 +4,8 @@ import { useRoute, useRouter } from 'vue-router'
 import { useSessions } from './composables/useSessions'
 import { useAuth } from './composables/useAuth'
 import AppHeader from './components/AppHeader.vue'
-import CliDocModal from './components/CliDocModal.vue'
 import { Toaster } from '@/components/ui/sonner'
+import { TooltipProvider } from '@/components/ui/tooltip'
 import { Loader2 } from 'lucide-vue-next'
 
 const route = useRoute()
@@ -15,7 +15,6 @@ const { brand, init: initSessions, createSession } = useSessions()
 const { isAuthenticated, fetchMe } = useAuth()
 
 const isAuthPage = computed(() => route.path === '/login' || route.path === '/setup')
-const cliDocOpen = ref(false)
 const ready = ref(false)
 
 function handleKeydown(e: KeyboardEvent) {
@@ -45,32 +44,42 @@ onUnmounted(() => {
   document.removeEventListener('keydown', handleKeydown)
 })
 
+watch(
+  () => isAuthenticated.value && !isAuthPage.value,
+  async (shouldInit, oldVal) => {
+    if (shouldInit && !oldVal) {
+      await initSessions()
+    }
+  }
+)
+
 watch(() => brand.appTitle, (title) => {
   document.title = title
 })
 </script>
 
 <template>
-  <div class="h-screen w-screen flex flex-col bg-background overflow-hidden relative">
-    <template v-if="isAuthPage">
-      <router-view />
-    </template>
-    <template v-else-if="ready">
-      <AppHeader @open-cli-docs="cliDocOpen = true" />
-      <main class="flex-1 flex flex-col overflow-hidden min-w-0 relative">
+  <TooltipProvider :delay-duration="300">
+    <div class="h-screen w-screen flex flex-col bg-background overflow-hidden relative">
+      <template v-if="isAuthPage">
         <router-view />
-      </main>
-      <CliDocModal :open="cliDocOpen" @close="cliDocOpen = false" />
-    </template>
-    <template v-else>
-      <div class="flex-1 flex items-center justify-center">
-        <Loader2 class="size-6 animate-spin text-muted-foreground" />
-      </div>
-    </template>
-    
-    <!-- 全局组件 -->
-    <Toaster position="top-center" />
-  </div>
+      </template>
+      <template v-else-if="ready">
+        <AppHeader />
+        <main class="flex-1 flex flex-col overflow-hidden min-w-0 relative">
+          <router-view />
+        </main>
+      </template>
+      <template v-else>
+        <div class="flex-1 flex items-center justify-center">
+          <Loader2 class="size-6 animate-spin text-muted-foreground" />
+        </div>
+      </template>
+      
+      <!-- 全局组件 -->
+      <Toaster position="top-center" />
+    </div>
+  </TooltipProvider>
 </template>
 
 <style>

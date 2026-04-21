@@ -7,6 +7,7 @@ import { useNotify } from '../composables/useNotify'
 import { Plus, Play, Pause, Trash2, Monitor, Globe, Hash, Clock, RefreshCw } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { Card } from '@/components/ui/card'
 import { Switch } from '@/components/ui/switch'
 import {
@@ -42,7 +43,13 @@ watch(autoRefresh, (on) => {
   on ? startTimer() : stopTimer()
 })
 
-onMounted(() => { if (autoRefresh.value) startTimer() })
+onMounted(() => {
+  if (autoRefresh.value) {
+    startTimer()
+  } else {
+    fetchSessions()
+  }
+})
 onUnmounted(stopTimer)
 
 const editingId = ref<string | null>(null)
@@ -214,22 +221,29 @@ async function onPauseContainer(id: string) {
               <span class="text-[11px] font-medium">{{ formatRelativeTime(s.updatedAt) }}</span>
             </div>
             <div class="flex items-center gap-1">
-              <Button
-                v-if="s.containerStatus === 'running'"
-                variant="ghost" size="sm" class="size-7 p-0 text-muted-foreground hover:text-foreground"
-                @click.stop="onPauseContainer(s.id)"
-                :title="t('session.hibernate')"
-              >
-                <Pause class="size-3.5" />
-              </Button>
-              <Button
-                v-else
-                variant="ghost" size="sm" class="size-7 p-0 text-muted-foreground hover:text-foreground"
-                @click.stop="onStartContainer(s.id)"
-                :title="s.containerStatus === 'paused' ? t('session.resumeFromHibernate') : t('session.startContainer')"
-              >
-                <Play class="size-3.5" />
-              </Button>
+              <Tooltip v-if="s.containerStatus === 'running'">
+                <TooltipTrigger as-child>
+                  <Button
+                    variant="ghost" size="sm" class="size-7 p-0 text-muted-foreground hover:text-foreground"
+                    @click.stop="onPauseContainer(s.id)"
+                  >
+                    <Pause class="size-3.5" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>{{ t('session.hibernateHint') }}</TooltipContent>
+              </Tooltip>
+              
+              <Tooltip v-else>
+                <TooltipTrigger as-child>
+                  <Button
+                    variant="ghost" size="sm" class="size-7 p-0 text-muted-foreground hover:text-foreground"
+                    @click.stop="onStartContainer(s.id)"
+                  >
+                    <Play class="size-3.5" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>{{ s.containerStatus === 'paused' ? t('session.resumeFromHibernate') : t('session.startContainer') }}</TooltipContent>
+              </Tooltip>
 
               <AlertDialog v-model:open="deleteDialogOpen[s.id]">
                 <AlertDialogTrigger as-child>

@@ -7,7 +7,9 @@ import { useSessions } from '../composables/useSessions'
 import { useAuth } from '../composables/useAuth'
 import {
   LayoutGrid, Settings, Users, SquareTerminal, LogOut, Languages, User as UserIcon,
+  Sun, Moon
 } from 'lucide-vue-next'
+import { useDark, useToggle } from '@vueuse/core'
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem,
   DropdownMenuSeparator, DropdownMenuTrigger,
@@ -21,9 +23,8 @@ const router = useRouter()
 const { brand } = useSessions()
 const { user, logout } = useAuth()
 
-const emit = defineEmits<{
-  (e: 'open-cli-docs'): void
-}>()
+const isDark = useDark()
+const toggleDark = useToggle(isDark)
 
 const showUsersLink = computed(() =>
   user.value && (user.value.role === 'superadmin' || user.value.role === 'admin'),
@@ -75,12 +76,21 @@ function toggleLocale() {
     <div class="flex items-center gap-1 sm:gap-2 shrink-0">
       <nav class="flex items-center gap-1 mr-1 sm:mr-2 md:mr-4">
         <button
-          @click="emit('open-cli-docs')"
-          class="flex items-center gap-2 px-2 md:px-3 py-1.5 rounded-md text-sm text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+          @click="router.push('/docs/cli')"
+          class="flex items-center gap-2 px-2 md:px-3 py-1.5 rounded-md text-sm transition-colors"
+          :class="route.path.startsWith('/docs') ? 'bg-accent text-accent-foreground font-medium' : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'"
           :title="t('app.cliAccess')"
         >
           <SquareTerminal class="size-4 shrink-0" />
           <span class="hidden md:inline">{{ t('app.cliAccess') }}</span>
+        </button>
+        <button
+          @click="toggleDark()"
+          class="flex items-center justify-center size-8 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+          :title="isDark ? t('app.lightMode') || 'Light Mode' : t('app.darkMode') || 'Dark Mode'"
+        >
+          <Sun v-if="isDark" class="size-4 shrink-0" />
+          <Moon v-else class="size-4 shrink-0" />
         </button>
         <button
           @click="toggleLocale"

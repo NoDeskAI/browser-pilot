@@ -3,8 +3,7 @@ import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { marked, Marked } from 'marked'
 import { createHighlighter, type Highlighter } from 'shiki'
-import { RouterLink } from 'vue-router'
-import { ChevronRight, Loader2 } from 'lucide-vue-next'
+import { Loader2 } from 'lucide-vue-next'
 
 const { locale } = useI18n()
 
@@ -346,17 +345,8 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="flex-1 overflow-y-auto">
-    <div class="max-w-5xl mx-auto px-6 py-8">
-      <nav class="flex items-center gap-1 text-sm text-muted-foreground mb-6">
-        <RouterLink to="/account" class="hover:text-foreground transition-colors">
-          {{ locale === 'zh' ? '账号设置' : 'Account Settings' }}
-        </RouterLink>
-        <ChevronRight class="size-3.5" />
-        <span class="text-foreground">API Token</span>
-      </nav>
-
-      <div v-if="loading" class="flex items-center justify-center py-20">
+  <div class="max-w-5xl mx-auto px-6 py-8">
+    <div v-if="loading" class="flex items-center justify-center py-20">
         <Loader2 class="size-5 animate-spin text-muted-foreground" />
       </div>
 
@@ -383,6 +373,5 @@ onUnmounted(() => {
           </div>
         </nav>
       </div>
-    </div>
   </div>
 </template>
