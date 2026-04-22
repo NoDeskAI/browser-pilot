@@ -244,6 +244,7 @@ export default {
     login: '登录',
     loggingIn: '登录中...',
     loginError: '邮箱或密码错误',
+    rememberMe: '记住我',
     setupTitle: '欢迎使用 {appTitle}',
     setupSubtitle: '创建管理员账号以开始使用',
     setupDescription: '为您的组织创建第一个管理员账号',

@@ -9,24 +9,38 @@ export interface AuthUser {
   createdAt?: string
 }
 
-const _token = ref<string | null>(localStorage.getItem('auth_token'))
+const _stored = localStorage.getItem('auth_token')
+const _rememberMe = ref(!!_stored)
+const _token = ref<string | null>(_stored || sessionStorage.getItem('auth_token'))
 const _user = ref<AuthUser | null>(null)
 
 export const token = readonly(_token)
 
+export function clearAuthStorage() {
+  localStorage.removeItem('auth_token')
+  sessionStorage.removeItem('auth_token')
+}
+
 export function useAuth() {
   const isAuthenticated = computed(() => !!_token.value)
 
-  function setAuth(accessToken: string, user: AuthUser) {
+  function setAuth(accessToken: string, user: AuthUser, rememberMe = true) {
     _token.value = accessToken
     _user.value = user
-    localStorage.setItem('auth_token', accessToken)
+    _rememberMe.value = rememberMe
+    if (rememberMe) {
+      localStorage.setItem('auth_token', accessToken)
+      sessionStorage.removeItem('auth_token')
+    } else {
+      sessionStorage.setItem('auth_token', accessToken)
+      localStorage.removeItem('auth_token')
+    }
   }
 
   function logout() {
     _token.value = null
     _user.value = null
-    localStorage.removeItem('auth_token')
+    clearAuthStorage()
   }
 
   async function fetchMe(): Promise<boolean> {

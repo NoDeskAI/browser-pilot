@@ -244,6 +244,7 @@ export default {
     login: 'Sign In',
     loggingIn: 'Signing in...',
     loginError: 'Invalid email or password',
+    rememberMe: 'Remember me',
     setupTitle: 'Welcome to {appTitle}',
     setupSubtitle: 'Set up your admin account to get started',
     setupDescription: 'Create the first admin account for your organization',

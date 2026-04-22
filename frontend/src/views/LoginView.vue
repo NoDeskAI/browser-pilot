@@ -24,6 +24,7 @@ onMounted(() => fetchBrand())
 
 const email = ref('')
 const password = ref('')
+const rememberMe = ref(true)
 const loading = ref(false)
 const error = ref('')
 
@@ -41,7 +42,7 @@ async function handleLogin() {
       return
     }
     const data = await res.json()
-    setAuth(data.access_token, data.user)
+    setAuth(data.access_token, data.user, rememberMe.value)
     router.push('/')
   } catch {
     error.value = t('auth.loginError')
@@ -67,7 +68,7 @@ function toggleLocale() {
         <div class="space-y-2">
           <Label for="email">{{ t('auth.email') }}</Label>
           <Input
-            id="email" v-model="email" type="email"
+            id="email" v-model="email" type="email" autocomplete="email"
             :placeholder="t('auth.emailPlaceholder')"
             required autofocus
           />
@@ -75,11 +76,19 @@ function toggleLocale() {
         <div class="space-y-2">
           <Label for="password">{{ t('auth.password') }}</Label>
           <Input
-            id="password" v-model="password" type="password"
+            id="password" v-model="password" type="password" autocomplete="current-password"
             :placeholder="t('auth.passwordPlaceholder')"
             required
           />
         </div>
+
+        <label for="rememberMe" class="flex items-center gap-2 select-none cursor-pointer">
+          <input
+            id="rememberMe" v-model="rememberMe" type="checkbox"
+            class="size-4 rounded border-border accent-primary cursor-pointer"
+          />
+          <span class="text-sm text-muted-foreground">{{ t('auth.rememberMe') }}</span>
+        </label>
 
         <div v-if="error" class="text-sm text-destructive">{{ error }}</div>
 
