@@ -9,6 +9,7 @@ enforced via ``tags``.
 from __future__ import annotations
 
 import logging
+import re
 import secrets
 import uuid
 from collections import defaultdict
@@ -20,11 +21,11 @@ from app.db import get_pool
 
 logger = logging.getLogger("fingerprint")
 
-_CHROME_VERSION = "136.0.7103.113"
-_CHROME_MAJOR = _CHROME_VERSION.split(".")[0]
+DEFAULT_CHROME_VERSION = "124.0.6367.78"
+DEFAULT_CHROME_MAJOR = DEFAULT_CHROME_VERSION.split(".")[0]
 
-CHROME_VERSION = _CHROME_VERSION
-CHROME_MAJOR = _CHROME_MAJOR
+CHROME_VERSION = DEFAULT_CHROME_VERSION
+CHROME_MAJOR = DEFAULT_CHROME_MAJOR
 
 # ---------------------------------------------------------------------------
 # Domain exception
@@ -42,32 +43,29 @@ class PoolEmptyError(Exception):
 # Default pool seed data (decomposed into 4 groups)
 # ---------------------------------------------------------------------------
 
-_WIN_UA = (
-    f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    f"(KHTML, like Gecko) Chrome/{_CHROME_VERSION} Safari/537.36"
-)
-_WIN_AV = (
-    f"5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    f"(KHTML, like Gecko) Chrome/{_CHROME_VERSION} Safari/537.36"
-)
-_MAC_UA = (
-    f"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
-    f"(KHTML, like Gecko) Chrome/{_CHROME_VERSION} Safari/537.36"
-)
-_MAC_AV = (
-    f"5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
-    f"(KHTML, like Gecko) Chrome/{_CHROME_VERSION} Safari/537.36"
-)
+def _win_ua(ver: str) -> str:
+    return f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{ver} Safari/537.36"
+
+def _win_av(ver: str) -> str:
+    return f"5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{ver} Safari/537.36"
+
+def _mac_ua(ver: str) -> str:
+    return f"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{ver} Safari/537.36"
+
+def _mac_av(ver: str) -> str:
+    return f"5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{ver} Safari/537.36"
 
 _WIN_FONTS = [
-    "Arial", "Calibri", "Cambria", "Consolas", "Segoe UI", "Tahoma",
-    "Verdana", "Georgia", "Impact", "Trebuchet MS", "Times New Roman",
-    "Courier New", "Lucida Console", "Comic Sans MS", "Palatino Linotype",
+    "Arial", "Times New Roman", "Courier New", "Georgia", "Verdana",
+    "Tahoma", "Trebuchet MS", "Impact", "DejaVu Sans", "DejaVu Serif",
+    "DejaVu Sans Mono", "Liberation Sans", "Liberation Serif",
+    "Liberation Mono", "WenQuanYi Zen Hei",
 ]
 _MAC_FONTS = [
-    "Helvetica Neue", "Menlo", "Monaco", "Avenir", "Avenir Next",
-    "Futura", "Gill Sans", "Optima", "Palatino", "American Typewriter",
-    "Apple SD Gothic Neo", "Noteworthy", "Phosphate",
+    "Arial", "Times New Roman", "Courier New", "Georgia", "Verdana",
+    "DejaVu Sans", "DejaVu Serif", "DejaVu Sans Mono",
+    "Liberation Sans", "Liberation Serif", "Liberation Mono",
+    "WenQuanYi Zen Hei", "IPAGothic",
 ]
 
 _DEFAULT_POOL: list[dict[str, Any]] = [
@@ -77,7 +75,7 @@ _DEFAULT_POOL: list[dict[str, Any]] = [
         "label": "Windows 10",
         "tags": ["windows"],
         "data": {
-            "navigator": {"userAgent": _WIN_UA, "platform": "Win32", "appVersion": _WIN_AV},
+            "navigator": {"userAgent": _win_ua(DEFAULT_CHROME_VERSION), "platform": "Win32", "appVersion": _win_av(DEFAULT_CHROME_VERSION)},
             "clientHints": {
                 "platform": "Windows", "platformVersion": "10.0.0",
                 "architecture": "x86", "bitness": "64", "mobile": False, "wow64": False,
@@ -90,7 +88,7 @@ _DEFAULT_POOL: list[dict[str, Any]] = [
         "label": "Windows 11",
         "tags": ["windows"],
         "data": {
-            "navigator": {"userAgent": _WIN_UA, "platform": "Win32", "appVersion": _WIN_AV},
+            "navigator": {"userAgent": _win_ua(DEFAULT_CHROME_VERSION), "platform": "Win32", "appVersion": _win_av(DEFAULT_CHROME_VERSION)},
             "clientHints": {
                 "platform": "Windows", "platformVersion": "15.0.0",
                 "architecture": "x86", "bitness": "64", "mobile": False, "wow64": False,
@@ -103,7 +101,7 @@ _DEFAULT_POOL: list[dict[str, Any]] = [
         "label": "macOS (Apple Silicon)",
         "tags": ["macos"],
         "data": {
-            "navigator": {"userAgent": _MAC_UA, "platform": "MacIntel", "appVersion": _MAC_AV},
+            "navigator": {"userAgent": _mac_ua(DEFAULT_CHROME_VERSION), "platform": "MacIntel", "appVersion": _mac_av(DEFAULT_CHROME_VERSION)},
             "clientHints": {
                 "platform": "macOS", "platformVersion": "14.5.0",
                 "architecture": "arm", "bitness": "64", "mobile": False, "wow64": False,
@@ -116,7 +114,7 @@ _DEFAULT_POOL: list[dict[str, Any]] = [
         "label": "macOS (Intel)",
         "tags": ["macos"],
         "data": {
-            "navigator": {"userAgent": _MAC_UA, "platform": "MacIntel", "appVersion": _MAC_AV},
+            "navigator": {"userAgent": _mac_ua(DEFAULT_CHROME_VERSION), "platform": "MacIntel", "appVersion": _mac_av(DEFAULT_CHROME_VERSION)},
             "clientHints": {
                 "platform": "macOS", "platformVersion": "13.6.0",
                 "architecture": "x86", "bitness": "64", "mobile": False, "wow64": False,
@@ -325,7 +323,12 @@ def clear_seeded_cache(tenant_id: str | None = None) -> None:
 _REQUIRED_GROUPS = ("platform", "gpu", "hardware", "screen")
 
 
-async def generate_profile(tenant_id: str) -> dict[str, Any]:
+async def generate_profile(
+    tenant_id: str,
+    *,
+    browser_lang: str = "en-US",
+    chrome_version: str | None = None,
+) -> dict[str, Any]:
     """Build a random fingerprint profile from the tenant's pool entries."""
     await _ensure_pool_seeded(tenant_id)
     pool = get_pool()
@@ -373,16 +376,34 @@ async def generate_profile(tenant_id: str) -> dict[str, Any]:
     h_data = hardware_entry["data"]
     s_data = screen_entry["data"]
 
+    ver = chrome_version or DEFAULT_CHROME_VERSION
+
+    nav = {**p_data["navigator"]}
+    old_ua = nav.get("userAgent", "")
+    nav["userAgent"] = re.sub(r"Chrome/[\d.]+", f"Chrome/{ver}", old_ua) if old_ua else _win_ua(ver)
+    old_av = nav.get("appVersion", "")
+    nav["appVersion"] = re.sub(r"Chrome/[\d.]+", f"Chrome/{ver}", old_av) if old_av else _win_av(ver)
+
+    lang_primary = browser_lang.split(",")[0].strip() if browser_lang else "en-US"
+    lang_base = lang_primary.split("-")[0]
+    languages = [lang_primary]
+    if lang_base != lang_primary:
+        languages.append(lang_base)
+    if lang_primary != "en" and lang_base != "en":
+        languages.append("en")
+
+    nav.update({
+        "hardwareConcurrency": h_data["hardwareConcurrency"],
+        "deviceMemory": h_data["deviceMemory"],
+        "languages": languages,
+        "language": lang_primary,
+        "maxTouchPoints": 0,
+    })
+
     return {
         "seed": secrets.randbelow(2**32),
-        "navigator": {
-            **p_data["navigator"],
-            "hardwareConcurrency": h_data["hardwareConcurrency"],
-            "deviceMemory": h_data["deviceMemory"],
-            "languages": ["en-US", "en"],
-            "language": "en-US",
-            "maxTouchPoints": 0,
-        },
+        "chromeVersion": ver,
+        "navigator": nav,
         "screen": {
             "colorDepth": s_data["colorDepth"],
             "pixelDepth": s_data["pixelDepth"],

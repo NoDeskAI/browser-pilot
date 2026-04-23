@@ -32,6 +32,7 @@ class BrowserSession:
     wd_session_id: str | None = None
     selenium_base: str = ""
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    stealth_injected: bool = False
 
 
 _sessions: dict[str, BrowserSession] = {}
@@ -111,14 +112,15 @@ def _build_accept_language(languages: list[str]) -> str:
 
 
 async def _inject_stealth(sid: str, *, base_url: str, fingerprint_profile: dict | None = None) -> None:
-    from app.fingerprint import CHROME_VERSION, CHROME_MAJOR
-
     if not fingerprint_profile:
         raise ValueError("fingerprint_profile is required")
     profile = fingerprint_profile
     nav = profile.get("navigator", {})
     hints = profile.get("clientHints", {})
     tz = profile.get("timezone", "UTC")
+
+    chrome_ver = profile.get("chromeVersion", "124.0.6367.78")
+    chrome_major = chrome_ver.split(".")[0]
 
     stealth_js = get_stealth_script()
     if stealth_js:
@@ -137,7 +139,7 @@ async def _inject_stealth(sid: str, *, base_url: str, fingerprint_profile: dict 
         except Exception:
             pass
 
-    ua = nav.get("userAgent", f"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{CHROME_VERSION} Safari/537.36")
+    ua = nav.get("userAgent", f"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{chrome_ver} Safari/537.36")
     accept_lang = _build_accept_language(nav.get("languages", ["en-US", "en"]))
     platform = nav.get("platform", "Linux x86_64")
 
@@ -148,16 +150,16 @@ async def _inject_stealth(sid: str, *, base_url: str, fingerprint_profile: dict 
             "platform": platform,
             "userAgentMetadata": {
                 "brands": [
-                    {"brand": "Chromium", "version": CHROME_MAJOR},
-                    {"brand": "Google Chrome", "version": CHROME_MAJOR},
+                    {"brand": "Chromium", "version": chrome_major},
+                    {"brand": "Google Chrome", "version": chrome_major},
                     {"brand": "Not=A?Brand", "version": "99"},
                 ],
                 "fullVersionList": [
-                    {"brand": "Chromium", "version": CHROME_VERSION},
-                    {"brand": "Google Chrome", "version": CHROME_VERSION},
+                    {"brand": "Chromium", "version": chrome_ver},
+                    {"brand": "Google Chrome", "version": chrome_ver},
                     {"brand": "Not=A?Brand", "version": "99.0.0.0"},
                 ],
-                "fullVersion": CHROME_VERSION,
+                "fullVersion": chrome_ver,
                 "platform": hints.get("platform", "Linux"),
                 "platformVersion": hints.get("platformVersion", "6.5.0"),
                 "architecture": hints.get("architecture", "x86"),
@@ -167,7 +169,7 @@ async def _inject_stealth(sid: str, *, base_url: str, fingerprint_profile: dict 
                 "wow64": hints.get("wow64", False),
             },
         }, base_url=base_url)
-        logger.info("Stealth: UA + client hints set from profile")
+        logger.info("Stealth: UA + client hints set from profile (Chrome %s)", chrome_ver)
     except Exception:
         pass
 
@@ -278,13 +280,20 @@ async def ensure_session(chat_session_id: str) -> tuple[str, str]:
     try:
         pool = get_pool()
         row = await pool.fetchrow(
-            "SELECT device_preset FROM sessions WHERE id = $1", chat_session_id,
+            "SELECT device_preset, fingerprint_profile FROM sessions WHERE id = $1", chat_session_id,
         )
         preset_id = (row["device_preset"] if row else None) or DEFAULT_PRESET
         preset_data = get_preset(preset_id)
         await _inject_device_emulation(sid, preset_data, base_url=bs.selenium_base)
+
+        if not bs.stealth_injected:
+            fp = row["fingerprint_profile"] if row else None
+            if fp:
+                await _inject_stealth(sid, base_url=bs.selenium_base, fingerprint_profile=fp)
+                bs.stealth_injected = True
+                logger.info("Stealth injected for session %s", chat_session_id)
     except Exception as exc:
-        logger.debug("Device emulation lookup/inject skipped: %s", exc)
+        logger.debug("Device emulation / stealth inject skipped: %s", exc)
 
     return sid, bs.selenium_base
 

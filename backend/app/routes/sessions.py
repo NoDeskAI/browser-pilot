@@ -44,6 +44,7 @@ class CreateSessionBody(BaseModel):
     devicePreset: str = DEFAULT_PRESET
     proxyUrl: str = ""
     browserLang: str = "zh-CN"
+    chromeVersion: str | None = None
 
 
 class UpdateSessionBody(BaseModel):
@@ -101,7 +102,7 @@ async def list_sessions(user: CurrentUser = Depends(get_current_user)):
         fp = r["fingerprint_profile"]
         if fp is None:
             try:
-                fp = await generate_profile(user.tenant_id)
+                fp = await generate_profile(user.tenant_id, browser_lang=r["browser_lang"] or "zh-CN")
                 await pool.execute(
                     "UPDATE sessions SET fingerprint_profile = $1::jsonb WHERE id = $2",
                     fp, sid,
@@ -142,17 +143,36 @@ async def create_session(body: CreateSessionBody, user: CurrentUser = Depends(ge
     session_id = str(uuid.uuid4())
     preset_id = body.devicePreset if body.devicePreset in DEVICE_PRESETS else DEFAULT_PRESET
     safe_lang = re.sub(r"[^a-zA-Z0-9_-]", "", body.browserLang or "zh-CN") or "zh-CN"
+
+    resolved_chrome_version: str | None = None
+    if body.chromeVersion:
+        row_img = await pool.fetchrow(
+            "SELECT chrome_version FROM browser_images WHERE tenant_id = $1 AND chrome_major = $2 AND status = 'ready' LIMIT 1",
+            user.tenant_id, int(body.chromeVersion.split(".")[0]),
+        )
+        if row_img:
+            resolved_chrome_version = row_img["chrome_version"]
+
     try:
-        fp_profile = await generate_profile(user.tenant_id)
+        fp_profile = await generate_profile(
+            user.tenant_id,
+            browser_lang=safe_lang,
+            chrome_version=resolved_chrome_version,
+        )
     except PoolEmptyError as exc:
         raise HTTPException(422, f"Fingerprint pool group '{exc.group}' has no enabled entries") from exc
     fp_profile["timezone"] = await resolve_timezone(body.proxyUrl or None)
+
+    preset_data = get_preset(preset_id)
+    fp_profile["screen"]["width"] = preset_data["width"]
+    fp_profile["screen"]["height"] = preset_data["height"]
+
     await pool.execute(
-        "INSERT INTO sessions (id, name, device_preset, proxy_url, tenant_id, user_id, fingerprint_profile, browser_lang) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8)",
-        session_id, body.name, preset_id, body.proxyUrl, user.tenant_id, user.id, fp_profile, safe_lang,
+        "INSERT INTO sessions (id, name, device_preset, proxy_url, tenant_id, user_id, fingerprint_profile, browser_lang, chrome_version) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9)",
+        session_id, body.name, preset_id, body.proxyUrl, user.tenant_id, user.id, fp_profile, safe_lang, resolved_chrome_version,
     )
-    logger.info("Session created: %s (%s) preset=%s lang=%s", session_id, body.name, preset_id, safe_lang)
-    return {"id": session_id, "name": body.name, "devicePreset": preset_id, "proxyUrl": body.proxyUrl, "fingerprintProfile": fp_profile, "browserLang": safe_lang}
+    logger.info("Session created: %s (%s) preset=%s lang=%s chrome=%s", session_id, body.name, preset_id, safe_lang, resolved_chrome_version or "default")
+    return {"id": session_id, "name": body.name, "devicePreset": preset_id, "proxyUrl": body.proxyUrl, "fingerprintProfile": fp_profile, "browserLang": safe_lang, "chromeVersion": resolved_chrome_version}
 
 
 @router.get("/api/sessions/{session_id}")
@@ -168,7 +188,7 @@ async def get_session(session_id: str, user: CurrentUser = Depends(get_session_a
     fp = row["fingerprint_profile"]
     if fp is None:
         try:
-            fp = await generate_profile(user.tenant_id)
+            fp = await generate_profile(user.tenant_id, browser_lang=row["browser_lang"] or "zh-CN")
             await pool.execute(
                 "UPDATE sessions SET fingerprint_profile = $1::jsonb WHERE id = $2",
                 fp, session_id,
@@ -341,22 +361,38 @@ async def change_proxy(session_id: str, body: ProxyBody, user: CurrentUser = Dep
 async def regenerate_fingerprint(session_id: str, body: FingerprintActionBody, user: CurrentUser = Depends(get_current_user)):
     await _verify_session_tenant(session_id, user)
     pool = get_pool()
-    row = await pool.fetchrow("SELECT device_preset, proxy_url, browser_lang FROM sessions WHERE id = $1", session_id)
+    row = await pool.fetchrow("SELECT device_preset, proxy_url, browser_lang, chrome_version FROM sessions WHERE id = $1", session_id)
     if not row:
         return {"ok": False, "error": "Session not found"}
     proxy = row["proxy_url"] or None
     try:
-        fp_profile = await generate_profile(user.tenant_id)
+        fp_profile = await generate_profile(
+            user.tenant_id,
+            browser_lang=row["browser_lang"] or "zh-CN",
+            chrome_version=row["chrome_version"],
+        )
     except PoolEmptyError as exc:
         return {"ok": False, "error": f"Pool group '{exc.group}' has no enabled entries"}
     fp_profile["timezone"] = await resolve_timezone(proxy)
+    preset_data = get_preset(row["device_preset"] or DEFAULT_PRESET)
+    fp_profile["screen"]["width"] = preset_data["width"]
+    fp_profile["screen"]["height"] = preset_data["height"]
     await pool.execute(
         "UPDATE sessions SET fingerprint_profile = $1::jsonb, updated_at = NOW() WHERE id = $2",
         fp_profile, session_id,
     )
-    preset_data = get_preset(row["device_preset"] or DEFAULT_PRESET)
     from app.tools.browser.session import invalidate_session_cache
     invalidate_session_cache(session_id)
+
+    image_name: str | None = None
+    if row["chrome_version"]:
+        img_row = await pool.fetchrow(
+            "SELECT image_tag FROM browser_images WHERE chrome_version = $1 AND status = 'ready' LIMIT 1",
+            row["chrome_version"],
+        )
+        if img_row:
+            image_name = img_row["image_tag"]
+
     ports = await recreate_container(
         session_id,
         width=preset_data["width"],
@@ -365,6 +401,7 @@ async def regenerate_fingerprint(session_id: str, body: FingerprintActionBody, u
         proxy=proxy,
         fingerprint_profile=fp_profile,
         browser_lang=row["browser_lang"] or "zh-CN",
+        image_name=image_name,
     )
     return {"ok": True, "ports": ports, "fingerprintProfile": fp_profile}
 

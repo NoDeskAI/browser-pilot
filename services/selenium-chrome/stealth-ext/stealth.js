@@ -78,12 +78,70 @@
   });
   try{var fpConn=__FP__.connection||{effectiveType:'4g',rtt:50,downlink:10,saveData:false};Object.defineProperty(Object.getPrototypeOf(navigator),'connection',{get:mn(function(){return{effectiveType:fpConn.effectiveType,rtt:fpConn.rtt,downlink:fpConn.downlink,saveData:fpConn.saveData,onchange:null,addEventListener:function(){},removeEventListener:function(){}}},'get connection'),configurable:true})}catch(e){}
 
+  // ===== 5b. navigator.userAgentData (Client Hints API) =====
+  try{
+    var _hints=__FP__.clientHints||{};
+    var _cv=__FP__.chromeVersion||'124.0.0.0';
+    var _cmaj=_cv.split('.')[0];
+    var _brands=[
+      {brand:'Chromium',version:_cmaj},
+      {brand:'Google Chrome',version:_cmaj},
+      {brand:'Not=A?Brand',version:'99'}
+    ];
+    var _fullVersionList=[
+      {brand:'Chromium',version:_cv},
+      {brand:'Google Chrome',version:_cv},
+      {brand:'Not=A?Brand',version:'99.0.0.0'}
+    ];
+    var _uadPlatform=_hints.platform||'Linux';
+    var _uadMobile=!!_hints.mobile;
+    var _heValues={
+      brands:_brands,
+      fullVersionList:_fullVersionList,
+      platform:_uadPlatform,
+      platformVersion:_hints.platformVersion||'10.0.0',
+      architecture:_hints.architecture||'x86',
+      bitness:_hints.bitness||'64',
+      model:'',
+      mobile:_uadMobile,
+      wow64:!!_hints.wow64,
+      uaFullVersion:_cv
+    };
+    var _uad={
+      brands:_brands,
+      mobile:_uadMobile,
+      platform:_uadPlatform,
+      getHighEntropyValues:mn(function(hints){
+        var result={};
+        for(var i=0;i<hints.length;i++){
+          var h=hints[i];
+          if(_heValues[h]!==undefined)result[h]=_heValues[h];
+        }
+        result.brands=_brands;
+        result.mobile=_uadMobile;
+        result.platform=_uadPlatform;
+        return Promise.resolve(result);
+      },'getHighEntropyValues'),
+      toJSON:mn(function(){return{brands:_brands,mobile:_uadMobile,platform:_uadPlatform}},'toJSON')
+    };
+    if(window.NavigatorUAData){Object.setPrototypeOf(_uad,NavigatorUAData.prototype)}
+    Object.defineProperty(Object.getPrototypeOf(navigator),'userAgentData',{get:mn(function(){return _uad},'get userAgentData'),configurable:true,enumerable:true});
+  }catch(e){}
+
   // ===== 6. Screen =====
   try{
     var fpScreen=__FP__.screen;
     Object.defineProperty(screen,'colorDepth',{get:function(){return fpScreen.colorDepth},configurable:true});
     Object.defineProperty(screen,'pixelDepth',{get:function(){return fpScreen.pixelDepth},configurable:true});
     Object.defineProperty(screen,'orientation',{get:function(){return{angle:0,type:'landscape-primary',onchange:null}},configurable:true});
+    if(fpScreen.width){
+      Object.defineProperty(screen,'width',{get:function(){return fpScreen.width},configurable:true});
+      Object.defineProperty(screen,'availWidth',{get:function(){return fpScreen.width},configurable:true});
+    }
+    if(fpScreen.height){
+      Object.defineProperty(screen,'height',{get:function(){return fpScreen.height},configurable:true});
+      Object.defineProperty(screen,'availHeight',{get:function(){return fpScreen.height-40},configurable:true});
+    }
   }catch(e){}
   try{
     Object.defineProperty(window,'outerWidth',{get:function(){return window.innerWidth},configurable:true});
@@ -351,6 +409,25 @@
     }});
     Intl.DateTimeFormat=dtfProxy;
     Object.defineProperty(Intl.DateTimeFormat,'prototype',{value:origDTF.prototype});
+  }catch(e){}
+
+  // ===== 20b. Date.prototype.getTimezoneOffset =====
+  try{
+    var _tzOffsetMap={'UTC':0,'GMT':0,'America/New_York':-300,'America/Chicago':-360,'America/Denver':-420,'America/Los_Angeles':-480,'America/Anchorage':-540,'Pacific/Honolulu':-600,'Europe/London':0,'Europe/Berlin':60,'Europe/Moscow':180,'Asia/Tokyo':540,'Asia/Shanghai':480,'Asia/Kolkata':330,'Australia/Sydney':600,'Pacific/Auckland':720,'Asia/Hong_Kong':480,'Asia/Singapore':480,'Asia/Seoul':540,'Asia/Taipei':480};
+    var _targetOffset=_tzOffsetMap[_fpTz];
+    if(_targetOffset===undefined){
+      try{
+        var _jan=new origDTF('en-US',{timeZone:_fpTz,timeZoneName:'shortOffset'}).formatToParts(new Date(2024,0,1));
+        var _offPart=_jan.find(function(p){return p.type==='timeZoneName'});
+        if(_offPart){
+          var _m=_offPart.value.match(/GMT([+-]?)(\d{1,2})(?::(\d{2}))?/);
+          if(_m){var _sign=_m[1]==='-'?-1:1;_targetOffset=_sign*(parseInt(_m[2],10)*60+(parseInt(_m[3]||'0',10)))}
+          else _targetOffset=0;
+        }else _targetOffset=0;
+      }catch(ex){_targetOffset=0}
+    }
+    var _origGTZO=Date.prototype.getTimezoneOffset;
+    Date.prototype.getTimezoneOffset=mn(function(){return-_targetOffset},'getTimezoneOffset');
   }catch(e){}
 
   // ===== 21. Performance timing protection =====

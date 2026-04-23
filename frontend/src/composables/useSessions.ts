@@ -102,13 +102,35 @@ async function fetchSessions(): Promise<void> {
 
 const _LOCALE_TO_BROWSER_LANG: Record<string, string> = { zh: 'zh-CN', en: 'en-US' }
 
-async function createSession(name?: string): Promise<Session> {
+async function fetchBrowserImages(): Promise<any[]> {
+  try {
+    const res = await api('/api/browser-images')
+    const data = await res.json()
+    return (data.images || []).filter((i: any) => i.status === 'ready')
+  } catch {
+    return []
+  }
+}
+
+async function createSession(name?: string, chromeVersion?: string): Promise<Session> {
   if (!name) name = i18n.global.t('session.defaultName')
   const browserLang = _LOCALE_TO_BROWSER_LANG[(i18n.global.locale as any).value] ?? 'en-US'
+
+  let effectiveChromeVersion = chromeVersion
+  if (!effectiveChromeVersion) {
+    const readyImages = await fetchBrowserImages()
+    if (readyImages.length > 0) {
+      effectiveChromeVersion = String(readyImages[0].chromeMajor)
+    }
+  }
+
+  const body: Record<string, any> = { name, browserLang }
+  if (effectiveChromeVersion) body.chromeVersion = effectiveChromeVersion
+
   const res = await api('/api/sessions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name, browserLang }),
+    body: JSON.stringify(body),
   })
   const data = await res.json()
   const session: Session = {
@@ -380,5 +402,6 @@ export function useSessions() {
     changeDevicePreset,
     changeProxy,
     regenerateFingerprint,
+    fetchBrowserImages,
   }
 }

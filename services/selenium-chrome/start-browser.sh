@@ -21,6 +21,34 @@ fi
 if [ -n "${FINGERPRINT_PROFILE:-}" ]; then
   FP_JSON=$(echo "$FINGERPRINT_PROFILE" | base64 -d)
   echo "var __FP__=${FP_JSON};" > /opt/stealth-ext/fp-profile.js
+
+  FP_TZ=$(echo "$FP_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin).get('timezone','UTC'))" 2>/dev/null)
+  if [ -n "$FP_TZ" ] && [ "$FP_TZ" != "UTC" ]; then
+    export TZ="$FP_TZ"
+    echo "TZ set to $FP_TZ"
+  fi
+
+  REAL_VER=$(/usr/lib/chromium/chromium --version 2>/dev/null | grep -oP '[\d.]+' | head -1)
+  if [ -n "$REAL_VER" ]; then
+    FP_VER=$(echo "$FP_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin).get('chromeVersion',''))" 2>/dev/null)
+    if [ -n "$FP_VER" ] && [ "$FP_VER" != "$REAL_VER" ]; then
+      echo "WARN: profile chromeVersion=$FP_VER but real=$REAL_VER, patching fp-profile.js"
+      PATCHED=$(echo "$FP_JSON" | python3 -c "
+import sys,json,re
+fp=json.load(sys.stdin)
+rv='$REAL_VER'
+fp['chromeVersion']=rv
+nav=fp.get('navigator',{})
+for k in ('userAgent','appVersion'):
+    if k in nav:
+        nav[k]=re.sub(r'Chrome/[\d.]+','Chrome/'+rv,nav[k])
+print(json.dumps(fp,separators=(',',':')))
+" 2>/dev/null)
+      if [ -n "$PATCHED" ]; then
+        echo "var __FP__=${PATCHED};" > /opt/stealth-ext/fp-profile.js
+      fi
+    fi
+  fi
 fi
 
 exec /usr/lib/chromium/chromium \
@@ -43,7 +71,7 @@ exec /usr/lib/chromium/chromium \
   --start-maximized \
   --user-data-dir=/home/seluser/chrome-data/manual \
   --no-first-run \
-  --disable-gpu \
+  --use-gl=angle \
   --ignore-certificate-errors \
   --load-extension=/opt/stealth-ext \
   --remote-debugging-port=9222 \

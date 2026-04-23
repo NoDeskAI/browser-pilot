@@ -70,6 +70,7 @@ async def create_container(
     proxy: str | None = None,
     fingerprint_profile: dict | None = None,
     browser_lang: str = "zh-CN",
+    image_name: str | None = None,
 ) -> str:
     name = container_name(session_id)
     vol_name = f"{name}-data"
@@ -88,6 +89,7 @@ async def create_container(
             json.dumps(fingerprint_profile, separators=(",", ":")).encode()
         ).decode()
     env_args = " ".join(f"-e {k}='{v}'" for k, v in env.items())
+    final_image = image_name or IMAGE_NAME
     cmd = (
         f"docker run -d --name {name} "
         f"--label {_PREFIX}.session_id={session_id} "
@@ -95,7 +97,7 @@ async def create_container(
         f"--shm-size={SHM_SIZE} "
         f"-v {vol_name}:/home/seluser/chrome-data "
         f"{env_args} "
-        f"{IMAGE_NAME}"
+        f"{final_image}"
     )
     logger.info("Creating container: %s (%dx%d)", name, width, height)
     stdout, stderr, rc = await _run(cmd, timeout=30)
@@ -227,38 +229,49 @@ async def _wait_grid_ready(selenium_port: int) -> None:
     logger.warning("Grid readiness timeout on port %d after %.1fs", selenium_port, elapsed)
 
 
-async def _session_container_params(session_id: str) -> tuple[int, int, str | None, str | None, dict | None, str]:
-    """Read device_preset + proxy_url + fingerprint_profile + browser_lang from DB and resolve to container params."""
+async def _session_container_params(session_id: str) -> tuple[int, int, str | None, str | None, dict | None, str, str | None]:
+    """Read device_preset + proxy_url + fingerprint_profile + browser_lang + chrome_version from DB and resolve to container params."""
     pool = get_pool()
     row = await pool.fetchrow(
-        "SELECT device_preset, proxy_url, fingerprint_profile, browser_lang, tenant_id FROM sessions WHERE id = $1",
+        "SELECT device_preset, proxy_url, fingerprint_profile, browser_lang, tenant_id, chrome_version FROM sessions WHERE id = $1",
         session_id,
     )
     if not row:
         preset_data = get_preset(DEFAULT_PRESET)
-        return preset_data["width"], preset_data["height"], None, None, None, "zh-CN"
+        return preset_data["width"], preset_data["height"], None, None, None, "zh-CN", None
     preset_data = get_preset(row["device_preset"] or DEFAULT_PRESET)
     proxy = row["proxy_url"] or None
     browser_lang = row["browser_lang"] or "zh-CN"
 
     fp_profile = row["fingerprint_profile"]
     if fp_profile is None and row["tenant_id"]:
-        fp_profile = await generate_profile(row["tenant_id"])
+        fp_profile = await generate_profile(row["tenant_id"], browser_lang=browser_lang)
         await pool.execute(
             "UPDATE sessions SET fingerprint_profile = $1::jsonb WHERE id = $2",
             fp_profile, session_id,
         )
         logger.info("Lazy-generated fingerprint profile for session %s", session_id)
 
-    return preset_data["width"], preset_data["height"], preset_data.get("user_agent"), proxy, fp_profile, browser_lang
+    chrome_version = row.get("chrome_version")
+    image_name: str | None = None
+    if chrome_version:
+        pool_db = get_pool()
+        img_row = await pool_db.fetchrow(
+            "SELECT image_tag FROM browser_images WHERE chrome_version = $1 AND status = 'ready' LIMIT 1",
+            chrome_version,
+        )
+        if img_row:
+            image_name = img_row["image_tag"]
+
+    return preset_data["width"], preset_data["height"], preset_data.get("user_agent"), proxy, fp_profile, browser_lang, image_name
 
 
 async def ensure_container_running(session_id: str) -> dict[str, int]:
     status = await get_container_status(session_id)
 
     if status == "not_found":
-        width, height, ua, proxy, fp_profile, lang = await _session_container_params(session_id)
-        await create_container(session_id, width=width, height=height, user_agent=ua, proxy=proxy, fingerprint_profile=fp_profile, browser_lang=lang)
+        width, height, ua, proxy, fp_profile, lang, img = await _session_container_params(session_id)
+        await create_container(session_id, width=width, height=height, user_agent=ua, proxy=proxy, fingerprint_profile=fp_profile, browser_lang=lang, image_name=img)
         ports = await get_container_ports(session_id)
         await _wait_grid_ready(ports["selenium_port"])
         return ports
@@ -284,6 +297,7 @@ async def recreate_container(
     proxy: str | None = None,
     fingerprint_profile: dict | None = None,
     browser_lang: str = "zh-CN",
+    image_name: str | None = None,
 ) -> dict[str, int]:
     """Stop, remove (keep volume), create with new params, wait for grid."""
     try:
@@ -291,7 +305,7 @@ async def recreate_container(
     except Exception:
         pass
     await remove_container(session_id, keep_volume=True)
-    await create_container(session_id, width=width, height=height, user_agent=user_agent, proxy=proxy, fingerprint_profile=fingerprint_profile, browser_lang=browser_lang)
+    await create_container(session_id, width=width, height=height, user_agent=user_agent, proxy=proxy, fingerprint_profile=fingerprint_profile, browser_lang=browser_lang, image_name=image_name)
     ports = await get_container_ports(session_id)
     await _wait_grid_ready(ports["selenium_port"])
     return ports
