@@ -1,9 +1,12 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Copy, Check, SquareTerminal } from 'lucide-vue-next'
+import { Marked } from 'marked'
+import { createHighlighter, type Highlighter } from 'shiki'
+import { Copy, Check } from 'lucide-vue-next'
 import { useSessions } from '../composables/useSessions'
 import { Button } from '@/components/ui/button'
+import { Loader2 } from 'lucide-vue-next'
 
 const { t, locale } = useI18n()
 
@@ -136,9 +139,126 @@ const fullDoc = computed(() => {
     : buildDocEn(c, url, installShell, installPython, title)
 })
 
-const docLines = computed(() => {
-  return fullDoc.value.split('\n')
-})
+function toRenderable(plain: string): string {
+  const lines = plain.split('\n')
+  const result: string[] = []
+  let buf: string[] = []
+
+  function flush() {
+    while (buf.length && buf[0].trim() === '') buf.shift()
+    while (buf.length && buf[buf.length - 1].trim() === '') buf.pop()
+    if (buf.length) {
+      result.push('', '```bash', ...buf, '```')
+    }
+    buf = []
+  }
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    const isHeading = /^#{1,3} /.test(line) && (i === 0 || lines[i - 1].trim() === '')
+    if (isHeading) {
+      flush()
+      result.push('', line)
+    } else {
+      buf.push(line)
+    }
+  }
+  flush()
+  return result.join('\n')
+}
+
+const html = ref('')
+const loading = ref(true)
+const activeId = ref('')
+const headings = ref<{ id: string; text: string }[]>([])
+let intersectionObserver: IntersectionObserver | null = null
+
+function slugify(text: string): string {
+  return text.toLowerCase().replace(/[^\w\u4e00-\u9fff]+/g, '-').replace(/^-+|-+$/g, '')
+}
+
+function extractHeadings(md: string): { id: string; text: string }[] {
+  const result: { id: string; text: string }[] = []
+  for (const m of md.matchAll(/^## (.+)$/gm)) {
+    result.push({ id: slugify(m[1]), text: m[1] })
+  }
+  return result
+}
+
+function setupScrollSpy() {
+  if (intersectionObserver) intersectionObserver.disconnect()
+  const sections = headings.value
+    .map(h => document.getElementById(h.id))
+    .filter((el): el is HTMLElement => !!el)
+  if (!sections.length) return
+
+  intersectionObserver = new IntersectionObserver(
+    (entries) => {
+      for (const entry of entries) {
+        if (entry.isIntersecting) {
+          activeId.value = entry.target.id
+          break
+        }
+      }
+    },
+    { rootMargin: '-80px 0px -70% 0px', threshold: 0 }
+  )
+  sections.forEach(el => intersectionObserver!.observe(el))
+}
+
+async function render() {
+  loading.value = true
+  const plain = fullDoc.value
+  const md = toRenderable(plain)
+  headings.value = extractHeadings(plain)
+
+  let highlighter: Highlighter | null = null
+  try {
+    highlighter = await createHighlighter({
+      themes: ['vitesse-dark'],
+      langs: ['bash'],
+    })
+  } catch { /* fallback to plain rendering */ }
+
+  const instance = new Marked()
+  instance.use({
+    renderer: {
+      heading({ tokens, depth }) {
+        const text = this.parser.parseInline(tokens)
+        if (depth === 2) {
+          const raw = tokens.map((t: any) => t.raw ?? t.text ?? '').join('')
+          return `<h2 id="${slugify(raw)}">${text}</h2>\n`
+        }
+        return `<h${depth}>${text}</h${depth}>\n`
+      },
+      code({ text, lang }) {
+        if (highlighter) {
+          try {
+            return highlighter.codeToHtml(text, { lang: lang || 'text', theme: 'vitesse-dark' })
+          } catch { /* fall through */ }
+        }
+        const escaped = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        return `<pre><code>${escaped}</code></pre>\n`
+      },
+    },
+  })
+
+  try {
+    html.value = await instance.parse(md) as string
+  } catch {
+    const { marked } = await import('marked')
+    html.value = await marked(md) as string
+  }
+  loading.value = false
+
+  await nextTick()
+  setupScrollSpy()
+}
+
+function scrollTo(id: string) {
+  const el = document.getElementById(id)
+  if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
 
 const docCopied = ref(false)
 let docCopyTimer: ReturnType<typeof setTimeout> | null = null
@@ -150,38 +270,56 @@ function copyDoc() {
     docCopyTimer = setTimeout(() => { docCopied.value = false }, 2000)
   })
 }
+
+onMounted(render)
+watch([locale, fullDoc], render)
+
+onUnmounted(() => {
+  if (intersectionObserver) intersectionObserver.disconnect()
+})
 </script>
 
 <template>
-  <div class="max-w-4xl mx-auto px-6 py-8">
-    <div class="mb-6">
-      <h2 class="text-lg font-semibold flex items-center gap-2 mb-2">
-        <SquareTerminal class="size-5 text-primary" />
-        {{ t('cliDoc.title') }}
-      </h2>
-      <p class="text-sm text-muted-foreground">{{ t('cliDoc.description') }}</p>
+  <div class="max-w-5xl mx-auto px-6 py-8">
+    <div v-if="loading" class="flex items-center justify-center py-20">
+      <Loader2 class="size-5 animate-spin text-muted-foreground" />
     </div>
 
-    <Button
-      @click="copyDoc"
-      :variant="docCopied ? 'outline' : 'default'"
-      class="w-full gap-2 mb-6"
-      :class="docCopied ? 'text-green-500 border-green-500/30 bg-background' : ''"
-    >
-      <Check v-if="docCopied" class="size-4" />
-      <Copy v-else class="size-4" />
-      {{ docCopied ? t('cliDoc.copiedBtn') : t('cliDoc.copyBtn') }}
-    </Button>
-
-    <div class="rounded-md border border-border bg-muted/30 overflow-hidden flex flex-col">
-      <div class="overflow-auto min-w-0">
-        <div class="p-4 text-[11px] font-mono text-muted-foreground leading-relaxed w-fit min-w-full">
-          <div v-for="(line, index) in docLines" :key="index" class="flex">
-            <span class="select-none opacity-50 w-6 shrink-0 text-right mr-3 pr-3 border-r border-border">{{ index + 1 }}</span>
-            <span class="whitespace-pre">{{ line }}</span>
-          </div>
-        </div>
+    <div v-else class="flex gap-10">
+      <div class="flex-1 min-w-0 max-w-3xl relative">
+        <Button
+          @click="copyDoc"
+          :variant="docCopied ? 'outline' : 'default'"
+          size="sm"
+          class="absolute right-0 top-0.5 shrink-0 gap-1.5"
+          :class="docCopied ? 'text-green-500 border-green-500/30 bg-background' : ''"
+        >
+          <Check v-if="docCopied" class="size-3.5" />
+          <Copy v-else class="size-3.5" />
+          {{ docCopied ? t('cliDoc.copiedBtn') : t('cliDoc.copyBtn') }}
+        </Button>
+        <article class="markdown-body" v-html="html" />
       </div>
+
+      <nav class="hidden lg:block w-48 shrink-0">
+        <div class="sticky top-8 space-y-1.5">
+          <p class="font-medium text-xs text-muted-foreground uppercase tracking-wider mb-3">
+            {{ locale === 'zh' ? '目录' : 'On this page' }}
+          </p>
+          <a
+            v-for="h in headings"
+            :key="h.id"
+            href="javascript:void(0)"
+            class="block py-1 text-[13px] leading-snug transition-colors border-l-2 pl-3"
+            :class="activeId === h.id
+              ? 'text-foreground font-medium border-foreground'
+              : 'text-muted-foreground hover:text-foreground border-transparent'"
+            @click="scrollTo(h.id)"
+          >
+            {{ h.text }}
+          </a>
+        </div>
+      </nav>
     </div>
   </div>
 </template>

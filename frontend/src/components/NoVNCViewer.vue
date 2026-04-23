@@ -1,12 +1,13 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import RFB from '@novnc/novnc'
 import { useSessions } from '../composables/useSessions'
 import { api } from '../lib/api'
 import {
-  Clipboard, Maximize, Minimize, Eye, MousePointer,
+  Keyboard, Maximize, Minimize, Eye, MousePointer,
   Globe, Network, Loader2, Fingerprint,
+  CornerDownLeft, ClipboardPaste, Check,
 } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
@@ -39,9 +40,12 @@ const qualityLevel = ref([9])
 const compressionLevel = ref(0)
 const scaleMode = ref<'scale' | 'resize'>('scale')
 const viewOnly = ref(false)
-const clipboardText = ref('')
-const clipboardOpen = ref(false)
-const clipLoading = ref(false)
+const inputText = ref('')
+const inputBarOpen = ref(false)
+const inputSending = ref(false)
+const inputSent = ref(false)
+const inputError = ref(false)
+const inputRef = ref<HTMLInputElement | null>(null)
 const isFullscreen = ref(false)
 const activeSession = computed(() => sessState.sessions.find(s => s.id === props.sessionId))
 const browserLang = ref(activeSession.value?.browserLang || 'zh-CN')
@@ -205,25 +209,30 @@ async function navigate(url: string) {
   } catch { /* ignore */ }
 }
 
-async function pasteClipboard() {
-  if (!clipboardText.value || clipLoading.value) return
-  clipLoading.value = true
+async function sendInputText() {
+  if (!inputText.value || inputSending.value) return
+  inputSending.value = true
   try {
     await api('/api/docker/clipboard', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sessionId: props.sessionId, action: 'paste', text: clipboardText.value }),
+      body: JSON.stringify({ sessionId: props.sessionId, action: 'paste', text: inputText.value }),
     })
+    inputText.value = ''
+    inputSent.value = true
+    setTimeout(() => { inputSent.value = false }, 300)
   } catch {
+    inputError.value = true
+    setTimeout(() => { inputError.value = false }, 1500)
     const { toast } = await import('vue-sonner')
     toast.error(t('vnc.clipboardError'))
   }
-  clipLoading.value = false
+  inputSending.value = false
 }
 
 async function getRemoteClipboard() {
-  if (clipLoading.value) return
-  clipLoading.value = true
+  if (inputSending.value) return
+  inputSending.value = true
   try {
     const resp = await api('/api/docker/clipboard', {
       method: 'POST',
@@ -231,14 +240,20 @@ async function getRemoteClipboard() {
       body: JSON.stringify({ sessionId: props.sessionId, action: 'get' }),
     })
     const data = await resp.json()
-    if (data.ok && data.text != null) clipboardText.value = data.text
+    if (data.ok && data.text != null) inputText.value = data.text
   } catch { /* ignore */ }
-  clipLoading.value = false
+  inputSending.value = false
 }
 
-function onClipboardOpenChange(open: boolean) {
-  clipboardOpen.value = open
-  if (open) getRemoteClipboard()
+function onInputKeydown(e: KeyboardEvent) {
+  if (e.key === 'Enter' && !e.isComposing) {
+    e.preventDefault()
+    sendInputText()
+  }
+  if (e.key === 'Escape') {
+    inputBarOpen.value = false
+    rfb?.focus()
+  }
 }
 
 function toggleScaleMode() {
@@ -386,6 +401,10 @@ watch(() => activeSession.value?.browserLang, (lang) => {
 }, { once: true })
 
 watch(qualityLevel, applyQuality)
+
+watch(inputBarOpen, (open) => {
+  if (open) nextTick(() => inputRef.value?.focus())
+})
 </script>
 
 <template>
@@ -422,37 +441,14 @@ watch(qualityLevel, applyQuality)
 
         <Separator orientation="vertical" class="h-3.5" />
 
-        <!-- Clipboard popover -->
-        <Popover :open="clipboardOpen" @update:open="onClipboardOpenChange">
-          <PopoverTrigger as-child>
-            <Button variant="ghost" size="sm" class="h-5 px-1.5 text-[10px] gap-1" :class="clipboardOpen ? 'text-lime-400' : ''" :title="t('vnc.clipboard')">
-              <Clipboard class="size-3" />
-              {{ t('vnc.clip') }}
-            </Button>
-          </PopoverTrigger>
-          <PopoverContent class="w-64 p-2" align="start">
-            <textarea
-              v-model="clipboardText"
-              rows="4"
-              class="w-full bg-background border border-border rounded text-xs p-1.5 resize-none outline-none focus:border-ring"
-              :placeholder="t('vnc.clipPlaceholder')"
-            />
-            <div class="flex gap-1.5 mt-1.5">
-              <Button
-                @click="pasteClipboard"
-                :disabled="clipLoading || !clipboardText"
-                variant="outline" size="sm"
-                class="flex-1 h-6 text-[10px] border-lime-600/30 text-lime-400 hover:bg-lime-600/10"
-              >{{ clipLoading ? '...' : t('vnc.sendToRemote') }}</Button>
-              <Button
-                @click="getRemoteClipboard"
-                :disabled="clipLoading"
-                variant="outline" size="sm"
-                class="flex-1 h-6 text-[10px] border-sky-600/30 text-sky-400 hover:bg-sky-600/10"
-              >{{ clipLoading ? '...' : t('vnc.getFromRemote') }}</Button>
-            </div>
-          </PopoverContent>
-        </Popover>
+        <!-- Input bar toggle -->
+        <Button variant="ghost" size="sm"
+          class="h-5 px-1.5 text-[10px] gap-1"
+          :class="inputBarOpen ? 'text-lime-400' : ''"
+          @click="inputBarOpen = !inputBarOpen">
+          <Keyboard class="size-3" />
+          {{ t('vnc.input') }}
+        </Button>
 
         <!-- Scale mode toggle -->
         <Tooltip>
@@ -698,6 +694,46 @@ watch(qualityLevel, applyQuality)
     <div class="flex-1 relative overflow-hidden bg-black">
       <div ref="vncContainer" class="absolute inset-0" />
     </div>
+
+    <!-- Bottom input bar -->
+    <TooltipProvider v-if="inputBarOpen && connected" :delay-duration="300">
+      <div class="flex items-center gap-1.5 px-2 h-9 border-t border-border bg-background shrink-0">
+        <Keyboard class="size-3.5 text-muted-foreground shrink-0" />
+        <input
+          ref="inputRef"
+          v-model="inputText"
+          type="text"
+          class="flex-1 min-w-0 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+          :class="inputError ? 'ring-1 ring-destructive rounded' : ''"
+          :placeholder="t('vnc.inputPlaceholder')"
+          @keydown="onInputKeydown"
+        />
+        <Tooltip>
+          <TooltipTrigger as-child>
+            <Button variant="ghost" size="icon"
+              class="size-6 text-muted-foreground hover:text-sky-400"
+              :disabled="inputSending"
+              @click="getRemoteClipboard">
+              <ClipboardPaste class="size-3.5" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>{{ t('vnc.getFromRemote') }}</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger as-child>
+            <Button variant="ghost" size="icon"
+              class="size-6"
+              :disabled="inputSending || !inputText"
+              @click="sendInputText">
+              <Loader2 v-if="inputSending" class="size-3.5 animate-spin" />
+              <Check v-else-if="inputSent" class="size-3.5 text-green-400" />
+              <CornerDownLeft v-else class="size-3.5" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>{{ t('vnc.sendToRemote') }}</TooltipContent>
+        </Tooltip>
+      </div>
+    </TooltipProvider>
   </div>
 </template>
 
