@@ -445,7 +445,7 @@ watch(inputBarOpen, (open) => {
         <Button variant="ghost" size="sm"
           class="h-5 px-2 text-[10px] gap-1.5 transition-all duration-200"
           :class="inputBarOpen 
-            ? 'bg-[#FFCB00] text-black hover:bg-[#e5b600] hover:text-black shadow-sm font-bold' 
+            ? 'bg-[#FFCB00] text-black hover:bg-[#e5b600] hover:text-black dark:hover:bg-[#e5b600] dark:hover:text-black shadow-sm font-bold' 
             : 'text-muted-foreground hover:text-foreground'"
           @click="inputBarOpen = !inputBarOpen">
           <Keyboard class="size-3" />
