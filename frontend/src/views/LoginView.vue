@@ -22,9 +22,11 @@ const { brand, fetchBrand } = useSessions()
 
 onMounted(() => fetchBrand())
 
-const email = ref('')
+const _SAVED_EMAIL_KEY = 'saved_email'
+const savedEmail = localStorage.getItem(_SAVED_EMAIL_KEY) ?? ''
+const email = ref(savedEmail)
 const password = ref('')
-const rememberMe = ref(true)
+const rememberMe = ref(!!savedEmail || true)
 const loading = ref(false)
 const error = ref('')
 
@@ -42,6 +44,11 @@ async function handleLogin() {
       return
     }
     const data = await res.json()
+    if (rememberMe.value) {
+      localStorage.setItem(_SAVED_EMAIL_KEY, email.value)
+    } else {
+      localStorage.removeItem(_SAVED_EMAIL_KEY)
+    }
     setAuth(data.access_token, data.user, rememberMe.value)
     router.push('/')
   } catch {
