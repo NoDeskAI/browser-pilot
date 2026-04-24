@@ -89,7 +89,10 @@ async def create_container(
             json.dumps(fingerprint_profile, separators=(",", ":")).encode()
         ).decode()
     env_args = " ".join(f"-e {k}='{v}'" for k, v in env.items())
-    final_image = image_name or IMAGE_NAME
+    if not image_name:
+        raise RuntimeError(
+            "No browser image available. Build one in Settings > Browser Images."
+        )
     cmd = (
         f"docker run -d --name {name} "
         f"--label {_PREFIX}.session_id={session_id} "
@@ -97,7 +100,7 @@ async def create_container(
         f"--shm-size={SHM_SIZE} "
         f"-v {vol_name}:/home/seluser/chrome-data "
         f"{env_args} "
-        f"{final_image}"
+        f"{image_name}"
     )
     logger.info("Creating container: %s (%dx%d)", name, width, height)
     stdout, stderr, rc = await _run(cmd, timeout=30)
@@ -253,12 +256,20 @@ async def _session_container_params(session_id: str) -> tuple[int, int, str | No
         logger.info("Lazy-generated fingerprint profile for session %s", session_id)
 
     chrome_version = row.get("chrome_version")
+    tenant_id = row["tenant_id"]
     image_name: str | None = None
-    if chrome_version:
-        pool_db = get_pool()
-        img_row = await pool_db.fetchrow(
-            "SELECT image_tag FROM browser_images WHERE chrome_version = $1 AND status = 'ready' LIMIT 1",
-            chrome_version,
+    if chrome_version and tenant_id:
+        img_row = await pool.fetchrow(
+            "SELECT image_tag FROM browser_images WHERE tenant_id = $1 AND chrome_version = $2 AND status = 'ready' LIMIT 1",
+            tenant_id, chrome_version,
+        )
+        if img_row:
+            image_name = img_row["image_tag"]
+
+    if not image_name and tenant_id:
+        img_row = await pool.fetchrow(
+            "SELECT image_tag FROM browser_images WHERE tenant_id = $1 AND status = 'ready' ORDER BY chrome_major DESC LIMIT 1",
+            row["tenant_id"],
         )
         if img_row:
             image_name = img_row["image_tag"]

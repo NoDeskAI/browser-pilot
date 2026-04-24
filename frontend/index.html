@@ -4,6 +4,20 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Browser Pilot</title>
+    <script>
+      ;(function(){
+        var s=localStorage.getItem('vueuse-color-scheme')
+        var p=window.matchMedia('(prefers-color-scheme: dark)').matches
+        if(s==='dark'||(s===null&&p)||(s==='auto'&&p)){
+          document.documentElement.classList.add('dark')
+          document.documentElement.style.colorScheme='dark'
+        }
+      })()
+    </script>
+    <style>
+      html { background: #ffffff; }
+      html.dark { background: #000000; }
+    </style>
   </head>
   <body>
     <div id="app"></div>

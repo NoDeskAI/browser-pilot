@@ -8,6 +8,7 @@ enforced via ``tags``.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import secrets
@@ -282,8 +283,57 @@ _DEFAULT_POOL: list[dict[str, Any]] = [
 _seeded_tenants: set[str] = set()
 
 
+async def _ensure_default_image(tenant_id: str) -> None:
+    """Register the locally-built default browser image for a tenant if none exist."""
+    pool = get_pool()
+    count = await pool.fetchval(
+        "SELECT COUNT(*) FROM browser_images WHERE tenant_id = $1 AND status = 'ready'",
+        tenant_id,
+    )
+    if count > 0:
+        return
+
+    from app.config import SELENIUM_IMAGE_NAME
+    image_tag = SELENIUM_IMAGE_NAME
+
+    chrome_version = ""
+    chrome_major = 0
+    try:
+        proc = await asyncio.create_subprocess_shell(
+            f"docker run --rm {image_tag} chromium --version 2>/dev/null",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout_b, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
+        ver_out = stdout_b.decode("utf-8", errors="replace").strip()
+        if ver_out:
+            m = re.search(r"(\d+\.\d+\.\d+\.\d+)", ver_out)
+            if m:
+                chrome_version = m.group(1)
+                chrome_major = int(chrome_version.split(".")[0])
+    except Exception as exc:
+        logger.warning("Failed to detect Chromium version from %s: %s", image_tag, exc)
+
+    if not chrome_version:
+        chrome_version = DEFAULT_CHROME_VERSION
+        chrome_major = int(DEFAULT_CHROME_MAJOR)
+
+    await pool.execute(
+        "INSERT INTO browser_images (id, tenant_id, chrome_major, chrome_version, base_image, image_tag, status, build_log) "
+        "VALUES ($1, $2, $3, $4, 'local', $5, 'ready', $6) "
+        "ON CONFLICT (tenant_id, image_tag) DO NOTHING",
+        str(uuid.uuid4()),
+        tenant_id,
+        chrome_major,
+        chrome_version,
+        image_tag,
+        f"Auto-registered default image. Detected version: {chrome_version}",
+    )
+    logger.info("Auto-registered default image %s (Chrome %s) for tenant %s", image_tag, chrome_version, tenant_id)
+
+
 async def _ensure_pool_seeded(tenant_id: str) -> None:
-    """Seed default pool entries for a tenant if none exist yet."""
+    """Seed default pool entries and default browser image for a tenant if none exist yet."""
     if tenant_id in _seeded_tenants:
         return
     pool = get_pool()
@@ -305,6 +355,9 @@ async def _ensure_pool_seeded(tenant_id: str) -> None:
                 entry["tags"],
             )
         logger.info("Seeded %d default pool entries for tenant %s", len(_DEFAULT_POOL), tenant_id)
+
+    await _ensure_default_image(tenant_id)
+
     _seeded_tenants.add(tenant_id)
 
 
@@ -426,22 +479,52 @@ async def generate_profile(
 # Timezone resolution (unchanged)
 # ---------------------------------------------------------------------------
 
-_TZ_API = "http://ip-api.com/json?fields=timezone"
+_TZ_APIS = [
+    ("ip-api.com", "http://ip-api.com/json?fields=timezone", lambda d: d.get("timezone")),
+    ("ipinfo.io", "http://ipinfo.io/json", lambda d: d.get("timezone")),
+]
 _TZ_TIMEOUT = 5.0
 
 
-async def resolve_timezone(proxy_url: str | None) -> str:
-    """Resolve IANA timezone from egress IP by querying ip-api.com through the proxy."""
+def _system_timezone() -> str:
+    """Return the host's local IANA timezone, e.g. 'Asia/Shanghai'."""
+    import datetime
     try:
-        kwargs: dict[str, Any] = {"timeout": _TZ_TIMEOUT}
-        if proxy_url:
-            kwargs["proxy"] = proxy_url
-        async with httpx.AsyncClient(**kwargs) as client:
-            resp = await client.get(_TZ_API)
-            tz = resp.json().get("timezone")
-            if tz:
-                logger.info("Resolved timezone: %s (proxy=%s)", tz, proxy_url or "direct")
-                return tz
-    except Exception as exc:
-        logger.warning("Failed to resolve timezone (proxy=%s): %s", proxy_url or "direct", exc)
+        local = datetime.datetime.now().astimezone().tzinfo
+        if hasattr(local, "key"):
+            return local.key
+        name = str(local)
+        if "/" in name:
+            return name
+    except Exception:
+        pass
+    return "UTC"
+
+
+async def resolve_timezone(proxy_url: str | None) -> str:
+    """Resolve IANA timezone from egress IP.
+
+    Chain: ip-api.com -> ipinfo.io -> system local timezone (when no proxy).
+    """
+    kwargs: dict[str, Any] = {"timeout": _TZ_TIMEOUT}
+    if proxy_url:
+        kwargs["proxy"] = proxy_url
+
+    for name, url, extract in _TZ_APIS:
+        try:
+            async with httpx.AsyncClient(**kwargs) as client:
+                resp = await client.get(url)
+                tz = extract(resp.json())
+                if tz:
+                    logger.info("Resolved timezone via %s: %s (proxy=%s)", name, tz, proxy_url or "direct")
+                    return tz
+        except Exception as exc:
+            logger.warning("Timezone API %s failed (proxy=%s): %s", name, proxy_url or "direct", exc)
+
+    if not proxy_url:
+        tz = _system_timezone()
+        logger.info("Using system timezone: %s", tz)
+        return tz
+
+    logger.warning("All timezone APIs failed, falling back to UTC")
     return "UTC"

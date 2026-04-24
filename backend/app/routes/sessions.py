@@ -69,6 +69,31 @@ class AppStateBody(BaseModel):
 _VALID_PROXY_SCHEMES = ("http://", "https://", "socks4://", "socks5://")
 
 
+async def _resolve_session_image(session_id: str) -> str | None:
+    """Look up the image_tag for a session from browser_images."""
+    pool = get_pool()
+    row = await pool.fetchrow(
+        "SELECT chrome_version, tenant_id FROM sessions WHERE id = $1", session_id,
+    )
+    if not row:
+        return None
+    if row["chrome_version"] and row["tenant_id"]:
+        img_row = await pool.fetchrow(
+            "SELECT image_tag FROM browser_images WHERE tenant_id = $1 AND chrome_version = $2 AND status = 'ready' LIMIT 1",
+            row["tenant_id"], row["chrome_version"],
+        )
+        if img_row:
+            return img_row["image_tag"]
+    if row["tenant_id"]:
+        img_row = await pool.fetchrow(
+            "SELECT image_tag FROM browser_images WHERE tenant_id = $1 AND status = 'ready' ORDER BY chrome_major DESC LIMIT 1",
+            row["tenant_id"],
+        )
+        if img_row:
+            return img_row["image_tag"]
+    return None
+
+
 # -----------------------------------------------------------------------
 # Sessions CRUD
 # -----------------------------------------------------------------------
@@ -152,6 +177,15 @@ async def create_session(body: CreateSessionBody, user: CurrentUser = Depends(ge
         )
         if row_img:
             resolved_chrome_version = row_img["chrome_version"]
+    else:
+        row_img = await pool.fetchrow(
+            "SELECT chrome_version FROM browser_images WHERE tenant_id = $1 AND status = 'ready' ORDER BY chrome_major DESC LIMIT 1",
+            user.tenant_id,
+        )
+        if row_img:
+            resolved_chrome_version = row_img["chrome_version"]
+        else:
+            raise HTTPException(422, "No browser images available. Please build one first in Settings > Browser Images.")
 
     try:
         fp_profile = await generate_profile(
@@ -311,6 +345,7 @@ async def change_device_preset(session_id: str, body: DevicePresetBody, user: Cu
     preset_data = get_preset(body.preset)
     proxy = row["proxy_url"] or None
     fp_profile = row["fingerprint_profile"]
+    image_name = await _resolve_session_image(session_id)
     from app.tools.browser.session import invalidate_session_cache
     invalidate_session_cache(session_id)
     ports = await recreate_container(
@@ -321,6 +356,7 @@ async def change_device_preset(session_id: str, body: DevicePresetBody, user: Cu
         proxy=proxy,
         fingerprint_profile=fp_profile,
         browser_lang=row["browser_lang"] or "zh-CN",
+        image_name=image_name,
     )
     return {"ok": True, "ports": ports, "devicePreset": body.preset}
 
@@ -343,6 +379,7 @@ async def change_proxy(session_id: str, body: ProxyBody, user: CurrentUser = Dep
         proxy_url, fp_profile, session_id,
     )
     preset_data = get_preset(row["device_preset"] or DEFAULT_PRESET)
+    image_name = await _resolve_session_image(session_id)
     from app.tools.browser.session import invalidate_session_cache
     invalidate_session_cache(session_id)
     ports = await recreate_container(
@@ -353,6 +390,7 @@ async def change_proxy(session_id: str, body: ProxyBody, user: CurrentUser = Dep
         proxy=proxy_url or None,
         fingerprint_profile=fp_profile,
         browser_lang=row["browser_lang"] or "zh-CN",
+        image_name=image_name,
     )
     return {"ok": True, "ports": ports, "proxyUrl": proxy_url}
 
@@ -384,14 +422,7 @@ async def regenerate_fingerprint(session_id: str, body: FingerprintActionBody, u
     from app.tools.browser.session import invalidate_session_cache
     invalidate_session_cache(session_id)
 
-    image_name: str | None = None
-    if row["chrome_version"]:
-        img_row = await pool.fetchrow(
-            "SELECT image_tag FROM browser_images WHERE chrome_version = $1 AND status = 'ready' LIMIT 1",
-            row["chrome_version"],
-        )
-        if img_row:
-            image_name = img_row["image_tag"]
+    image_name = await _resolve_session_image(session_id)
 
     ports = await recreate_container(
         session_id,

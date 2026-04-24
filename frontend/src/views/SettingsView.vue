@@ -20,7 +20,7 @@ const activeTab = ref('organization')
 
 <template>
   <div class="flex flex-1 overflow-hidden">
-    <div class="flex-1 overflow-y-auto">
+      <div class="flex-1 overflow-y-scroll">
       <div class="max-w-4xl mx-auto px-6 py-8">
         <h2 class="text-lg font-semibold mb-6">{{ t('settings.title') }}</h2>
         

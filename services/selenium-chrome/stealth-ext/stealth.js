@@ -473,4 +473,29 @@
     }
   }catch(e){}
 
+  // ===== 25. measureText width shift for claimed fonts =====
+  try{
+    var _mtFonts=__FP__.fonts;
+    if(_mtFonts&&_mtFonts.length){
+      var _mtSet={};
+      _mtFonts.forEach(function(f){_mtSet[f.toLowerCase()]=true});
+      var origMT=CanvasRenderingContext2D.prototype.measureText;
+      CanvasRenderingContext2D.prototype.measureText=mn(function(text){
+        var m=origMT.call(this,text);
+        var fam=(this.font||'').replace(/^.*?\d+(\.\d+)?(px|pt|em|rem|%|vw|vh)\s*/i,'');
+        var parts=fam.split(',');
+        for(var i=0;i<parts.length;i++){
+          var f=parts[i].trim().replace(/^['"]|['"]$/g,'').toLowerCase();
+          if(f&&_mtSet[f]){
+            var h=0;for(var j=0;j<f.length;j++)h=(h*31+f.charCodeAt(j))|0;
+            var shift=((h&0x7fffffff)%100)*0.001+0.01;
+            var w=m.width+shift;
+            return{width:w,actualBoundingBoxLeft:m.actualBoundingBoxLeft,actualBoundingBoxRight:m.actualBoundingBoxRight+(shift),actualBoundingBoxAscent:m.actualBoundingBoxAscent,actualBoundingBoxDescent:m.actualBoundingBoxDescent,fontBoundingBoxAscent:m.fontBoundingBoxAscent,fontBoundingBoxDescent:m.fontBoundingBoxDescent,alphabeticBaseline:m.alphabeticBaseline,emHeightAscent:m.emHeightAscent,emHeightDescent:m.emHeightDescent};
+          }
+        }
+        return m;
+      },'measureText');
+    }
+  }catch(e){}
+
 })()

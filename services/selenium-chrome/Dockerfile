@@ -2,11 +2,15 @@ ARG BASE_IMAGE=selenium/standalone-chrome:latest
 FROM ${BASE_IMAGE}
 USER root
 ENV LANG=C.UTF-8
-RUN mv /etc/apt/sources.list /etc/apt/sources.list.bak 2>/dev/null || true \
-    && apt-get update \
-    && apt-get install -y xdotool xclip python3-websocket \
-    && mv /etc/apt/sources.list.bak /etc/apt/sources.list 2>/dev/null || true \
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+       xdotool xclip python3-websocket \
+       libegl-mesa0 libegl1 \
+       fonts-croscore fonts-crosextra-carlito fonts-crosextra-caladea \
+       fonts-liberation fontconfig \
     && rm -rf /var/lib/apt/lists/*
+COPY fonts-local.conf /etc/fonts/local.conf
+RUN fc-cache -f
 RUN if [ ! -f /usr/lib/chromium/locales/zh-CN.pak ]; then \
         CHROME_VER=$(dpkg -s chromium 2>/dev/null | sed -n 's/^Version: //p'); \
         if [ -n "$CHROME_VER" ]; then \

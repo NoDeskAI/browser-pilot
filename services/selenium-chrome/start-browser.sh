@@ -16,6 +16,11 @@ if [ -n "${BROWSER_UA:-}" ]; then
 fi
 if [ -n "${BROWSER_PROXY:-}" ]; then
   EXTRA_ARGS="${EXTRA_ARGS} --proxy-server=${BROWSER_PROXY}"
+  case "${BROWSER_PROXY}" in
+    socks5://*)
+      EXTRA_ARGS="${EXTRA_ARGS} --host-resolver-rules='MAP * ~NOTFOUND , EXCLUDE 127.0.0.1'"
+      ;;
+  esac
 fi
 
 if [ -n "${FINGERPRINT_PROFILE:-}" ]; then
@@ -71,7 +76,10 @@ exec /usr/lib/chromium/chromium \
   --start-maximized \
   --user-data-dir=/home/seluser/chrome-data/manual \
   --no-first-run \
-  --use-gl=angle \
+  --use-gl=angle --use-angle=gl-egl \
+  --ignore-gpu-blocklist \
+  --disable-gpu-driver-bug-workarounds \
+  --enable-unsafe-swiftshader \
   --ignore-certificate-errors \
   --load-extension=/opt/stealth-ext \
   --remote-debugging-port=9222 \

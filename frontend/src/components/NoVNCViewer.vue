@@ -443,8 +443,10 @@ watch(inputBarOpen, (open) => {
 
         <!-- Input bar toggle -->
         <Button variant="ghost" size="sm"
-          class="h-5 px-1.5 text-[10px] gap-1"
-          :class="inputBarOpen ? 'text-lime-400' : ''"
+          class="h-5 px-2 text-[10px] gap-1.5 transition-all duration-200"
+          :class="inputBarOpen 
+            ? 'bg-[#FFCB00] text-black hover:bg-[#e5b600] hover:text-black shadow-sm font-bold' 
+            : 'text-muted-foreground hover:text-foreground'"
           @click="inputBarOpen = !inputBarOpen">
           <Keyboard class="size-3" />
           {{ t('vnc.input') }}
