@@ -17,8 +17,8 @@ import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger,
 } from '@/components/ui/dialog'
 import {
-  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
-  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
+  AlertDialog, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
@@ -37,6 +37,9 @@ const invitePassword = ref('')
 const inviteRole = ref('member')
 const inviteError = ref('')
 const inviteLoading = ref(false)
+
+const deleteTarget = ref<UserItem | null>(null)
+const userDeleting = ref(false)
 
 const showResetPassword = ref(false)
 const resetTargetUser = ref<UserItem | null>(null)
@@ -67,8 +70,19 @@ async function toggleActive(u: UserItem) {
   await fetchUsers()
 }
 
-async function deleteUser(u: UserItem) {
-  await api(`/api/users/${u.id}`, { method: 'DELETE' }); await fetchUsers()
+async function deleteUser() {
+  if (!deleteTarget.value || userDeleting.value) return
+  userDeleting.value = true
+  try {
+    await api(`/api/users/${deleteTarget.value.id}`, { method: 'DELETE' })
+    toast.success(t('users.deleted'))
+    await fetchUsers()
+  } catch {
+    toast.error(t('users.deleteError'))
+  } finally {
+    userDeleting.value = false
+    deleteTarget.value = null
+  }
 }
 
 function openResetPassword(u: UserItem) {
@@ -193,21 +207,13 @@ onMounted(fetchUsers)
                   <Button v-if="u.role !== 'superadmin' && u.id !== currentUser?.id" variant="ghost" size="sm" class="size-8 p-0 text-muted-foreground hover:text-foreground" @click="openResetPassword(u)" :title="t('users.resetPassword')">
                     <KeyRound class="size-3.5" />
                   </Button>
-                  <AlertDialog v-if="u.role !== 'superadmin' && u.id !== currentUser?.id && currentUser?.role === 'superadmin'">
-                    <AlertDialogTrigger as-child>
-                      <Button variant="ghost" size="sm" class="size-8 p-0 text-muted-foreground hover:text-destructive"><Trash2 class="size-3.5" /></Button>
-                    </AlertDialogTrigger>
-                    <AlertDialogContent>
-                      <AlertDialogHeader>
-                        <AlertDialogTitle>{{ t('users.deleteConfirm', { name: u.name }) }}</AlertDialogTitle>
-                        <AlertDialogDescription>{{ t('users.deleteDescription') }}</AlertDialogDescription>
-                      </AlertDialogHeader>
-                      <AlertDialogFooter>
-                        <AlertDialogCancel>{{ t('users.cancel') }}</AlertDialogCancel>
-                        <AlertDialogAction variant="destructive" @click="deleteUser(u)">{{ t('users.confirmDelete') }}</AlertDialogAction>
-                      </AlertDialogFooter>
-                    </AlertDialogContent>
-                  </AlertDialog>
+                  <Button
+                    v-if="u.role !== 'superadmin' && u.id !== currentUser?.id && currentUser?.role === 'superadmin'"
+                    variant="ghost" size="sm" class="size-8 p-0 text-muted-foreground hover:text-destructive"
+                    @click="deleteTarget = u"
+                  >
+                    <Trash2 class="size-3.5" />
+                  </Button>
                 </div>
               </TableCell>
             </TableRow>
@@ -215,5 +221,21 @@ onMounted(fetchUsers)
         </Table>
       </div>
     </div>
+
+    <AlertDialog :open="!!deleteTarget" @update:open="v => { if (!v && !userDeleting) deleteTarget = null }">
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>{{ t('users.deleteConfirm', { name: deleteTarget?.name }) }}</AlertDialogTitle>
+          <AlertDialogDescription>{{ t('users.deleteDescription') }}</AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel :disabled="userDeleting">{{ t('users.cancel') }}</AlertDialogCancel>
+          <Button variant="destructive" :disabled="userDeleting" @click="deleteUser">
+            <Loader2 v-if="userDeleting" class="size-4 animate-spin" />
+            {{ userDeleting ? t('users.deleting') : t('users.confirmDelete') }}
+          </Button>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   </div>
 </template>

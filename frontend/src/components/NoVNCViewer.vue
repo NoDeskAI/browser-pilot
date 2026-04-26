@@ -632,7 +632,7 @@ watch(inputBarOpen, (open) => {
                     <TooltipContent side="left" align="start" class="max-w-[200px] text-[10px]">
                       <div class="grid grid-cols-2 gap-x-2 gap-y-0.5">
                         <template v-for="(v, k) in fpProfile.webgl.params" :key="k">
-                          <span class="text-muted-foreground truncate" :title="k">{{ k }}</span>
+                          <span class="text-muted-foreground truncate" :title="String(k)">{{ String(k) }}</span>
                           <span class="font-mono truncate" :title="String(v)">{{ Array.isArray(v) ? v.join('x') : v }}</span>
                         </template>
                       </div>

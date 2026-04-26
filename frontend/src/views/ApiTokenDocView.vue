@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
+import { ref, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { marked, Marked } from 'marked'
 import { createHighlighter, type Highlighter } from 'shiki'
@@ -258,7 +258,8 @@ function slugify(text: string): string {
 function extractHeadings(md: string): { id: string; text: string }[] {
   const result: { id: string; text: string }[] = []
   for (const m of md.matchAll(/^## (.+)$/gm)) {
-    result.push({ id: slugify(m[1]), text: m[1] })
+    const text = m[1] ?? ''
+    result.push({ id: slugify(text), text })
   }
   return result
 }

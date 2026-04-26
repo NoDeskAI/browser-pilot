@@ -13,7 +13,7 @@ import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog'
 import {
-  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialog, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { toast } from 'vue-sonner'
@@ -357,7 +357,7 @@ function roleBadgeVariant(role?: string) {
         </Dialog>
 
         <!-- Delete Token Confirm -->
-        <AlertDialog :open="!!deleteTarget" @update:open="(v: boolean) => { if (!v) deleteTarget = null }">
+        <AlertDialog :open="!!deleteTarget" @update:open="(v: boolean) => { if (!v && !deleteLoading) deleteTarget = null }">
           <AlertDialogContent>
             <AlertDialogHeader>
               <AlertDialogTitle>{{ t('account.tokenDeleteConfirm') }}</AlertDialogTitle>
@@ -365,10 +365,10 @@ function roleBadgeVariant(role?: string) {
             </AlertDialogHeader>
             <AlertDialogFooter>
               <AlertDialogCancel :disabled="deleteLoading">{{ t('session.cancel') }}</AlertDialogCancel>
-              <AlertDialogAction :disabled="deleteLoading" class="bg-destructive text-destructive-foreground hover:bg-destructive/90" @click="handleDeleteToken">
-                <Loader2 v-if="deleteLoading" class="size-4 mr-2 animate-spin" />
-                {{ t('session.confirmDelete') }}
-              </AlertDialogAction>
+              <Button variant="destructive" :disabled="deleteLoading" @click="handleDeleteToken">
+                <Loader2 v-if="deleteLoading" class="size-4 animate-spin" />
+                {{ deleteLoading ? t('session.deleting') : t('session.confirmDelete') }}
+              </Button>
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>

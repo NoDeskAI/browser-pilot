@@ -145,8 +145,8 @@ function toRenderable(plain: string): string {
   let buf: string[] = []
 
   function flush() {
-    while (buf.length && buf[0].trim() === '') buf.shift()
-    while (buf.length && buf[buf.length - 1].trim() === '') buf.pop()
+    while (buf.length && (buf[0] ?? '').trim() === '') buf.shift()
+    while (buf.length && (buf[buf.length - 1] ?? '').trim() === '') buf.pop()
     if (buf.length) {
       result.push('', '```bash', ...buf, '```')
     }
@@ -154,8 +154,9 @@ function toRenderable(plain: string): string {
   }
 
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]
-    const isHeading = /^#{1,3} /.test(line) && (i === 0 || lines[i - 1].trim() === '')
+    const line = lines[i] ?? ''
+    const prevLine = lines[i - 1] ?? ''
+    const isHeading = /^#{1,3} /.test(line) && (i === 0 || prevLine.trim() === '')
     if (isHeading) {
       flush()
       result.push('', line)
@@ -180,7 +181,8 @@ function slugify(text: string): string {
 function extractHeadings(md: string): { id: string; text: string }[] {
   const result: { id: string; text: string }[] = []
   for (const m of md.matchAll(/^## (.+)$/gm)) {
-    result.push({ id: slugify(m[1]), text: m[1] })
+    const text = m[1] ?? ''
+    result.push({ id: slugify(text), text })
   }
   return result
 }

@@ -17,7 +17,7 @@ import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog'
 import {
-  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialog, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
 } from '@/components/ui/alert-dialog'
 
@@ -25,7 +25,7 @@ const route = useRoute()
 const router = useRouter()
 const { t } = useI18n()
 const notify = useNotify()
-const { state: sessions, switchSession, startContainer, pauseContainer, deleteSession, renameSession } = useSessions()
+const { state: sessions, switchSession, startContainer, pauseContainer, deleteSession, renameSession, fetchSessions } = useSessions()
 
 const activeSession = computed(() => sessions.sessions.find(s => s.id === sessions.activeId))
 const vncUrl = computed(() => {
@@ -37,6 +37,8 @@ const editing = ref(false)
 const editName = ref('')
 const inputRef = ref<HTMLInputElement>()
 const deleteDialogOpen = ref(false)
+const deleting = ref(false)
+const containerActionLoading = ref(false)
 
 // Session Token
 const tokenDialogOpen = ref(false)
@@ -85,9 +87,12 @@ async function copySessionToken() {
 watch(() => route.params.id as string | undefined, async (id) => {
   if (!id) return
   if (!sessions.sessions.some(s => s.id === id)) {
-    notify.error(t('app.sessionNotFound'))
-    router.replace('/')
-    return
+    await fetchSessions()
+    if (!sessions.sessions.some(s => s.id === id)) {
+      notify.error(t('app.sessionNotFound'))
+      router.replace('/')
+      return
+    }
   }
   if (sessions.activeId !== id) {
     await switchSession(id)
@@ -111,22 +116,44 @@ function commitEdit() {
 }
 
 async function onDeleteSession() {
-  if (!activeSession.value) return
-  await deleteSession(activeSession.value.id)
-  notify.success(t('app.sessionDeleted'))
-  router.replace('/')
+  if (!activeSession.value || deleting.value) return
+  deleting.value = true
+  try {
+    await deleteSession(activeSession.value.id)
+    notify.success(t('app.sessionDeleted'))
+    deleteDialogOpen.value = false
+    router.replace('/')
+  } catch {
+    notify.error(t('app.sessionDeleteError'))
+  } finally {
+    deleting.value = false
+  }
 }
 
 async function onStartContainer() {
-  if (!activeSession.value) return
-  await startContainer(activeSession.value.id)
-  notify.success(t('app.sessionStarted'))
+  if (!activeSession.value || containerActionLoading.value) return
+  containerActionLoading.value = true
+  try {
+    await startContainer(activeSession.value.id)
+    notify.success(t('app.sessionStarted'))
+  } catch {
+    notify.error(t('app.containerStartError'))
+  } finally {
+    containerActionLoading.value = false
+  }
 }
 
 async function onPauseContainer() {
-  if (!activeSession.value) return
-  await pauseContainer(activeSession.value.id)
-  notify.success(t('app.sessionPaused'))
+  if (!activeSession.value || containerActionLoading.value) return
+  containerActionLoading.value = true
+  try {
+    await pauseContainer(activeSession.value.id)
+    notify.success(t('app.sessionPaused'))
+  } catch {
+    notify.error(t('app.containerPauseError'))
+  } finally {
+    containerActionLoading.value = false
+  }
 }
 </script>
 
@@ -174,10 +201,12 @@ async function onPauseContainer() {
           <TooltipTrigger as-child>
             <Button
               variant="outline" size="sm" class="h-8 gap-1.5 text-muted-foreground hover:text-foreground"
+              :disabled="containerActionLoading"
               @click="onPauseContainer"
             >
-              <Pause class="size-3.5" />
-              {{ t('session.hibernate') }}
+              <Loader2 v-if="containerActionLoading" class="size-3.5 animate-spin" />
+              <Pause v-else class="size-3.5" />
+              {{ containerActionLoading ? t('session.pausing') : t('session.hibernate') }}
             </Button>
           </TooltipTrigger>
           <TooltipContent>{{ t('session.hibernateHint') }}</TooltipContent>
@@ -187,10 +216,12 @@ async function onPauseContainer() {
           <TooltipTrigger as-child>
             <Button
               variant="default" size="sm" class="h-8 gap-1.5"
+              :disabled="containerActionLoading"
               @click="onStartContainer"
             >
-              <Play class="size-3.5" />
-              {{ activeSession.containerStatus === 'paused' ? t('session.resumeFromHibernate') : t('session.startContainer') }}
+              <Loader2 v-if="containerActionLoading" class="size-3.5 animate-spin" />
+              <Play v-else class="size-3.5" />
+              {{ containerActionLoading ? t('session.starting') : (activeSession.containerStatus === 'paused' ? t('session.resumeFromHibernate') : t('session.startContainer')) }}
             </Button>
           </TooltipTrigger>
           <TooltipContent>{{ activeSession.containerStatus === 'paused' ? t('session.resumeFromHibernate') : t('session.startContainer') }}</TooltipContent>
@@ -209,7 +240,7 @@ async function onPauseContainer() {
           <TooltipContent>{{ t('session.generateTokenHint') }}</TooltipContent>
         </Tooltip>
 
-        <AlertDialog v-model:open="deleteDialogOpen">
+        <AlertDialog :open="deleteDialogOpen" @update:open="v => { if (!v && !deleting) deleteDialogOpen = v }">
           <AlertDialogTrigger as-child>
             <Button variant="outline" size="sm" class="h-8 px-2.5 text-muted-foreground hover:text-destructive hover:bg-destructive/10 hover:border-destructive/20 transition-colors">
               <Trash2 class="size-3.5" />
@@ -221,10 +252,11 @@ async function onPauseContainer() {
               <AlertDialogDescription>{{ t('session.deleteDescription') }}</AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
-              <AlertDialogCancel>{{ t('session.cancel') }}</AlertDialogCancel>
-              <AlertDialogAction class="bg-destructive text-destructive-foreground hover:bg-destructive/90" @click="onDeleteSession">
-                {{ t('session.confirmDelete') }}
-              </AlertDialogAction>
+              <AlertDialogCancel :disabled="deleting">{{ t('session.cancel') }}</AlertDialogCancel>
+              <Button variant="destructive" :disabled="deleting" @click="onDeleteSession">
+                <Loader2 v-if="deleting" class="size-4 animate-spin" />
+                {{ deleting ? t('session.deleting') : t('session.confirmDelete') }}
+              </Button>
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>

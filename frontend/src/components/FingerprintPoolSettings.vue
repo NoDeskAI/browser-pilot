@@ -7,7 +7,7 @@ import { useAuth } from '@/composables/useAuth'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog'
+import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -15,6 +15,7 @@ import { Switch } from '@/components/ui/switch'
 import { Badge } from '@/components/ui/badge'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Toggle } from '@/components/ui/toggle'
+import { Trash2, Loader2 } from 'lucide-vue-next'
 
 const { t } = useI18n()
 const { user } = useAuth()
@@ -83,21 +84,38 @@ async function toggleEnabled(entry: PoolEntry) {
 
 // --- delete ---
 const deleteTarget = ref<PoolEntry | null>(null)
+const fpDeleting = ref(false)
 async function confirmDelete() {
-  if (!deleteTarget.value) return
-  await api(`/api/fingerprint-pool/${deleteTarget.value.id}`, { method: 'DELETE' })
-  toast.success(t('fingerprintPool.deleted'))
-  deleteTarget.value = null
-  fetchPool()
+  if (!deleteTarget.value || fpDeleting.value) return
+  fpDeleting.value = true
+  try {
+    await api(`/api/fingerprint-pool/${deleteTarget.value.id}`, { method: 'DELETE' })
+    toast.success(t('fingerprintPool.deleted'))
+    fetchPool()
+  } catch {
+    toast.error(t('fingerprintPool.deleteFailed'))
+  } finally {
+    fpDeleting.value = false
+    deleteTarget.value = null
+  }
 }
 
 // --- reset ---
 const showResetConfirm = ref(false)
+const resetting = ref(false)
 async function resetPool() {
-  await api('/api/fingerprint-pool/reset', { method: 'POST' })
-  toast.success(t('fingerprintPool.resetDone'))
-  showResetConfirm.value = false
-  fetchPool()
+  if (resetting.value) return
+  resetting.value = true
+  try {
+    await api('/api/fingerprint-pool/reset', { method: 'POST' })
+    toast.success(t('fingerprintPool.resetDone'))
+    showResetConfirm.value = false
+    fetchPool()
+  } catch {
+    toast.error(t('fingerprintPool.resetFailed'))
+  } finally {
+    resetting.value = false
+  }
 }
 
 // --- add / edit dialog ---
@@ -298,7 +316,7 @@ function onPlatformPresetChange(val: any) {
                   </TableCell>
                   <TableCell v-if="isAdmin" class="text-right space-x-1">
                     <Button size="sm" variant="ghost" @click="openEdit(entry)">{{ t('fingerprintPool.edit') }}</Button>
-                    <Button size="sm" variant="ghost" class="text-destructive" @click="deleteTarget = entry">{{ t('fingerprintPool.delete') }}</Button>
+                    <Button size="sm" variant="ghost" class="text-destructive" @click="deleteTarget = entry"><Trash2 class="size-3.5" /></Button>
                   </TableCell>
                 </TableRow>
                 <TableRow v-if="!pool[group.key]?.length">
@@ -320,29 +338,35 @@ function onPlatformPresetChange(val: any) {
     </template>
 
     <!-- Delete confirm -->
-    <AlertDialog :open="!!deleteTarget" @update:open="v => { if (!v) deleteTarget = null }">
+    <AlertDialog :open="!!deleteTarget" @update:open="v => { if (!v && !fpDeleting) deleteTarget = null }">
       <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogTitle>{{ t('fingerprintPool.deleteTitle') }}</AlertDialogTitle>
           <AlertDialogDescription>{{ t('fingerprintPool.deleteConfirm', { name: deleteTarget?.label }) }}</AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
-          <AlertDialogCancel>{{ t('fingerprintPool.cancel') }}</AlertDialogCancel>
-          <AlertDialogAction @click="confirmDelete">{{ t('fingerprintPool.delete') }}</AlertDialogAction>
+          <AlertDialogCancel :disabled="fpDeleting">{{ t('fingerprintPool.cancel') }}</AlertDialogCancel>
+          <Button variant="destructive" :disabled="fpDeleting" @click="confirmDelete">
+            <Loader2 v-if="fpDeleting" class="size-4 animate-spin" />
+            {{ fpDeleting ? t('fingerprintPool.deleting') : t('fingerprintPool.delete') }}
+          </Button>
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>
 
     <!-- Reset confirm -->
-    <AlertDialog :open="showResetConfirm" @update:open="v => showResetConfirm = v">
+    <AlertDialog :open="showResetConfirm" @update:open="v => { if (!v && !resetting) showResetConfirm = v }">
       <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogTitle>{{ t('fingerprintPool.resetTitle') }}</AlertDialogTitle>
           <AlertDialogDescription>{{ t('fingerprintPool.resetConfirm') }}</AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
-          <AlertDialogCancel>{{ t('fingerprintPool.cancel') }}</AlertDialogCancel>
-          <AlertDialogAction @click="resetPool">{{ t('fingerprintPool.resetBtn') }}</AlertDialogAction>
+          <AlertDialogCancel :disabled="resetting">{{ t('fingerprintPool.cancel') }}</AlertDialogCancel>
+          <Button variant="destructive" :disabled="resetting" @click="resetPool">
+            <Loader2 v-if="resetting" class="size-4 animate-spin" />
+            {{ resetting ? t('fingerprintPool.resetting') : t('fingerprintPool.resetBtn') }}
+          </Button>
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>
@@ -416,7 +440,7 @@ function onPlatformPresetChange(val: any) {
               <div class="flex gap-2 mt-1">
                 <Toggle
                   :pressed="formTags.includes('windows')"
-                  @update:pressed="(p) => { if (p) { if (!formTags.includes('windows')) formTags.push('windows') } else { formTags = formTags.filter(t => t !== 'windows') } }"
+                  @update:pressed="(p: boolean) => { if (p) { if (!formTags.includes('windows')) formTags.push('windows') } else { formTags = formTags.filter(t => t !== 'windows') } }"
                   variant="outline"
                   size="sm"
                   class="data-[state=on]:bg-primary/10 data-[state=on]:text-primary data-[state=on]:border-primary"
@@ -425,7 +449,7 @@ function onPlatformPresetChange(val: any) {
                 </Toggle>
                 <Toggle
                   :pressed="formTags.includes('macos')"
-                  @update:pressed="(p) => { if (p) { if (!formTags.includes('macos')) formTags.push('macos') } else { formTags = formTags.filter(t => t !== 'macos') } }"
+                  @update:pressed="(p: boolean) => { if (p) { if (!formTags.includes('macos')) formTags.push('macos') } else { formTags = formTags.filter(t => t !== 'macos') } }"
                   variant="outline"
                   size="sm"
                   class="data-[state=on]:bg-primary/10 data-[state=on]:text-primary data-[state=on]:border-primary"
@@ -471,13 +495,13 @@ function onPlatformPresetChange(val: any) {
               <div class="flex gap-2 mt-1">
                 <Toggle
                   :pressed="formTags.includes('windows')"
-                  @update:pressed="(p) => { if (p) { if (!formTags.includes('windows')) formTags.push('windows') } else { formTags = formTags.filter(t => t !== 'windows') } }"
+                  @update:pressed="(p: boolean) => { if (p) { if (!formTags.includes('windows')) formTags.push('windows') } else { formTags = formTags.filter(t => t !== 'windows') } }"
                   variant="outline" size="sm"
                   class="data-[state=on]:bg-primary/10 data-[state=on]:text-primary data-[state=on]:border-primary"
                 >Windows</Toggle>
                 <Toggle
                   :pressed="formTags.includes('macos')"
-                  @update:pressed="(p) => { if (p) { if (!formTags.includes('macos')) formTags.push('macos') } else { formTags = formTags.filter(t => t !== 'macos') } }"
+                  @update:pressed="(p: boolean) => { if (p) { if (!formTags.includes('macos')) formTags.push('macos') } else { formTags = formTags.filter(t => t !== 'macos') } }"
                   variant="outline" size="sm"
                   class="data-[state=on]:bg-primary/10 data-[state=on]:text-primary data-[state=on]:border-primary"
                 >macOS</Toggle>
@@ -548,7 +572,7 @@ function onPlatformPresetChange(val: any) {
               <div class="flex gap-2 mt-1">
                 <Toggle
                   :pressed="formTags.includes('windows')"
-                  @update:pressed="(p) => { if (p) { if (!formTags.includes('windows')) formTags.push('windows') } else { formTags = formTags.filter(t => t !== 'windows') } }"
+                  @update:pressed="(p: boolean) => { if (p) { if (!formTags.includes('windows')) formTags.push('windows') } else { formTags = formTags.filter(t => t !== 'windows') } }"
                   variant="outline"
                   size="sm"
                   class="data-[state=on]:bg-primary/10 data-[state=on]:text-primary data-[state=on]:border-primary"
@@ -557,7 +581,7 @@ function onPlatformPresetChange(val: any) {
                 </Toggle>
                 <Toggle
                   :pressed="formTags.includes('macos')"
-                  @update:pressed="(p) => { if (p) { if (!formTags.includes('macos')) formTags.push('macos') } else { formTags = formTags.filter(t => t !== 'macos') } }"
+                  @update:pressed="(p: boolean) => { if (p) { if (!formTags.includes('macos')) formTags.push('macos') } else { formTags = formTags.filter(t => t !== 'macos') } }"
                   variant="outline"
                   size="sm"
                   class="data-[state=on]:bg-primary/10 data-[state=on]:text-primary data-[state=on]:border-primary"
