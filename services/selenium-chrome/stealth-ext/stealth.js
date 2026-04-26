@@ -151,9 +151,18 @@
     Object.defineProperty(window,'screenY',{get:function(){return 0},configurable:true});
   }catch(e){}
 
-  // ===== 7. Canvas fingerprint (toDataURL + toBlob + getImageData) =====
+  // ===== 7. Canvas fingerprint (deterministic noise based on pixel content) =====
   try{
     var _noiseSeed=SEED;
+    function _pixelHash(data,len){
+      var h=_noiseSeed;
+      var step=Math.max(1,Math.floor(len/256))*4;
+      for(var i=0;i<len;i+=step){
+        h=Math.imul(h^data[i],0x5bd1e995);
+        h^=(h>>>13);
+      }
+      return h>>>0;
+    }
     function _noiseCanvas(canvas){
       try{
         var ctx=canvas.getContext('2d');
@@ -161,8 +170,9 @@
         var w=Math.min(canvas.width,64),h=Math.min(canvas.height,64);
         var img=ctx.getImageData(0,0,w,h);
         var d=img.data;
+        var ph=_pixelHash(d,d.length);
         for(var i=0;i<d.length;i+=4){
-          var s=_noiseSeed^(i*2654435761);
+          var s=ph^(i*2654435761);
           s=((s>>>16)^s)*0x45d9f3b;
           d[i]=(d[i]+(((s>>>0)%3)-1))&255;
           d[i+1]=(d[i+1]+(((s>>>8)%3)-1))&255;
@@ -176,12 +186,16 @@
     var origTB=HTMLCanvasElement.prototype.toBlob;
     if(origTB){HTMLCanvasElement.prototype.toBlob=mn(function(){_noiseCanvas(this);return origTB.apply(this,arguments)},'toBlob');}
     var origGID=CanvasRenderingContext2D.prototype.getImageData;
-    var _gidCount=0;
     CanvasRenderingContext2D.prototype.getImageData=mn(function(sx,sy,sw,sh){
       var img=origGID.call(this,sx,sy,sw,sh);
-      if(++_gidCount%3===0){
-        var d=img.data;
-        for(var i=0;i<Math.min(d.length,256);i+=4){d[i]=(d[i]+(((_noiseSeed^i)%3)-1))&255}
+      var d=img.data;
+      if(d.length>=16){
+        var ph=_pixelHash(d,d.length);
+        for(var i=0;i<Math.min(d.length,256);i+=4){
+          var s=ph^(i*2654435761);
+          s=((s>>>16)^s)*0x45d9f3b;
+          d[i]=(d[i]+(((s>>>0)%3)-1))&255;
+        }
       }
       return img;
     },'getImageData');
@@ -347,18 +361,32 @@
     }
   }catch(e){}
 
-  // ===== 14. ClientRect noise =====
+  // ===== 14. ClientRect noise (deterministic per element) =====
   try{
+    function _elemHash(el){
+      var s=SEED;
+      var tag=el.tagName||'';
+      for(var i=0;i<tag.length;i++){s=Math.imul(s^tag.charCodeAt(i),0x5bd1e995);s^=(s>>>13);}
+      var cls=el.className||'';
+      if(typeof cls==='string')for(var j=0;j<cls.length&&j<64;j++){s=Math.imul(s^cls.charCodeAt(j),0x5bd1e995);s^=(s>>>13);}
+      var txt=(el.textContent||'').slice(0,32);
+      for(var k=0;k<txt.length;k++){s=Math.imul(s^txt.charCodeAt(k),0x5bd1e995);s^=(s>>>13);}
+      return((s>>>0)%1000)*0.0000001;
+    }
     var origGBCR=Element.prototype.getBoundingClientRect;
     Element.prototype.getBoundingClientRect=mn(function(){
       var r=origGBCR.call(this);
-      var n=(SEED^this.tagName.length)%7*0.00001;
+      var n=_elemHash(this);
       return new DOMRect(r.x+n,r.y+n,r.width+n,r.height+n);
     },'getBoundingClientRect');
     var origGCR=Element.prototype.getClientRects;
     Element.prototype.getClientRects=mn(function(){
       var rects=origGCR.call(this);
-      return rects;
+      if(!rects||!rects.length)return rects;
+      var n=_elemHash(this);
+      var out=[];
+      for(var i=0;i<rects.length;i++){var r=rects[i];out.push(new DOMRect(r.x+n,r.y+n,r.width+n,r.height+n));}
+      return out;
     },'getClientRects');
   }catch(e){}
 

@@ -283,57 +283,8 @@ _DEFAULT_POOL: list[dict[str, Any]] = [
 _seeded_tenants: set[str] = set()
 
 
-async def _ensure_default_image(tenant_id: str) -> None:
-    """Register the locally-built default browser image for a tenant if none exist."""
-    pool = get_pool()
-    count = await pool.fetchval(
-        "SELECT COUNT(*) FROM browser_images WHERE tenant_id = $1 AND status = 'ready'",
-        tenant_id,
-    )
-    if count > 0:
-        return
-
-    from app.config import SELENIUM_IMAGE_NAME
-    image_tag = SELENIUM_IMAGE_NAME
-
-    chrome_version = ""
-    chrome_major = 0
-    try:
-        proc = await asyncio.create_subprocess_shell(
-            f"docker run --rm {image_tag} chromium --version 2>/dev/null",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout_b, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
-        ver_out = stdout_b.decode("utf-8", errors="replace").strip()
-        if ver_out:
-            m = re.search(r"(\d+\.\d+\.\d+\.\d+)", ver_out)
-            if m:
-                chrome_version = m.group(1)
-                chrome_major = int(chrome_version.split(".")[0])
-    except Exception as exc:
-        logger.warning("Failed to detect Chromium version from %s: %s", image_tag, exc)
-
-    if not chrome_version:
-        chrome_version = DEFAULT_CHROME_VERSION
-        chrome_major = int(DEFAULT_CHROME_MAJOR)
-
-    await pool.execute(
-        "INSERT INTO browser_images (id, tenant_id, chrome_major, chrome_version, base_image, image_tag, status, build_log) "
-        "VALUES ($1, $2, $3, $4, 'local', $5, 'ready', $6) "
-        "ON CONFLICT (tenant_id, image_tag) DO NOTHING",
-        str(uuid.uuid4()),
-        tenant_id,
-        chrome_major,
-        chrome_version,
-        image_tag,
-        f"Auto-registered default image. Detected version: {chrome_version}",
-    )
-    logger.info("Auto-registered default image %s (Chrome %s) for tenant %s", image_tag, chrome_version, tenant_id)
-
-
 async def _ensure_pool_seeded(tenant_id: str) -> None:
-    """Seed default pool entries and default browser image for a tenant if none exist yet."""
+    """Seed default pool entries for a tenant if none exist yet."""
     if tenant_id in _seeded_tenants:
         return
     pool = get_pool()
@@ -355,8 +306,6 @@ async def _ensure_pool_seeded(tenant_id: str) -> None:
                 entry["tags"],
             )
         logger.info("Seeded %d default pool entries for tenant %s", len(_DEFAULT_POOL), tenant_id)
-
-    await _ensure_default_image(tenant_id)
 
     _seeded_tenants.add(tenant_id)
 
@@ -502,7 +451,7 @@ def _system_timezone() -> str:
 
 
 async def resolve_timezone(proxy_url: str | None) -> str:
-    """Resolve IANA timezone from egress IP.
+    """Resolve IANA timezone from egress IP (host-side, used as fallback).
 
     Chain: ip-api.com -> ipinfo.io -> system local timezone (when no proxy).
     """
@@ -528,3 +477,52 @@ async def resolve_timezone(proxy_url: str | None) -> str:
 
     logger.warning("All timezone APIs failed, falling back to UTC")
     return "UTC"
+
+
+async def resolve_timezone_via_container(proxy_url: str | None, image_tag: str) -> str:
+    """Resolve IANA timezone by querying geo APIs from inside a Docker container.
+
+    Uses ``docker run --rm`` so the HTTP request exits from the same network
+    path as the real browser container, avoiding VPN / split-tunnel mismatches
+    on the backend host.
+
+    Fallback chain: container ip-api -> container ipinfo -> host-side resolve_timezone.
+    """
+    import json as _json
+    import shlex
+
+    apis = [
+        ("ip-api.com", "http://ip-api.com/json?fields=timezone", "timezone"),
+        ("ipinfo.io", "http://ipinfo.io/json", "timezone"),
+    ]
+
+    for api_name, url, field in apis:
+        curl = f"curl -4 -sf --max-time 5"
+        if proxy_url:
+            curl += f" --proxy {shlex.quote(proxy_url)}"
+        curl += f" {shlex.quote(url)}"
+
+        cmd = f"docker run --rm {shlex.quote(image_tag)} sh -c {shlex.quote(curl)}"
+        try:
+            proc = await asyncio.create_subprocess_shell(
+                cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout_b, _ = await asyncio.wait_for(proc.communicate(), timeout=20)
+            if proc.returncode == 0 and stdout_b:
+                data = _json.loads(stdout_b.decode("utf-8", errors="replace"))
+                tz = data.get(field)
+                if tz and "/" in tz:
+                    logger.info(
+                        "Resolved timezone via container %s (%s): %s (proxy=%s)",
+                        api_name, image_tag, tz, proxy_url or "direct",
+                    )
+                    return tz
+        except asyncio.TimeoutError:
+            logger.warning("Container timezone query timed out (%s, image=%s)", api_name, image_tag)
+        except Exception as exc:
+            logger.warning("Container timezone query failed (%s, image=%s): %s", api_name, image_tag, exc)
+
+    logger.info("Container timezone queries failed, falling back to host-side resolution")
+    return await resolve_timezone(proxy_url)

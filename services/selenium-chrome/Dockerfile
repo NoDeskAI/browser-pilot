@@ -1,7 +1,24 @@
 ARG BASE_IMAGE=selenium/standalone-chrome:latest
+ARG CHROME_VERSION=
 FROM ${BASE_IMAGE}
 USER root
 ENV LANG=C.UTF-8
+
+ARG CHROME_VERSION
+RUN if [ -n "${CHROME_VERSION}" ]; then \
+      INSTALLED=$(dpkg -s chromium 2>/dev/null | sed -n 's/^Version: //p' | grep -oP '^\d+' || echo "0"); \
+      TARGET=$(echo "${CHROME_VERSION}" | grep -oP '^\d+'); \
+      if [ "$INSTALLED" != "$TARGET" ]; then \
+        echo ">>> Upgrading Chromium: ${INSTALLED} -> ${CHROME_VERSION}" \
+        && echo "deb http://deb.debian.org/debian sid main" > /etc/apt/sources.list.d/sid.list \
+        && apt-get update \
+        && (apt-get install -y --allow-downgrades -t sid "chromium=${CHROME_VERSION}*" "chromium-common=${CHROME_VERSION}*" 2>/dev/null \
+            || apt-get install -y --allow-downgrades -t sid chromium chromium-common) \
+        && rm -f /etc/apt/sources.list.d/sid.list \
+        && rm -rf /var/lib/apt/lists/*; \
+      fi; \
+    fi
+
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
        xdotool xclip python3-websocket \

@@ -8,7 +8,7 @@ from typing import Any
 
 import httpx
 
-from app.config import DOCKER_HOST_ADDR, CONTAINER_PREFIX as _PREFIX, SELENIUM_IMAGE_NAME
+from app.config import DOCKER_HOST_ADDR, CONTAINER_PREFIX as _PREFIX
 from app.db import get_pool
 from app.device_presets import DEVICE_PRESETS, DEFAULT_PRESET, get_preset
 from app.fingerprint import generate_profile
@@ -16,7 +16,6 @@ from app.fingerprint import generate_profile
 logger = logging.getLogger("container")
 
 CONTAINER_PREFIX = f"{_PREFIX}-"
-IMAGE_NAME = SELENIUM_IMAGE_NAME
 SHM_SIZE = "2g"
 
 _STATIC_ENV = {
@@ -274,7 +273,10 @@ async def _session_container_params(session_id: str) -> tuple[int, int, str | No
         if img_row:
             image_name = img_row["image_tag"]
 
-    return preset_data["width"], preset_data["height"], preset_data.get("user_agent"), proxy, fp_profile, browser_lang, image_name
+    ua = None
+    if fp_profile and isinstance(fp_profile, dict):
+        ua = fp_profile.get("navigator", {}).get("userAgent")
+    return preset_data["width"], preset_data["height"], ua, proxy, fp_profile, browser_lang, image_name
 
 
 async def ensure_container_running(session_id: str) -> dict[str, int]:

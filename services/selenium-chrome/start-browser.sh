@@ -10,17 +10,13 @@ LANG_CODE=$(cat /tmp/browser-lang 2>/dev/null || echo "${BROWSER_LANG:-zh-CN}")
 LOCALE_ID=$(echo "$LANG_CODE" | sed 's/-/_/')
 export LANGUAGE="${LOCALE_ID}"
 
-EXTRA_ARGS=""
+EXTRA_ARGS=()
 if [ -n "${BROWSER_UA:-}" ]; then
-  EXTRA_ARGS="${EXTRA_ARGS} --user-agent=${BROWSER_UA}"
+  EXTRA_ARGS+=("--user-agent=${BROWSER_UA}")
 fi
 if [ -n "${BROWSER_PROXY:-}" ]; then
-  EXTRA_ARGS="${EXTRA_ARGS} --proxy-server=${BROWSER_PROXY}"
-  case "${BROWSER_PROXY}" in
-    socks5://*)
-      EXTRA_ARGS="${EXTRA_ARGS} --host-resolver-rules='MAP * ~NOTFOUND , EXCLUDE 127.0.0.1'"
-      ;;
-  esac
+  EXTRA_ARGS+=("--proxy-server=${BROWSER_PROXY}")
+  EXTRA_ARGS+=("--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE 127.0.0.1")
 fi
 
 if [ -n "${FINGERPRINT_PROFILE:-}" ]; then
@@ -42,11 +38,16 @@ if [ -n "${FINGERPRINT_PROFILE:-}" ]; then
 import sys,json,re
 fp=json.load(sys.stdin)
 rv='$REAL_VER'
+rmaj=rv.split('.')[0]
 fp['chromeVersion']=rv
 nav=fp.get('navigator',{})
 for k in ('userAgent','appVersion'):
     if k in nav:
         nav[k]=re.sub(r'Chrome/[\d.]+','Chrome/'+rv,nav[k])
+ch=fp.get('clientHints',{})
+if ch:
+    ch['brands']=[{'brand':'Chromium','version':rmaj},{'brand':'Google Chrome','version':rmaj},{'brand':'Not=A?Brand','version':'99'}]
+    ch['fullVersionList']=[{'brand':'Chromium','version':rv},{'brand':'Google Chrome','version':rv},{'brand':'Not=A?Brand','version':'99.0.0.0'}]
 print(json.dumps(fp,separators=(',',':')))
 " 2>/dev/null)
       if [ -n "$PATCHED" ]; then
@@ -85,4 +86,4 @@ exec /usr/lib/chromium/chromium \
   --remote-debugging-port=9222 \
   --remote-debugging-address=0.0.0.0 \
   --remote-allow-origins=* \
-  ${EXTRA_ARGS}
+  "${EXTRA_ARGS[@]}"

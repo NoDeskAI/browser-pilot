@@ -91,9 +91,6 @@ _ensure_postgres() {
 _start_processes() {
     _ensure_postgres
 
-    echo "[selenium] 构建 Selenium 镜像..."
-    docker compose build selenium
-
     : > "$BACKEND_LOG"
     : > "$FRONTEND_LOG"
 
