@@ -21,7 +21,13 @@ from app.container import (
 )
 from app.db import get_pool
 from app.device_presets import DEVICE_PRESETS, DEFAULT_PRESET, get_preset
-from app.fingerprint import PoolEmptyError, generate_profile, resolve_timezone, resolve_timezone_via_container
+from app.fingerprint import (
+    PoolEmptyError,
+    attach_network_profile,
+    failed_network_profile,
+    generate_profile,
+    resolve_network_via_container,
+)
 
 logger = logging.getLogger("routes.sessions")
 router = APIRouter()
@@ -67,6 +73,12 @@ class AppStateBody(BaseModel):
     value: str
 
 _VALID_PROXY_SCHEMES = ("http://", "https://", "socks4://", "socks5://")
+
+
+async def _resolve_session_network(proxy_url: str | None, image_tag: str | None) -> dict:
+    if image_tag:
+        return await resolve_network_via_container(proxy_url, image_tag)
+    return failed_network_profile("No browser image available for container network probe")
 
 
 async def _resolve_session_image(session_id: str) -> str | None:
@@ -190,9 +202,7 @@ async def create_session(body: CreateSessionBody, user: CurrentUser = Depends(ge
         else:
             raise HTTPException(422, "No browser images available. Please build one first in Settings > Browser Images.")
 
-    tz = "UTC"
-    if resolved_image_tag:
-        tz = await resolve_timezone_via_container(body.proxyUrl or None, resolved_image_tag)
+    network_profile = await _resolve_session_network(body.proxyUrl or None, resolved_image_tag)
 
     try:
         fp_profile = await generate_profile(
@@ -202,7 +212,7 @@ async def create_session(body: CreateSessionBody, user: CurrentUser = Depends(ge
         )
     except PoolEmptyError as exc:
         raise HTTPException(422, f"Fingerprint pool group '{exc.group}' has no enabled entries") from exc
-    fp_profile["timezone"] = tz
+    attach_network_profile(fp_profile, network_profile)
 
     preset_data = get_preset(preset_id)
     fp_profile["screen"]["width"] = preset_data["width"]
@@ -353,6 +363,12 @@ async def change_device_preset(session_id: str, body: DevicePresetBody, user: Cu
     proxy = row["proxy_url"] or None
     fp_profile = row["fingerprint_profile"]
     image_name = await _resolve_session_image(session_id)
+    if isinstance(fp_profile, dict) and not fp_profile.get("network"):
+        attach_network_profile(fp_profile, await _resolve_session_network(proxy, image_name))
+        await pool.execute(
+            "UPDATE sessions SET fingerprint_profile = $1::jsonb, updated_at = NOW() WHERE id = $2",
+            fp_profile, session_id,
+        )
     fp_ua = fp_profile.get("navigator", {}).get("userAgent") if isinstance(fp_profile, dict) else None
     from app.tools.browser.session import invalidate_session_cache
     invalidate_session_cache(session_id)
@@ -366,7 +382,7 @@ async def change_device_preset(session_id: str, body: DevicePresetBody, user: Cu
         browser_lang=row["browser_lang"] or "zh-CN",
         image_name=image_name,
     )
-    return {"ok": True, "ports": ports, "devicePreset": body.preset}
+    return {"ok": True, "ports": ports, "devicePreset": body.preset, "fingerprintProfile": fp_profile}
 
 
 @router.post("/api/sessions/{session_id}/proxy")
@@ -381,11 +397,10 @@ async def change_proxy(session_id: str, body: ProxyBody, user: CurrentUser = Dep
         return {"ok": False, "error": "Session not found"}
     fp_profile = row["fingerprint_profile"] or {}
     image_name = await _resolve_session_image(session_id)
-    if image_name:
-        tz = await resolve_timezone_via_container(proxy_url or None, image_name)
-    else:
-        tz = await resolve_timezone(proxy_url or None)
-    fp_profile["timezone"] = tz
+    attach_network_profile(
+        fp_profile,
+        await _resolve_session_network(proxy_url or None, image_name),
+    )
     await pool.execute(
         "UPDATE sessions SET proxy_url = $1, fingerprint_profile = $2::jsonb, updated_at = NOW() WHERE id = $3",
         proxy_url, fp_profile, session_id,
@@ -404,7 +419,7 @@ async def change_proxy(session_id: str, body: ProxyBody, user: CurrentUser = Dep
         browser_lang=row["browser_lang"] or "zh-CN",
         image_name=image_name,
     )
-    return {"ok": True, "ports": ports, "proxyUrl": proxy_url}
+    return {"ok": True, "ports": ports, "proxyUrl": proxy_url, "fingerprintProfile": fp_profile}
 
 
 @router.post("/api/sessions/{session_id}/fingerprint")
@@ -424,10 +439,10 @@ async def regenerate_fingerprint(session_id: str, body: FingerprintActionBody, u
     except PoolEmptyError as exc:
         return {"ok": False, "error": f"Pool group '{exc.group}' has no enabled entries"}
     image_name = await _resolve_session_image(session_id)
-    if image_name:
-        fp_profile["timezone"] = await resolve_timezone_via_container(proxy, image_name)
-    else:
-        fp_profile["timezone"] = await resolve_timezone(proxy)
+    attach_network_profile(
+        fp_profile,
+        await _resolve_session_network(proxy, image_name),
+    )
     preset_data = get_preset(row["device_preset"] or DEFAULT_PRESET)
     fp_profile["screen"]["width"] = preset_data["width"]
     fp_profile["screen"]["height"] = preset_data["height"]

@@ -14,6 +14,7 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
+      'lucide-vue-next': path.resolve(__dirname, './node_modules/lucide-vue-next'),
       ...(hasEE ? { '@ee': eeDir } : {}),
     },
     dedupe: ['vue', 'vue-router', 'vue-i18n'],

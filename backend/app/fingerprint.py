@@ -9,6 +9,7 @@ enforced via ``tags``.
 from __future__ import annotations
 
 import asyncio
+import datetime
 import logging
 import re
 import secrets
@@ -434,6 +435,176 @@ _TZ_APIS = [
 ]
 _TZ_TIMEOUT = 5.0
 
+_NETWORK_TIMEOUT = 8
+_DNS_CN = ["223.5.5.5", "119.29.29.29"]
+_DNS_GLOBAL = ["1.1.1.1", "8.8.8.8"]
+
+
+def _utc_now() -> str:
+    return datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _to_float(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _clean_country_code(value: Any) -> str:
+    return str(value or "").strip().upper()[:2]
+
+
+def _dns_servers_for_country(country_code: str) -> list[str]:
+    return list(_DNS_CN if _clean_country_code(country_code) == "CN" else _DNS_GLOBAL)
+
+
+def _normal_network(
+    *,
+    source: str,
+    ip: Any = None,
+    country_code: Any = None,
+    country: Any = None,
+    region: Any = None,
+    city: Any = None,
+    timezone: Any = None,
+    asn: Any = None,
+    isp: Any = None,
+    lat: Any = None,
+    lon: Any = None,
+    postal: Any = None,
+    warnings: list[str] | None = None,
+) -> dict[str, Any] | None:
+    tz = str(timezone or "").strip()
+    ip_value = str(ip or "").strip()
+    if not ip_value or "/" not in tz:
+        return None
+
+    code = _clean_country_code(country_code)
+    asn_value = str(asn or "").strip()
+    if asn_value and asn_value.isdigit():
+        asn_value = f"AS{asn_value}"
+
+    return {
+        "ip": ip_value,
+        "countryCode": code,
+        "country": str(country or "").strip(),
+        "region": str(region or "").strip(),
+        "city": str(city or "").strip(),
+        "timezone": tz,
+        "asn": asn_value,
+        "isp": str(isp or "").strip(),
+        "lat": _to_float(lat),
+        "lon": _to_float(lon),
+        "postal": str(postal or "").strip(),
+        "source": source,
+        "probedAt": _utc_now(),
+        "dnsServers": _dns_servers_for_country(code),
+        "warnings": warnings or [],
+    }
+
+
+def normalize_network_probe(source: str, data: dict[str, Any]) -> dict[str, Any] | None:
+    """Normalize one IP geo provider response into the session network profile."""
+    if source == "ip-api.com":
+        if data.get("status") and data.get("status") != "success":
+            return None
+        return _normal_network(
+            source=source,
+            ip=data.get("query"),
+            country_code=data.get("countryCode"),
+            country=data.get("country"),
+            region=data.get("regionName") or data.get("region"),
+            city=data.get("city"),
+            timezone=data.get("timezone"),
+            asn=data.get("as"),
+            isp=data.get("isp") or data.get("org"),
+            lat=data.get("lat"),
+            lon=data.get("lon"),
+            postal=data.get("zip"),
+        )
+
+    if source == "ip234.in":
+        return _normal_network(
+            source=source,
+            ip=data.get("ip"),
+            country_code=data.get("country_code"),
+            country=data.get("country"),
+            region=data.get("region"),
+            city=data.get("city"),
+            timezone=data.get("timezone"),
+            asn=data.get("asn"),
+            isp=data.get("organization") or data.get("isp"),
+            lat=data.get("latitude"),
+            lon=data.get("longitude"),
+            postal=data.get("postal"),
+        )
+
+    if source == "ipinfo.io":
+        lat = lon = None
+        if isinstance(data.get("loc"), str) and "," in data["loc"]:
+            lat_s, lon_s = data["loc"].split(",", 1)
+            lat, lon = lat_s, lon_s
+        org = str(data.get("org") or "")
+        asn = org.split(" ", 1)[0] if org.startswith("AS") else data.get("asn")
+        return _normal_network(
+            source=source,
+            ip=data.get("ip"),
+            country_code=data.get("country"),
+            country=data.get("country"),
+            region=data.get("region"),
+            city=data.get("city"),
+            timezone=data.get("timezone"),
+            asn=asn,
+            isp=org,
+            lat=lat,
+            lon=lon,
+            postal=data.get("postal"),
+        )
+
+    return None
+
+
+def failed_network_profile(reason: str, warnings: list[str] | None = None) -> dict[str, Any]:
+    all_warnings = list(warnings or [])
+    all_warnings.append(reason)
+    return {
+        "ip": "",
+        "countryCode": "",
+        "country": "",
+        "region": "",
+        "city": "",
+        "timezone": "UTC",
+        "asn": "",
+        "isp": "",
+        "lat": None,
+        "lon": None,
+        "postal": "",
+        "source": "unresolved",
+        "probedAt": _utc_now(),
+        "dnsServers": list(_DNS_GLOBAL),
+        "warnings": all_warnings,
+    }
+
+
+def attach_network_profile(profile: dict[str, Any], network: dict[str, Any]) -> dict[str, Any]:
+    """Bind network-derived timezone/DNS metadata to an existing fingerprint profile."""
+    normalized = dict(network or failed_network_profile("network probe did not return data"))
+    normalized.setdefault("warnings", [])
+    normalized["dnsServers"] = normalized.get("dnsServers") or _dns_servers_for_country(
+        normalized.get("countryCode", "")
+    )
+    tz = normalized.get("timezone") if isinstance(normalized.get("timezone"), str) else None
+    if not tz or "/" not in tz:
+        tz = "UTC"
+        normalized["timezone"] = tz
+        normalized["warnings"].append("network timezone missing or invalid; using UTC")
+    profile["network"] = normalized
+    profile["timezone"] = tz
+    return profile
+
 
 def _system_timezone() -> str:
     """Return the host's local IANA timezone, e.g. 'Asia/Shanghai'."""
@@ -480,24 +651,31 @@ async def resolve_timezone(proxy_url: str | None) -> str:
 
 
 async def resolve_timezone_via_container(proxy_url: str | None, image_tag: str) -> str:
-    """Resolve IANA timezone by querying geo APIs from inside a Docker container.
+    """Backward-compatible timezone wrapper around the container network profile."""
+    return (await resolve_network_via_container(proxy_url, image_tag)).get("timezone", "UTC")
 
-    Uses ``docker run --rm`` so the HTTP request exits from the same network
-    path as the real browser container, avoiding VPN / split-tunnel mismatches
-    on the backend host.
 
-    Fallback chain: container ip-api -> container ipinfo -> host-side resolve_timezone.
+async def resolve_network_via_container(proxy_url: str | None, image_tag: str) -> dict[str, Any]:
+    """Resolve the browser session network profile from the same container path.
+
+    This intentionally does not fall back to the host network. If all probes fail,
+    the caller still receives an explicit UTC profile with warnings.
     """
     import json as _json
     import shlex
 
     apis = [
-        ("ip-api.com", "http://ip-api.com/json?fields=timezone", "timezone"),
-        ("ipinfo.io", "http://ipinfo.io/json", "timezone"),
+        (
+            "ip-api.com",
+            "http://ip-api.com/json?fields=status,message,country,countryCode,regionName,city,zip,lat,lon,timezone,isp,org,as,query",
+        ),
+        ("ip234.in", "https://ip234.in/ip.json"),
+        ("ipinfo.io", "https://ipinfo.io/json"),
     ]
+    warnings: list[str] = []
 
-    for api_name, url, field in apis:
-        curl = f"curl -4 -sf --max-time 5"
+    for api_name, url in apis:
+        curl = f"curl -sS --max-time {_NETWORK_TIMEOUT}"
         if proxy_url:
             curl += f" --proxy {shlex.quote(proxy_url)}"
         curl += f" {shlex.quote(url)}"
@@ -509,20 +687,37 @@ async def resolve_timezone_via_container(proxy_url: str | None, image_tag: str) 
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            stdout_b, _ = await asyncio.wait_for(proc.communicate(), timeout=20)
-            if proc.returncode == 0 and stdout_b:
-                data = _json.loads(stdout_b.decode("utf-8", errors="replace"))
-                tz = data.get(field)
-                if tz and "/" in tz:
-                    logger.info(
-                        "Resolved timezone via container %s (%s): %s (proxy=%s)",
-                        api_name, image_tag, tz, proxy_url or "direct",
-                    )
-                    return tz
+            stdout_b, stderr_b = await asyncio.wait_for(
+                proc.communicate(), timeout=_NETWORK_TIMEOUT + 15
+            )
+            stdout = stdout_b.decode("utf-8", errors="replace").strip()
+            stderr = stderr_b.decode("utf-8", errors="replace").strip()
+            if proc.returncode != 0:
+                warnings.append(f"{api_name} probe failed: {stderr[:160] or 'curl failed'}")
+                continue
+            try:
+                data = _json.loads(stdout)
+            except Exception:
+                warnings.append(f"{api_name} returned non-JSON response: {stdout[:160]}")
+                continue
+            network = normalize_network_probe(api_name, data)
+            if network:
+                network["warnings"] = warnings
+                logger.info(
+                    "Resolved network via container %s (%s): ip=%s tz=%s dns=%s proxy=%s",
+                    api_name,
+                    image_tag,
+                    network.get("ip"),
+                    network.get("timezone"),
+                    ",".join(network.get("dnsServers", [])),
+                    proxy_url or "direct",
+                )
+                return network
+            warnings.append(f"{api_name} response missing usable IP/timezone")
         except asyncio.TimeoutError:
-            logger.warning("Container timezone query timed out (%s, image=%s)", api_name, image_tag)
+            warnings.append(f"{api_name} probe timed out")
         except Exception as exc:
-            logger.warning("Container timezone query failed (%s, image=%s): %s", api_name, image_tag, exc)
+            warnings.append(f"{api_name} probe failed: {exc}")
 
-    logger.info("Container timezone queries failed, falling back to host-side resolution")
-    return await resolve_timezone(proxy_url)
+    logger.warning("Container network probes failed for image=%s proxy=%s", image_tag, proxy_url or "direct")
+    return failed_network_profile("all container network probes failed", warnings)

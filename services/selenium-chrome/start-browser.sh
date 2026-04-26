@@ -17,6 +17,7 @@ fi
 if [ -n "${BROWSER_PROXY:-}" ]; then
   EXTRA_ARGS+=("--proxy-server=${BROWSER_PROXY}")
   EXTRA_ARGS+=("--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE 127.0.0.1")
+  EXTRA_ARGS+=("--dns-prefetch-disable")
 fi
 
 if [ -n "${FINGERPRINT_PROFILE:-}" ]; then

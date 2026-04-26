@@ -372,6 +372,22 @@ function fpPlatformLabel(profile: Record<string, any>): string {
   return p
 }
 
+function fpExitLocation(profile: Record<string, any>): string {
+  const n = profile?.network
+  if (!n) return '-'
+  return [n.city, n.region, n.countryCode || n.country].filter(Boolean).join(' / ') || '-'
+}
+
+function fpDnsLabel(profile: Record<string, any>): string {
+  const servers = profile?.network?.dnsServers
+  return Array.isArray(servers) && servers.length ? servers.join(', ') : '-'
+}
+
+function fpWarnings(profile: Record<string, any>): string[] {
+  const warnings = profile?.network?.warnings
+  return Array.isArray(warnings) ? warnings.filter(Boolean).map(String) : []
+}
+
 defineExpose({ navigate })
 
 onMounted(() => {
@@ -643,6 +659,23 @@ watch(inputBarOpen, (open) => {
                 <div class="flex justify-between">
                   <span class="text-muted-foreground">{{ t('vnc.fpTimezone') }}</span>
                   <span class="font-mono">{{ fpProfile.timezone }}</span>
+                </div>
+                <div v-if="fpProfile.network" class="pt-1 mt-1 border-t border-border/60 space-y-1.5">
+                  <div class="flex justify-between">
+                    <span class="text-muted-foreground">{{ t('vnc.fpExitIp') }}</span>
+                    <span class="font-mono truncate max-w-[160px]" :title="fpProfile.network.ip">{{ fpProfile.network.ip || '-' }}</span>
+                  </div>
+                  <div class="flex justify-between">
+                    <span class="text-muted-foreground">{{ t('vnc.fpExitLocation') }}</span>
+                    <span class="font-mono truncate max-w-[160px]" :title="fpExitLocation(fpProfile)">{{ fpExitLocation(fpProfile) }}</span>
+                  </div>
+                  <div class="flex justify-between">
+                    <span class="text-muted-foreground">{{ t('vnc.fpDns') }}</span>
+                    <span class="font-mono truncate max-w-[160px]" :title="fpDnsLabel(fpProfile)">{{ fpDnsLabel(fpProfile) }}</span>
+                  </div>
+                  <div v-if="fpWarnings(fpProfile).length" class="text-[10px] text-amber-500 leading-snug">
+                    {{ t('vnc.fpWarnings') }}: {{ fpWarnings(fpProfile).join('; ') }}
+                  </div>
                 </div>
                 <div class="flex justify-between">
                   <span class="text-muted-foreground">{{ t('vnc.fpSeed') }}</span>

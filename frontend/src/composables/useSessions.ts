@@ -265,6 +265,7 @@ async function changeDevicePreset(id: string, preset: string): Promise<void> {
         s.devicePreset = data.devicePreset || preset
         s.ports = data.ports
         s.containerStatus = 'running'
+        if (data.fingerprintProfile) s.fingerprintProfile = data.fingerprintProfile
       }
       if (state.activeId === id) {
         state.activePorts = {
@@ -293,6 +294,7 @@ async function changeProxy(id: string, proxyUrl: string): Promise<void> {
         s.proxyUrl = data.proxyUrl ?? proxyUrl
         s.ports = data.ports
         s.containerStatus = 'running'
+        if (data.fingerprintProfile) s.fingerprintProfile = data.fingerprintProfile
       }
       if (state.activeId === id) {
         state.activePorts = {

@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import ipaddress
 import json
 import logging
+import shlex
 from typing import Any
 
 import httpx
@@ -11,7 +13,7 @@ import httpx
 from app.config import DOCKER_HOST_ADDR, CONTAINER_PREFIX as _PREFIX
 from app.db import get_pool
 from app.device_presets import DEVICE_PRESETS, DEFAULT_PRESET, get_preset
-from app.fingerprint import generate_profile
+from app.fingerprint import attach_network_profile, generate_profile, resolve_network_via_container
 
 logger = logging.getLogger("container")
 
@@ -32,6 +34,23 @@ GRID_POLL_INTERVAL = 0.5
 
 def container_name(session_id: str) -> str:
     return f"{CONTAINER_PREFIX}{session_id[:12]}"
+
+
+def _dns_servers_from_profile(fingerprint_profile: dict | None) -> list[str]:
+    servers = []
+    if isinstance(fingerprint_profile, dict):
+        raw_servers = fingerprint_profile.get("network", {}).get("dnsServers", [])
+        if isinstance(raw_servers, list):
+            servers = raw_servers
+
+    valid: list[str] = []
+    for server in servers:
+        try:
+            ipaddress.ip_address(str(server))
+        except ValueError:
+            continue
+        valid.append(str(server))
+    return valid[:3]
 
 
 async def _run(cmd: str, timeout: float = 30) -> tuple[str, str, int]:
@@ -88,6 +107,7 @@ async def create_container(
             json.dumps(fingerprint_profile, separators=(",", ":")).encode()
         ).decode()
     env_args = " ".join(f"-e {k}='{v}'" for k, v in env.items())
+    dns_args = " ".join(f"--dns {shlex.quote(server)}" for server in _dns_servers_from_profile(fingerprint_profile))
     if not image_name:
         raise RuntimeError(
             "No browser image available. Build one in Settings > Browser Images."
@@ -97,6 +117,7 @@ async def create_container(
         f"--label {_PREFIX}.session_id={session_id} "
         f"-p 0:4444 -p 0:7900 "
         f"--shm-size={SHM_SIZE} "
+        f"{dns_args + ' ' if dns_args else ''}"
         f"-v {vol_name}:/home/seluser/chrome-data "
         f"{env_args} "
         f"{image_name}"
@@ -272,6 +293,16 @@ async def _session_container_params(session_id: str) -> tuple[int, int, str | No
         )
         if img_row:
             image_name = img_row["image_tag"]
+
+    if isinstance(fp_profile, dict) and not fp_profile.get("network") and image_name:
+        network = await resolve_network_via_container(proxy, image_name)
+        attach_network_profile(fp_profile, network)
+        await pool.execute(
+            "UPDATE sessions SET fingerprint_profile = $1::jsonb WHERE id = $2",
+            fp_profile,
+            session_id,
+        )
+        logger.info("Attached network profile for session %s before container start", session_id)
 
     ua = None
     if fp_profile and isinstance(fp_profile, dict):
