@@ -4,14 +4,22 @@ import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useSessions } from '../composables/useSessions'
 import { useNotify } from '../composables/useNotify'
-import { Plus, Play, Pause, Trash2, Monitor, Globe, Hash, Clock, RefreshCw } from 'lucide-vue-next'
+import { Plus, Play, Pause, Trash2, Monitor, Globe, Hash, Clock, RefreshCw, Loader2 } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { Card } from '@/components/ui/card'
 import { Switch } from '@/components/ui/switch'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import {
-  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle,
+} from '@/components/ui/dialog'
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from '@/components/ui/select'
+import {
+  AlertDialog, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
 } from '@/components/ui/alert-dialog'
 
@@ -22,7 +30,14 @@ const {
   state: sessions,
   createSession, deleteSession, renameSession,
   startContainer, pauseContainer, fetchSessions,
+  fetchBrowserImages,
 } = useSessions()
+
+const readyImages = ref<any[]>([])
+const hasReadyImages = ref(false)
+const createDialogOpen = ref(false)
+const createName = ref('')
+const createVersion = ref('')
 
 const isMac = navigator.platform.includes('Mac')
 const shortcutLabel = isMac ? '⌘N' : 'Ctrl+N'
@@ -43,11 +58,21 @@ watch(autoRefresh, (on) => {
   on ? startTimer() : stopTimer()
 })
 
-onMounted(() => {
+onMounted(async () => {
   if (autoRefresh.value) {
     startTimer()
   } else {
     fetchSessions()
+  }
+  try {
+    const imgs = await fetchBrowserImages()
+    readyImages.value = imgs
+    hasReadyImages.value = imgs.length > 0
+    if (imgs.length > 0 && !createVersion.value) {
+      createVersion.value = String(imgs[0].chromeMajor)
+    }
+  } catch {
+    // keep optimistic default
   }
 })
 onUnmounted(stopTimer)
@@ -57,6 +82,10 @@ const editName = ref('')
 const inputRefs = ref<Record<string, HTMLInputElement>>({})
 const copiedId = ref<string | null>(null)
 const deleteDialogOpen = ref<Record<string, boolean>>({})
+const deleting = ref<Record<string, boolean>>({})
+const creating = ref(false)
+const starting = ref<Record<string, boolean>>({})
+const pausing = ref<Record<string, boolean>>({})
 
 function formatUrl(raw: string): string {
   if (!raw) return ''
@@ -87,11 +116,29 @@ function formatRelativeTime(iso: string): string {
   return t('session.daysAgo', { n: Math.floor(hours / 24) })
 }
 
-async function handleCreateSession() {
-  const session = await createSession()
-  if (session) {
-    notify.success(t('app.sessionCreated'))
-    router.push(`/s/${session.id}`)
+function openCreateDialog() {
+  if (!hasReadyImages.value) return
+  if (!createVersion.value && readyImages.value.length > 0) {
+    createVersion.value = String(readyImages.value[0].chromeMajor)
+  }
+  createDialogOpen.value = true
+}
+
+async function handleCreateSession(name?: string, chromeVersion?: string) {
+  if (creating.value) return
+  creating.value = true
+  try {
+    const session = await createSession(name?.trim() || undefined, chromeVersion || undefined)
+    if (session) {
+      notify.success(t('app.sessionCreated'))
+      createDialogOpen.value = false
+      createName.value = ''
+      router.push(`/s/${session.id}`)
+    }
+  } catch {
+    notify.error(t('app.sessionCreateError'))
+  } finally {
+    creating.value = false
   }
 }
 
@@ -113,18 +160,43 @@ function commitEdit(id: string, oldName: string) {
 }
 
 async function onDeleteSession(id: string) {
-  await deleteSession(id)
-  notify.success(t('app.sessionDeleted'))
+  if (deleting.value[id]) return
+  deleting.value[id] = true
+  try {
+    await deleteSession(id)
+    notify.success(t('app.sessionDeleted'))
+    deleteDialogOpen.value[id] = false
+  } catch {
+    notify.error(t('app.sessionDeleteError'))
+  } finally {
+    deleting.value[id] = false
+  }
 }
 
 async function onStartContainer(id: string) {
-  await startContainer(id)
-  notify.success(t('app.sessionStarted'))
+  if (starting.value[id]) return
+  starting.value[id] = true
+  try {
+    await startContainer(id)
+    notify.success(t('app.sessionStarted'))
+  } catch {
+    notify.error(t('app.containerStartError'))
+  } finally {
+    starting.value[id] = false
+  }
 }
 
 async function onPauseContainer(id: string) {
-  await pauseContainer(id)
-  notify.success(t('app.sessionPaused'))
+  if (pausing.value[id]) return
+  pausing.value[id] = true
+  try {
+    await pauseContainer(id)
+    notify.success(t('app.sessionPaused'))
+  } catch {
+    notify.error(t('app.containerPauseError'))
+  } finally {
+    pausing.value[id] = false
+  }
 }
 </script>
 
@@ -141,11 +213,24 @@ async function onPauseContainer(id: string) {
             <Switch :checked="autoRefresh" @update:checked="autoRefresh = $event" />
             {{ t('dashboard.autoRefresh') }}
           </label>
-          <Button @click="handleCreateSession" class="gap-2">
-            <Plus class="size-4" />
-            {{ t('dashboard.create') }}
-            <kbd class="ml-1 text-[10px] opacity-60 font-sans tracking-widest">{{ shortcutLabel }}</kbd>
+          <Button v-if="hasReadyImages" :disabled="creating" class="gap-2" @click="openCreateDialog">
+            <Loader2 v-if="creating" class="size-4 animate-spin" />
+            <Plus v-else class="size-4" />
+            {{ creating ? t('session.creating') : t('dashboard.create') }}
+            <kbd v-if="!creating" class="ml-1 text-[10px] opacity-60 font-sans tracking-widest">{{ shortcutLabel }}</kbd>
           </Button>
+          <Tooltip v-else>
+            <TooltipTrigger as-child>
+              <span class="inline-flex">
+                <Button disabled class="gap-2">
+                  <Plus class="size-4" />
+                  {{ t('dashboard.create') }}
+                  <kbd class="ml-1 text-[10px] opacity-60 font-sans tracking-widest">{{ shortcutLabel }}</kbd>
+                </Button>
+              </span>
+            </TooltipTrigger>
+            <TooltipContent>{{ t('dashboard.noImageHint') }}</TooltipContent>
+          </Tooltip>
         </div>
       </div>
 
@@ -225,9 +310,11 @@ async function onPauseContainer(id: string) {
                 <TooltipTrigger as-child>
                   <Button
                     variant="ghost" size="sm" class="size-7 p-0 text-muted-foreground hover:text-foreground"
+                    :disabled="pausing[s.id]"
                     @click.stop="onPauseContainer(s.id)"
                   >
-                    <Pause class="size-3.5" />
+                    <Loader2 v-if="pausing[s.id]" class="size-3.5 animate-spin" />
+                    <Pause v-else class="size-3.5" />
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent>{{ t('session.hibernateHint') }}</TooltipContent>
@@ -237,15 +324,17 @@ async function onPauseContainer(id: string) {
                 <TooltipTrigger as-child>
                   <Button
                     variant="ghost" size="sm" class="size-7 p-0 text-muted-foreground hover:text-foreground"
+                    :disabled="starting[s.id]"
                     @click.stop="onStartContainer(s.id)"
                   >
-                    <Play class="size-3.5" />
+                    <Loader2 v-if="starting[s.id]" class="size-3.5 animate-spin" />
+                    <Play v-else class="size-3.5" />
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent>{{ s.containerStatus === 'paused' ? t('session.resumeFromHibernate') : t('session.startContainer') }}</TooltipContent>
               </Tooltip>
 
-              <AlertDialog v-model:open="deleteDialogOpen[s.id]">
+              <AlertDialog :open="deleteDialogOpen[s.id]" @update:open="v => { if (!v && !deleting[s.id]) deleteDialogOpen[s.id] = v }">
                 <AlertDialogTrigger as-child>
                   <Button variant="ghost" size="sm" class="size-7 p-0 text-muted-foreground hover:text-destructive" @click.stop>
                     <Trash2 class="size-3.5" />
@@ -257,10 +346,15 @@ async function onPauseContainer(id: string) {
                     <AlertDialogDescription>{{ t('session.deleteDescription') }}</AlertDialogDescription>
                   </AlertDialogHeader>
                   <AlertDialogFooter>
-                    <AlertDialogCancel>{{ t('session.cancel') }}</AlertDialogCancel>
-                    <AlertDialogAction class="bg-destructive text-destructive-foreground hover:bg-destructive/90" @click="onDeleteSession(s.id)">
-                      {{ t('session.confirmDelete') }}
-                    </AlertDialogAction>
+                    <AlertDialogCancel :disabled="deleting[s.id]">{{ t('session.cancel') }}</AlertDialogCancel>
+                    <Button
+                      variant="destructive"
+                      :disabled="deleting[s.id]"
+                      @click="onDeleteSession(s.id)"
+                    >
+                      <Loader2 v-if="deleting[s.id]" class="size-4 animate-spin" />
+                      {{ deleting[s.id] ? t('session.deleting') : t('session.confirmDelete') }}
+                    </Button>
                   </AlertDialogFooter>
                 </AlertDialogContent>
               </AlertDialog>
@@ -273,12 +367,71 @@ async function onPauseContainer(id: string) {
         <Monitor class="size-12 mb-4 text-muted-foreground opacity-20" :stroke-width="1" />
         <h3 class="text-lg font-medium mb-2">{{ t('dashboard.empty') }}</h3>
         <p class="text-sm text-muted-foreground max-w-sm mb-6">{{ t('dashboard.emptyHint') }}</p>
-        <Button @click="handleCreateSession" class="gap-2">
-          <Plus class="size-4" />
-          {{ t('dashboard.create') }}
-          <kbd class="ml-1 text-[10px] opacity-60 font-sans tracking-widest">{{ shortcutLabel }}</kbd>
+        <Button v-if="hasReadyImages" :disabled="creating" class="gap-2" @click="openCreateDialog">
+          <Loader2 v-if="creating" class="size-4 animate-spin" />
+          <Plus v-else class="size-4" />
+          {{ creating ? t('session.creating') : t('dashboard.create') }}
+          <kbd v-if="!creating" class="ml-1 text-[10px] opacity-60 font-sans tracking-widest">{{ shortcutLabel }}</kbd>
         </Button>
+        <Tooltip v-else>
+          <TooltipTrigger as-child>
+            <span class="inline-flex">
+              <Button disabled class="gap-2">
+                <Plus class="size-4" />
+                {{ t('dashboard.create') }}
+              </Button>
+            </span>
+          </TooltipTrigger>
+          <TooltipContent>{{ t('dashboard.noImageHint') }}</TooltipContent>
+        </Tooltip>
       </div>
     </div>
+
+    <Dialog :open="createDialogOpen" @update:open="createDialogOpen = $event">
+      <DialogContent class="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>{{ t('dashboard.create') }}</DialogTitle>
+        </DialogHeader>
+        <form class="space-y-4" @submit.prevent="handleCreateSession(createName, createVersion)">
+          <div class="space-y-2">
+            <Label for="create-session-name">{{ t('session.name') }}</Label>
+            <Input
+              id="create-session-name"
+              v-model="createName"
+              :placeholder="t('session.defaultName')"
+              :disabled="creating"
+              autofocus
+            />
+          </div>
+          <div class="space-y-2">
+            <Label for="create-session-version">{{ t('browserImages.version') }}</Label>
+            <Select v-model="createVersion" :disabled="creating">
+              <SelectTrigger id="create-session-version">
+                <SelectValue :placeholder="t('browserImages.version')" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem
+                  v-for="img in readyImages"
+                  :key="img.id"
+                  :value="String(img.chromeMajor)"
+                >
+                  Chrome {{ img.chromeMajor }}
+                  <span v-if="img.chromeVersion" class="text-xs text-muted-foreground">({{ img.chromeVersion }})</span>
+                </SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" :disabled="creating" @click="createDialogOpen = false">
+              {{ t('session.cancel') }}
+            </Button>
+            <Button type="submit" :disabled="creating || !createVersion">
+              <Loader2 v-if="creating" class="size-4 animate-spin" />
+              {{ creating ? t('session.creating') : t('dashboard.create') }}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   </div>
 </template>
