@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 from app.auth.dependencies import CurrentUser, get_session_aware_user, verify_session_access
 from app.container import container_name
+from app.db import get_pool
 from app.i18n import t
 
 
@@ -136,10 +137,29 @@ async def docker_browser_lang(body: BrowserLangRequest, user: CurrentUser = Depe
     stdout, stderr, rc = await _exec_in_container(cname, bash_cmd, timeout=10)
     if rc != 0 and "timeout" in stderr:
         return {"ok": False, "error": "command timed out"}
-    from app.db import get_pool
     pool = get_pool()
-    await pool.execute(
-        "UPDATE sessions SET browser_lang = $1 WHERE id = $2",
-        safe_lang, body.sessionId,
+    row = await pool.fetchrow(
+        "SELECT fingerprint_profile FROM sessions WHERE id = $1",
+        body.sessionId,
     )
+    fp_profile = row["fingerprint_profile"] if row else None
+    if isinstance(fp_profile, dict):
+        lang_base = safe_lang.split("-", 1)[0]
+        languages = [safe_lang]
+        if lang_base != safe_lang:
+            languages.append(lang_base)
+        if safe_lang != "en" and lang_base != "en":
+            languages.append("en")
+        nav = fp_profile.setdefault("navigator", {})
+        nav["language"] = safe_lang
+        nav["languages"] = languages
+        await pool.execute(
+            "UPDATE sessions SET browser_lang = $1, fingerprint_profile = $2::jsonb WHERE id = $3",
+            safe_lang, fp_profile, body.sessionId,
+        )
+    else:
+        await pool.execute(
+            "UPDATE sessions SET browser_lang = $1 WHERE id = $2",
+            safe_lang, body.sessionId,
+        )
     return {"ok": True, "lang": safe_lang}

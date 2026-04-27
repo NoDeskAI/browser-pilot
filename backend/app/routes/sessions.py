@@ -4,6 +4,7 @@ import json
 import logging
 import re
 import uuid
+import asyncio
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
@@ -13,6 +14,7 @@ from app.container import (
     ensure_container_running,
     exec_in_container,
     get_all_container_statuses,
+    get_container_status,
     get_container_ports,
     pause_container,
     recreate_container,
@@ -106,6 +108,76 @@ async def _resolve_session_image(session_id: str) -> str | None:
     return None
 
 
+def _unique_strings(values: list[object]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for value in values:
+        text = str(value or "").strip()
+        if text and text not in seen:
+            seen.add(text)
+            out.append(text)
+    return out
+
+
+async def _read_fingerprint_health(session_id: str) -> dict | None:
+    try:
+        raw = await exec_in_container(session_id, "cat /tmp/fingerprint-health.json", timeout=3)
+        health = json.loads(raw)
+        return health if isinstance(health, dict) else None
+    except Exception as exc:
+        return {
+            "agent": "cdp-fingerprint-agent",
+            "ok": False,
+            "status": "unavailable",
+            "warnings": [f"Fingerprint runtime health is unavailable: {exc}"],
+        }
+
+
+async def _with_runtime_health(
+    session_id: str,
+    fingerprint_profile: dict | None,
+    *,
+    container_status: str | None = None,
+) -> dict | None:
+    if not isinstance(fingerprint_profile, dict):
+        return fingerprint_profile
+    status = container_status or await get_container_status(session_id)
+    if status != "running":
+        return fingerprint_profile
+
+    profile = dict(fingerprint_profile)
+    health = await _read_fingerprint_health(session_id)
+    if not health:
+        return profile
+
+    profile["runtimeHealth"] = health
+    warnings = list(profile.get("runtimeWarnings") or [])
+    warnings.extend(health.get("warnings") or [])
+    if health.get("ok") is False and not health.get("warnings"):
+        warnings.append("Fingerprint runtime injection health check failed.")
+    profile["runtimeWarnings"] = _unique_strings(warnings)
+    return profile
+
+
+async def _with_runtime_health_wait(
+    session_id: str,
+    fingerprint_profile: dict | None,
+    *,
+    container_status: str | None = None,
+    timeout: float = 5.0,
+) -> dict | None:
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    last = await _with_runtime_health(session_id, fingerprint_profile, container_status=container_status)
+    while loop.time() < deadline:
+        health = (last or {}).get("runtimeHealth") if isinstance(last, dict) else None
+        if isinstance(health, dict) and health.get("status") not in (None, "unavailable", "starting"):
+            return last
+        await asyncio.sleep(0.5)
+        last = await _with_runtime_health(session_id, fingerprint_profile, container_status=container_status)
+    return last
+
+
 # -----------------------------------------------------------------------
 # Sessions CRUD
 # -----------------------------------------------------------------------
@@ -147,6 +219,8 @@ async def list_sessions(user: CurrentUser = Depends(get_current_user)):
             except PoolEmptyError:
                 pass
 
+        fp_response = await _with_runtime_health(sid, fp, container_status=container_status)
+
         entry: dict = {
             "id": sid,
             "name": r["name"],
@@ -157,7 +231,7 @@ async def list_sessions(user: CurrentUser = Depends(get_current_user)):
             "containerStatus": container_status,
             "devicePreset": r["device_preset"] or DEFAULT_PRESET,
             "proxyUrl": r["proxy_url"] or "",
-            "fingerprintProfile": fp,
+            "fingerprintProfile": fp_response,
             "browserLang": r["browser_lang"] or "zh-CN",
         }
 
@@ -246,6 +320,7 @@ async def get_session(session_id: str, user: CurrentUser = Depends(get_session_a
             )
         except PoolEmptyError:
             pass
+    fp_response = await _with_runtime_health(session_id, fp)
     return {
         "id": row["id"],
         "name": row["name"],
@@ -255,7 +330,7 @@ async def get_session(session_id: str, user: CurrentUser = Depends(get_session_a
         "currentTitle": row["current_title"] or "",
         "devicePreset": row["device_preset"] or DEFAULT_PRESET,
         "proxyUrl": row["proxy_url"] or "",
-        "fingerprintProfile": fp,
+        "fingerprintProfile": fp_response,
         "browserLang": row["browser_lang"] or "zh-CN",
     }
 
@@ -290,7 +365,14 @@ async def start_session_container(session_id: str, user: CurrentUser = Depends(g
     await verify_session_access(session_id, user)
     try:
         ports = await ensure_container_running(session_id)
-        return {"ok": True, "ports": ports}
+        pool = get_pool()
+        row = await pool.fetchrow("SELECT fingerprint_profile FROM sessions WHERE id = $1", session_id)
+        fp = await _with_runtime_health_wait(
+            session_id,
+            row["fingerprint_profile"] if row else None,
+            container_status="running",
+        )
+        return {"ok": True, "ports": ports, "fingerprintProfile": fp}
     except Exception as exc:
         logger.error("Container start failed for %s: %s", session_id, exc)
         return {"ok": False, "error": str(exc)}
@@ -323,7 +405,14 @@ async def unpause_session_container(session_id: str, user: CurrentUser = Depends
     await verify_session_access(session_id, user)
     try:
         ports = await ensure_container_running(session_id)
-        return {"ok": True, "ports": ports}
+        pool = get_pool()
+        row = await pool.fetchrow("SELECT fingerprint_profile FROM sessions WHERE id = $1", session_id)
+        fp = await _with_runtime_health(
+            session_id,
+            row["fingerprint_profile"] if row else None,
+            container_status="running",
+        )
+        return {"ok": True, "ports": ports, "fingerprintProfile": fp}
     except Exception as exc:
         logger.error("Container unpause failed for %s: %s", session_id, exc)
         return {"ok": False, "error": str(exc)}
@@ -382,7 +471,8 @@ async def change_device_preset(session_id: str, body: DevicePresetBody, user: Cu
         browser_lang=row["browser_lang"] or "zh-CN",
         image_name=image_name,
     )
-    return {"ok": True, "ports": ports, "devicePreset": body.preset, "fingerprintProfile": fp_profile}
+    fp_response = await _with_runtime_health(session_id, fp_profile)
+    return {"ok": True, "ports": ports, "devicePreset": body.preset, "fingerprintProfile": fp_response}
 
 
 @router.post("/api/sessions/{session_id}/proxy")
@@ -419,7 +509,8 @@ async def change_proxy(session_id: str, body: ProxyBody, user: CurrentUser = Dep
         browser_lang=row["browser_lang"] or "zh-CN",
         image_name=image_name,
     )
-    return {"ok": True, "ports": ports, "proxyUrl": proxy_url, "fingerprintProfile": fp_profile}
+    fp_response = await _with_runtime_health(session_id, fp_profile)
+    return {"ok": True, "ports": ports, "proxyUrl": proxy_url, "fingerprintProfile": fp_response}
 
 
 @router.post("/api/sessions/{session_id}/fingerprint")
@@ -465,7 +556,8 @@ async def regenerate_fingerprint(session_id: str, body: FingerprintActionBody, u
         browser_lang=row["browser_lang"] or "zh-CN",
         image_name=image_name,
     )
-    return {"ok": True, "ports": ports, "fingerprintProfile": fp_profile}
+    fp_response = await _with_runtime_health(session_id, fp_profile)
+    return {"ok": True, "ports": ports, "fingerprintProfile": fp_response}
 
 
 # -----------------------------------------------------------------------
@@ -517,7 +609,6 @@ async def get_site_info(request: Request):
         },
         "cliCommandName": CLI_COMMAND_NAME,
         "cliInstallCommand": cli_info["shell"],
-        "cliPythonInstallCommand": cli_info["python"],
     }
 
 

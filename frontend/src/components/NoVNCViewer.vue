@@ -383,9 +383,25 @@ function fpDnsLabel(profile: Record<string, any>): string {
   return Array.isArray(servers) && servers.length ? servers.join(', ') : '-'
 }
 
+function fpFontPolicyLabel(profile: Record<string, any>): string {
+  const policy = profile?.fontPolicy
+  const exposed = Array.isArray(policy?.exposedFonts) ? policy.exposedFonts.length : 0
+  return policy?.mode ? `${policy.mode} / ${exposed}` : '-'
+}
+
+function fpRuntimeHealthLabel(profile: Record<string, any>): string {
+  const health = profile?.runtimeHealth
+  if (!health) return '-'
+  return health.ok ? 'OK' : (health.status || 'warning')
+}
+
 function fpWarnings(profile: Record<string, any>): string[] {
-  const warnings = profile?.network?.warnings
-  return Array.isArray(warnings) ? warnings.filter(Boolean).map(String) : []
+  const warnings = [
+    ...(Array.isArray(profile?.warnings) ? profile.warnings : []),
+    ...(Array.isArray(profile?.network?.warnings) ? profile.network.warnings : []),
+    ...(Array.isArray(profile?.runtimeWarnings) ? profile.runtimeWarnings : []),
+  ]
+  return Array.from(new Set(warnings.filter(Boolean).map(String)))
 }
 
 defineExpose({ navigate })
@@ -605,6 +621,18 @@ watch(inputBarOpen, (open) => {
                   <span class="text-muted-foreground">{{ t('vnc.fpPlatform') }}</span>
                   <span class="font-mono">{{ fpPlatformLabel(fpProfile) }}</span>
                 </div>
+                <div v-if="fpProfile.profileFamily" class="flex justify-between">
+                  <span class="text-muted-foreground">{{ t('vnc.fpProfileFamily') }}</span>
+                  <span class="font-mono truncate max-w-[160px]" :title="fpProfile.profileFamily">{{ fpProfile.profileFamily }}</span>
+                </div>
+                <div v-if="fpProfile.runtimeHealth" class="flex justify-between">
+                  <span class="text-muted-foreground">{{ t('vnc.fpRuntimeHealth') }}</span>
+                  <span
+                    class="font-mono truncate max-w-[160px]"
+                    :class="fpProfile.runtimeHealth?.ok ? 'text-emerald-400' : 'text-amber-500'"
+                    :title="JSON.stringify(fpProfile.runtimeHealth)"
+                  >{{ fpRuntimeHealthLabel(fpProfile) }}</span>
+                </div>
                 <div class="flex justify-between">
                   <span class="text-muted-foreground">{{ t('vnc.fpGpu') }}</span>
                   <span class="font-mono truncate max-w-[160px]" :title="fpProfile.webgl?.renderer">{{ fpProfile.webgl?.renderer?.split(',')[0] || '-' }}</span>
@@ -638,6 +666,10 @@ watch(inputBarOpen, (open) => {
                     <TooltipContent side="left" align="start" class="max-w-[200px] break-words text-[10px]">{{ fpProfile.fonts.join(', ') }}</TooltipContent>
                   </Tooltip>
                   <span v-else class="font-mono">-</span>
+                </div>
+                <div v-if="fpProfile.fontPolicy" class="flex justify-between">
+                  <span class="text-muted-foreground">{{ t('vnc.fpFontPolicy') }}</span>
+                  <span class="font-mono truncate max-w-[160px]" :title="JSON.stringify(fpProfile.fontPolicy)">{{ fpFontPolicyLabel(fpProfile) }}</span>
                 </div>
                 <div class="flex justify-between">
                   <span class="text-muted-foreground">{{ t('vnc.fpWebglParams') }}</span>
@@ -673,9 +705,9 @@ watch(inputBarOpen, (open) => {
                     <span class="text-muted-foreground">{{ t('vnc.fpDns') }}</span>
                     <span class="font-mono truncate max-w-[160px]" :title="fpDnsLabel(fpProfile)">{{ fpDnsLabel(fpProfile) }}</span>
                   </div>
-                  <div v-if="fpWarnings(fpProfile).length" class="text-[10px] text-amber-500 leading-snug">
-                    {{ t('vnc.fpWarnings') }}: {{ fpWarnings(fpProfile).join('; ') }}
-                  </div>
+                </div>
+                <div v-if="fpWarnings(fpProfile).length" class="text-[10px] text-amber-500 leading-snug">
+                  {{ t('vnc.fpWarnings') }}: {{ fpWarnings(fpProfile).join('; ') }}
                 </div>
                 <div class="flex justify-between">
                   <span class="text-muted-foreground">{{ t('vnc.fpSeed') }}</span>
