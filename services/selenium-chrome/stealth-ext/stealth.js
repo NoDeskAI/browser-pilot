@@ -1,5 +1,18 @@
 (function(){
   'use strict';
+  try{
+    var _fpSig=JSON.stringify({
+      seed:__FP__&&__FP__.seed,
+      ua:__FP__&&__FP__.navigator&&__FP__.navigator.userAgent,
+      platform:__FP__&&__FP__.navigator&&__FP__.navigator.platform,
+      chPlatform:__FP__&&__FP__.clientHints&&__FP__.clientHints.platform,
+      timezone:__FP__&&__FP__.timezone,
+      webgl:__FP__&&__FP__.webgl&&__FP__.webgl.renderer
+    });
+    if(window.__FP_STEALTH_PROFILE_SIG__===_fpSig&&window.__FP_STEALTH_APPLIED__)return;
+    Object.defineProperty(window,'__FP_STEALTH_PROFILE_SIG__',{value:_fpSig,writable:true,configurable:true,enumerable:false});
+    Object.defineProperty(window,'__FP_STEALTH_APPLIED__',{value:true,writable:true,configurable:true,enumerable:false});
+  }catch(e){}
   var _origSX=window.screenX||0,_origSY=window.screenY||0;
   var _origOH=window.outerHeight||0,_origIH=window.innerHeight||0;
   var _chromeH=(_origOH>_origIH)?(_origOH-_origIH):0;
@@ -83,29 +96,31 @@
     var _hints=__FP__.clientHints||{};
     var _cv=__FP__.chromeVersion||'124.0.0.0';
     var _cmaj=_cv.split('.')[0];
-    var _brands=[
+    var _brands=(Array.isArray(_hints.brands)&&_hints.brands.length)?_hints.brands:[
       {brand:'Chromium',version:_cmaj},
       {brand:'Google Chrome',version:_cmaj},
       {brand:'Not=A?Brand',version:'99'}
     ];
-    var _fullVersionList=[
+    var _fullVersionList=(Array.isArray(_hints.fullVersionList)&&_hints.fullVersionList.length)?_hints.fullVersionList:[
       {brand:'Chromium',version:_cv},
       {brand:'Google Chrome',version:_cv},
       {brand:'Not=A?Brand',version:'99.0.0.0'}
     ];
-    var _uadPlatform=_hints.platform||'Linux';
+    var _uadPlatform=_hints.platform||'';
     var _uadMobile=!!_hints.mobile;
+    var _fullVersion=_hints.fullVersion||_hints.uaFullVersion||_cv;
     var _heValues={
       brands:_brands,
       fullVersionList:_fullVersionList,
       platform:_uadPlatform,
-      platformVersion:_hints.platformVersion||'10.0.0',
-      architecture:_hints.architecture||'x86',
-      bitness:_hints.bitness||'64',
-      model:'',
+      platformVersion:_hints.platformVersion||'',
+      architecture:_hints.architecture||'',
+      bitness:_hints.bitness||'',
+      model:_hints.model||'',
       mobile:_uadMobile,
       wow64:!!_hints.wow64,
-      uaFullVersion:_cv
+      fullVersion:_fullVersion,
+      uaFullVersion:_fullVersion
     };
     var _uad={
       brands:_brands,
@@ -482,48 +497,84 @@
     Object.defineProperty(document,'hasFocus',{value:mn(function(){return true},'hasFocus'),configurable:true});
   }catch(e){}
 
-  // ===== 24. Font list spoofing =====
+  // ===== 24. Windows-compatible font allowlist =====
   try{
-    var fpFonts=__FP__.fonts;
-    if(fpFonts&&fpFonts.length&&document.fonts&&document.fonts.check){
-      var fontSet={};
-      fpFonts.forEach(function(f){fontSet[f.toLowerCase()]=true});
-      var origCheck=document.fonts.check.bind(document.fonts);
+    var fpFonts=__FP__.fonts||[];
+    var fpPolicy=__FP__.fontPolicy||{};
+    var fontSet={};
+    var hiddenFamilies=(fpPolicy.hiddenFamilies||['DejaVu','Liberation','Noto','Nimbus','WenQuanYi','IPAGothic','IPAPGothic','Ubuntu','Cantarell']).map(function(f){return String(f).toLowerCase()});
+    var genericFamilies={serif:true,'sans-serif':true,monospace:true,cursive:true,fantasy:true,'system-ui':true,'ui-serif':true,'ui-sans-serif':true,'ui-monospace':true};
+    fpFonts.forEach(function(f){fontSet[String(f).toLowerCase()]=true});
+    function _fontFamilies(font){
+      var familyStr=String(font||'').replace(/^.*?\d+(\.\d+)?(px|pt|em|rem|%|vw|vh)\s*/i,'');
+      return familyStr.split(',').map(function(f){return f.trim().replace(/^['"]|['"]$/g,'')}).filter(Boolean);
+    }
+    function _isHiddenFont(f){
+      var lf=String(f||'').toLowerCase();
+      for(var i=0;i<hiddenFamilies.length;i++){
+        if(lf.indexOf(hiddenFamilies[i])===0)return true;
+      }
+      return false;
+    }
+    function _isExposedFont(f){
+      return !!fontSet[String(f||'').toLowerCase()];
+    }
+    function _isGenericFont(f){
+      return !!genericFamilies[String(f||'').toLowerCase()];
+    }
+    function _sanitizeFontSpec(font){
+      var raw=String(font||'');
+      var families=_fontFamilies(raw);
+      if(!families.length)return raw;
+      var clean=families.map(function(f){return _isHiddenFont(f)?'Arial':f});
+      var m=raw.match(/^(.*?\d+(\.\d+)?(px|pt|em|rem|%|vw|vh)\s*)(.*)$/i);
+      var prefix=m?m[1]:'';
+      return prefix+clean.map(function(f){return /\s/.test(f)?'"'+f+'"':f}).join(', ');
+    }
+    if(document.fonts&&document.fonts.check){
       document.fonts.check=mn(function(font,text){
-        var familyStr=font.replace(/^.*?\d+(\.\d+)?(px|pt|em|rem|%|vw|vh)\s*/i,'');
-        var families=familyStr.split(',');
+        var families=_fontFamilies(font);
         for(var i=0;i<families.length;i++){
-          var f=families[i].trim().replace(/^['"]|['"]$/g,'').toLowerCase();
-          if(f&&fontSet[f])return true;
+          if(_isHiddenFont(families[i]))return false;
+          if(_isExposedFont(families[i])||_isGenericFont(families[i]))return true;
         }
         return false;
       },'check');
     }
-  }catch(e){}
-
-  // ===== 25. measureText width shift for claimed fonts =====
-  try{
-    var _mtFonts=__FP__.fonts;
-    if(_mtFonts&&_mtFonts.length){
-      var _mtSet={};
-      _mtFonts.forEach(function(f){_mtSet[f.toLowerCase()]=true});
-      var origMT=CanvasRenderingContext2D.prototype.measureText;
-      CanvasRenderingContext2D.prototype.measureText=mn(function(text){
-        var m=origMT.call(this,text);
-        var fam=(this.font||'').replace(/^.*?\d+(\.\d+)?(px|pt|em|rem|%|vw|vh)\s*/i,'');
-        var parts=fam.split(',');
-        for(var i=0;i<parts.length;i++){
-          var f=parts[i].trim().replace(/^['"]|['"]$/g,'').toLowerCase();
-          if(f&&_mtSet[f]){
-            var h=0;for(var j=0;j<f.length;j++)h=(h*31+f.charCodeAt(j))|0;
-            var shift=((h&0x7fffffff)%100)*0.001+0.01;
-            var w=m.width+shift;
-            return{width:w,actualBoundingBoxLeft:m.actualBoundingBoxLeft,actualBoundingBoxRight:m.actualBoundingBoxRight+(shift),actualBoundingBoxAscent:m.actualBoundingBoxAscent,actualBoundingBoxDescent:m.actualBoundingBoxDescent,fontBoundingBoxAscent:m.fontBoundingBoxAscent,fontBoundingBoxDescent:m.fontBoundingBoxDescent,alphabeticBaseline:m.alphabeticBaseline,emHeightAscent:m.emHeightAscent,emHeightDescent:m.emHeightDescent};
-          }
-        }
-        return m;
-      },'measureText');
+    var fontDesc=Object.getOwnPropertyDescriptor(CanvasRenderingContext2D.prototype,'font');
+    if(fontDesc&&fontDesc.get&&fontDesc.set){
+      Object.defineProperty(CanvasRenderingContext2D.prototype,'font',{
+        get:mn(function(){return fontDesc.get.call(this)},'get font'),
+        set:mn(function(v){return fontDesc.set.call(this,_sanitizeFontSpec(v))},'set font'),
+        configurable:true,
+        enumerable:fontDesc.enumerable
+      });
     }
+
+    var origMT=CanvasRenderingContext2D.prototype.measureText;
+    CanvasRenderingContext2D.prototype.measureText=mn(function(text){
+      var families=_fontFamilies(this.font||'');
+      var exposed=false;
+      for(var i=0;i<families.length;i++){
+        if(_isHiddenFont(families[i])){
+          var oldFont=this.font;
+          try{this.font=_sanitizeFontSpec(oldFont)}catch(e){}
+          var hm=origMT.call(this,text);
+          try{this.font=oldFont}catch(e){}
+          return hm;
+        }
+        if(_isExposedFont(families[i]))exposed=true;
+      }
+      var m=origMT.call(this,text);
+      if(exposed){
+        var fam=families.join(',');
+        var h=0;for(var j=0;j<fam.length;j++)h=(h*31+fam.charCodeAt(j))|0;
+        var shift=((h&0x7fffffff)%100)*0.001+0.01;
+        var w=m.width+shift;
+        return{width:w,actualBoundingBoxLeft:m.actualBoundingBoxLeft,actualBoundingBoxRight:m.actualBoundingBoxRight+(shift),actualBoundingBoxAscent:m.actualBoundingBoxAscent,actualBoundingBoxDescent:m.actualBoundingBoxDescent,fontBoundingBoxAscent:m.fontBoundingBoxAscent,fontBoundingBoxDescent:m.fontBoundingBoxDescent,alphabeticBaseline:m.alphabeticBaseline,emHeightAscent:m.emHeightAscent,emHeightDescent:m.emHeightDescent};
+      }
+      return m;
+    },'measureText');
   }catch(e){}
 
 })()

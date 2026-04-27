@@ -19,15 +19,20 @@ RUN if [ -n "${CHROME_VERSION}" ]; then \
       fi; \
     fi
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
+RUN sed -i 's|http://archive.ubuntu.com/ubuntu/|http://mirrors.aliyun.com/ubuntu/|g; s|http://security.ubuntu.com/ubuntu/|http://mirrors.aliyun.com/ubuntu/|g' /etc/apt/sources.list /etc/apt/sources.list.d/*.sources 2>/dev/null || true \
+    && find /etc/apt/sources.list.d -type f -name '*google*' -exec mv {} {}.disabled \; 2>/dev/null || true \
+    && apt-get -o Acquire::Retries=5 update \
+    && apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
        xdotool xclip python3-websocket \
        libegl-mesa0 libegl1 \
        fonts-croscore fonts-crosextra-carlito fonts-crosextra-caladea \
-       fonts-liberation fontconfig \
+       fonts-noto-cjk \
+       fontconfig \
     && rm -rf /var/lib/apt/lists/*
 COPY fonts-local.conf /etc/fonts/local.conf
-RUN fc-cache -f
+COPY browser-fontconfig.conf /opt/browser-fontconfig/fonts.conf
+RUN mkdir -p /tmp/browser-fontconfig-cache && chmod 1777 /tmp/browser-fontconfig-cache \
+    && fc-cache -f && FONTCONFIG_FILE=/opt/browser-fontconfig/fonts.conf fc-cache -f
 RUN if [ ! -f /usr/lib/chromium/locales/zh-CN.pak ]; then \
         CHROME_VER=$(dpkg -s chromium 2>/dev/null | sed -n 's/^Version: //p'); \
         if [ -n "$CHROME_VER" ]; then \
@@ -41,7 +46,7 @@ RUN if [ ! -f /usr/lib/chromium/locales/zh-CN.pak ]; then \
         fi; \
     fi
 RUN mkdir -p /etc/chromium/policies/managed && \
-    echo '{"RestoreOnStartup":5,"CommandLineFlagSecurityWarningsEnabled":false}' \
+    echo '{"RestoreOnStartup":5,"CommandLineFlagSecurityWarningsEnabled":false,"DnsOverHttpsMode":"off","BuiltInDnsClientEnabled":false}' \
     > /etc/chromium/policies/managed/default_homepage.json
 COPY start-browser.sh /opt/bin/start-browser.sh
 RUN chmod +x /opt/bin/start-browser.sh
@@ -56,4 +61,6 @@ RUN mkdir -p /home/seluser/chrome-data/webdriver /home/seluser/chrome-data/manua
 RUN chown -R seluser:seluser /opt/stealth-ext
 COPY cdp-logger.py /opt/bin/cdp-logger.py
 COPY cdp-logger.conf /etc/supervisor/conf.d/cdp-logger.conf
+COPY cdp-fingerprint-agent.py /opt/bin/cdp-fingerprint-agent.py
+COPY cdp-fingerprint-agent.conf /etc/supervisor/conf.d/cdp-fingerprint-agent.conf
 USER seluser

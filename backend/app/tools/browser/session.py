@@ -13,6 +13,7 @@ from app.config import DOCKER_HOST_ADDR
 from app.container import ensure_container_running
 from app.db import get_pool
 from app.device_presets import get_preset, DEFAULT_PRESET
+from app.fingerprint import user_agent_metadata
 from app.tools.browser.scripts import OBSERVE_SCRIPT, get_stealth_script
 
 logger = logging.getLogger("browser.session")
@@ -111,19 +112,23 @@ def _build_accept_language(languages: list[str]) -> str:
     return ",".join(parts)
 
 
-async def _inject_stealth(sid: str, *, base_url: str, fingerprint_profile: dict | None = None) -> None:
+async def _inject_stealth(
+    sid: str,
+    *,
+    base_url: str,
+    fingerprint_profile: dict | None = None,
+    install_preload: bool = True,
+) -> None:
     if not fingerprint_profile:
         raise ValueError("fingerprint_profile is required")
     profile = fingerprint_profile
     nav = profile.get("navigator", {})
-    hints = profile.get("clientHints", {})
     tz = profile.get("timezone", "UTC")
 
     chrome_ver = profile.get("chromeVersion", "124.0.6367.78")
-    chrome_major = chrome_ver.split(".")[0]
 
     stealth_js = get_stealth_script()
-    if stealth_js:
+    if stealth_js and install_preload:
         fp_decl = f"var __FP__={json.dumps(profile, separators=(',', ':'))};"
         script = fp_decl + stealth_js
         try:
@@ -132,7 +137,9 @@ async def _inject_stealth(sid: str, *, base_url: str, fingerprint_profile: dict 
         except Exception as exc:
             logger.warning("Stealth: CDP inject failed (%s), will rely on execute_script", exc)
 
+    if stealth_js and install_preload:
         try:
+            fp_decl = f"var __FP__={json.dumps(profile, separators=(',', ':'))};"
             await wd_fetch(f"/session/{sid}/execute/sync", "POST", {
                 "script": f"{fp_decl}{stealth_js}", "args": [],
             }, timeout=5, base_url=base_url)
@@ -148,26 +155,7 @@ async def _inject_stealth(sid: str, *, base_url: str, fingerprint_profile: dict 
             "userAgent": ua,
             "acceptLanguage": accept_lang,
             "platform": platform,
-            "userAgentMetadata": {
-                "brands": [
-                    {"brand": "Chromium", "version": chrome_major},
-                    {"brand": "Google Chrome", "version": chrome_major},
-                    {"brand": "Not=A?Brand", "version": "99"},
-                ],
-                "fullVersionList": [
-                    {"brand": "Chromium", "version": chrome_ver},
-                    {"brand": "Google Chrome", "version": chrome_ver},
-                    {"brand": "Not=A?Brand", "version": "99.0.0.0"},
-                ],
-                "fullVersion": chrome_ver,
-                "platform": hints.get("platform", "Linux"),
-                "platformVersion": hints.get("platformVersion", "6.5.0"),
-                "architecture": hints.get("architecture", "x86"),
-                "model": "",
-                "mobile": hints.get("mobile", False),
-                "bitness": hints.get("bitness", "64"),
-                "wow64": hints.get("wow64", False),
-            },
+            "userAgentMetadata": user_agent_metadata(profile),
         }, base_url=base_url)
         logger.info("Stealth: UA + client hints set from profile (Chrome %s)", chrome_ver)
     except Exception:
@@ -286,12 +274,17 @@ async def ensure_session(chat_session_id: str) -> tuple[str, str]:
         preset_data = get_preset(preset_id)
         await _inject_device_emulation(sid, preset_data, base_url=bs.selenium_base)
 
-        if not bs.stealth_injected:
-            fp = row["fingerprint_profile"] if row else None
-            if fp:
-                await _inject_stealth(sid, base_url=bs.selenium_base, fingerprint_profile=fp)
+        fp = row["fingerprint_profile"] if row else None
+        if fp:
+            await _inject_stealth(
+                sid,
+                base_url=bs.selenium_base,
+                fingerprint_profile=fp,
+                install_preload=not bs.stealth_injected,
+            )
+            if not bs.stealth_injected:
                 bs.stealth_injected = True
-                logger.info("Stealth injected for session %s", chat_session_id)
+                logger.info("Stealth preload injected for session %s", chat_session_id)
     except Exception as exc:
         logger.debug("Device emulation / stealth inject skipped: %s", exc)
 

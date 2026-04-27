@@ -57,17 +57,45 @@ def _mac_ua(ver: str) -> str:
 def _mac_av(ver: str) -> str:
     return f"5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{ver} Safari/537.36"
 
-_WIN_FONTS = [
-    "Arial", "Times New Roman", "Courier New", "Georgia", "Verdana",
-    "Tahoma", "Trebuchet MS", "Impact", "DejaVu Sans", "DejaVu Serif",
-    "DejaVu Sans Mono", "Liberation Sans", "Liberation Serif",
-    "Liberation Mono", "WenQuanYi Zen Hei",
+PROFILE_FAMILY_WINDOWS_LIKE = "windows-like-linux-container"
+
+_WINDOWS_COMPATIBLE_FONTS = [
+    "Arial",
+    "Calibri",
+    "Cambria",
+    "Consolas",
+    "Courier New",
+    "Georgia",
+    "Segoe UI",
+    "Tahoma",
+    "Times New Roman",
+    "Trebuchet MS",
+    "Verdana",
+    "Microsoft YaHei",
+    "Microsoft YaHei UI",
+    "SimSun",
+    "NSimSun",
+    "SimHei",
 ]
+_HIDDEN_LINUX_FONT_FAMILIES = [
+    "DejaVu",
+    "Liberation",
+    "Noto",
+    "Nimbus",
+    "WenQuanYi",
+    "IPAGothic",
+    "IPAPGothic",
+    "Ubuntu",
+    "Cantarell",
+    "Droid Sans",
+]
+_WINDOWS_LIKE_GPU_LABELS = {"NVIDIA RTX 3060", "Intel UHD 770", "AMD RX 6700 XT"}
+
+_WIN_FONTS = list(_WINDOWS_COMPATIBLE_FONTS)
 _MAC_FONTS = [
     "Arial", "Times New Roman", "Courier New", "Georgia", "Verdana",
-    "DejaVu Sans", "DejaVu Serif", "DejaVu Sans Mono",
-    "Liberation Sans", "Liberation Serif", "Liberation Mono",
-    "WenQuanYi Zen Hei", "IPAGothic",
+    "Helvetica Neue", "Helvetica", "Menlo", "Monaco", "Avenir",
+    "Avenir Next", "Futura", "Gill Sans", "Optima", "Palatino",
 ]
 
 _DEFAULT_POOL: list[dict[str, Any]] = [
@@ -277,6 +305,94 @@ _DEFAULT_POOL: list[dict[str, Any]] = [
     {"group_name": "screen", "label": "24-bit Retina / DPR 2", "tags": ["macos"], "data": {"colorDepth": 24, "pixelDepth": 24, "devicePixelRatio": 2}},
 ]
 
+
+def _font_policy() -> dict[str, Any]:
+    return {
+        "mode": "windows-compatible-allowlist",
+        "exposedFonts": list(_WINDOWS_COMPATIBLE_FONTS),
+        "hiddenFamilies": list(_HIDDEN_LINUX_FONT_FAMILIES),
+    }
+
+
+def _windows_like_warnings() -> list[str]:
+    return [
+        "Windows-like profile is running on a Linux container; TLS/JA3 and low-level OS signals may still reveal the runtime.",
+    ]
+
+
+def chrome_brands(chrome_version: str | None) -> list[dict[str, str]]:
+    major = (chrome_version or DEFAULT_CHROME_VERSION).split(".")[0]
+    return [
+        {"brand": "Chromium", "version": major},
+        {"brand": "Google Chrome", "version": major},
+        {"brand": "Not=A?Brand", "version": "99"},
+    ]
+
+
+def chrome_full_version_list(chrome_version: str | None) -> list[dict[str, str]]:
+    version = chrome_version or DEFAULT_CHROME_VERSION
+    return [
+        {"brand": "Chromium", "version": version},
+        {"brand": "Google Chrome", "version": version},
+        {"brand": "Not=A?Brand", "version": "99.0.0.0"},
+    ]
+
+
+def _platform_from_navigator(nav_platform: str | None) -> str:
+    value = str(nav_platform or "")
+    if value.startswith("Win"):
+        return "Windows"
+    if value.startswith("Mac"):
+        return "macOS"
+    if value.startswith("Linux"):
+        return "Linux"
+    return value
+
+
+def complete_client_hints(profile: dict[str, Any]) -> dict[str, Any]:
+    """Return full UA-CH metadata derived from one fingerprint profile.
+
+    The platform fields intentionally come from ``fingerprintProfile.clientHints``
+    (or, as a last resort, navigator.platform) so request headers follow the
+    selected profile instead of a baked-in OS.
+    """
+    chrome_version = str(profile.get("chromeVersion") or DEFAULT_CHROME_VERSION)
+    nav = profile.get("navigator") if isinstance(profile.get("navigator"), dict) else {}
+    raw_hints = profile.get("clientHints") if isinstance(profile.get("clientHints"), dict) else {}
+    hints = dict(raw_hints)
+
+    hints.setdefault("platform", _platform_from_navigator(nav.get("platform")))
+    hints.setdefault("platformVersion", "")
+    hints.setdefault("architecture", "")
+    hints.setdefault("bitness", "")
+    hints.setdefault("model", "")
+    hints["mobile"] = bool(hints.get("mobile", False))
+    hints["wow64"] = bool(hints.get("wow64", False))
+
+    if not isinstance(hints.get("brands"), list) or not hints["brands"]:
+        hints["brands"] = chrome_brands(chrome_version)
+    if not isinstance(hints.get("fullVersionList"), list) or not hints["fullVersionList"]:
+        hints["fullVersionList"] = chrome_full_version_list(chrome_version)
+    hints.setdefault("fullVersion", chrome_version)
+    hints.setdefault("uaFullVersion", hints["fullVersion"])
+    return hints
+
+
+def user_agent_metadata(profile: dict[str, Any]) -> dict[str, Any]:
+    hints = complete_client_hints(profile)
+    return {
+        "brands": hints["brands"],
+        "fullVersionList": hints["fullVersionList"],
+        "fullVersion": hints["fullVersion"],
+        "platform": hints["platform"],
+        "platformVersion": hints["platformVersion"],
+        "architecture": hints["architecture"],
+        "model": hints.get("model", ""),
+        "mobile": hints["mobile"],
+        "bitness": hints["bitness"],
+        "wow64": hints["wow64"],
+    }
+
 # ---------------------------------------------------------------------------
 # Pool seeding
 # ---------------------------------------------------------------------------
@@ -337,23 +453,33 @@ async def generate_profile(
     pool = get_pool()
 
     rows = await pool.fetch(
-        "SELECT group_name, data, tags FROM fingerprint_pool "
+        "SELECT group_name, label, data, tags FROM fingerprint_pool "
         "WHERE tenant_id = $1 AND enabled = true",
         tenant_id,
     )
 
     by_group: dict[str, list[dict]] = defaultdict(list)
     for r in rows:
-        by_group[r["group_name"]].append({"data": r["data"], "tags": set(r["tags"] or [])})
+        by_group[r["group_name"]].append({
+            "label": r["label"],
+            "data": r["data"],
+            "tags": set(r["tags"] or []),
+        })
 
     for g in _REQUIRED_GROUPS:
         if not by_group.get(g):
             raise PoolEmptyError(g)
 
-    platform_entry = secrets.choice(by_group["platform"])
+    windows_platforms = [e for e in by_group["platform"] if "windows" in e["tags"]]
+    if not windows_platforms:
+        raise PoolEmptyError("platform")
+    platform_entry = secrets.choice(windows_platforms)
     platform_tags = platform_entry["tags"]
 
     compatible_gpus = [e for e in by_group["gpu"] if e["tags"] & platform_tags]
+    preferred_gpus = [e for e in compatible_gpus if e["label"] in _WINDOWS_LIKE_GPU_LABELS]
+    if preferred_gpus:
+        compatible_gpus = preferred_gpus
     if not compatible_gpus:
         raise PoolEmptyError("gpu")
     gpu_entry = secrets.choice(compatible_gpus)
@@ -403,7 +529,7 @@ async def generate_profile(
         "maxTouchPoints": 0,
     })
 
-    return {
+    profile = {
         "seed": secrets.randbelow(2**32),
         "chromeVersion": ver,
         "navigator": nav,
@@ -419,10 +545,15 @@ async def generate_profile(
         },
         "audio": h_data.get("audio", {}),
         "connection": h_data.get("connection", {}),
-        "fonts": p_data.get("fonts", []),
+        "fonts": list(_WINDOWS_COMPATIBLE_FONTS),
+        "profileFamily": PROFILE_FAMILY_WINDOWS_LIKE,
+        "fontPolicy": _font_policy(),
+        "warnings": _windows_like_warnings(),
         "timezone": "UTC",
-        "clientHints": p_data["clientHints"],
+        "clientHints": dict(p_data["clientHints"]),
     }
+    profile["clientHints"] = complete_client_hints(profile)
+    return profile
 
 
 # ---------------------------------------------------------------------------
@@ -508,6 +639,82 @@ def _normal_network(
 
 def normalize_network_probe(source: str, data: dict[str, Any]) -> dict[str, Any] | None:
     """Normalize one IP geo provider response into the session network profile."""
+    if source == "ipwho.is":
+        if data.get("success") is False:
+            return None
+        connection = data.get("connection") if isinstance(data.get("connection"), dict) else {}
+        timezone = data.get("timezone") if isinstance(data.get("timezone"), dict) else {}
+        return _normal_network(
+            source=source,
+            ip=data.get("ip"),
+            country_code=data.get("country_code"),
+            country=data.get("country"),
+            region=data.get("region"),
+            city=data.get("city"),
+            timezone=timezone.get("id") or data.get("timezone"),
+            asn=connection.get("asn"),
+            isp=connection.get("isp") or connection.get("org"),
+            lat=data.get("latitude"),
+            lon=data.get("longitude"),
+            postal=data.get("postal"),
+        )
+
+    if source == "api.ip.sb":
+        return _normal_network(
+            source=source,
+            ip=data.get("ip"),
+            country_code=data.get("country_code"),
+            country=data.get("country"),
+            region=data.get("region"),
+            city=data.get("city"),
+            timezone=data.get("timezone"),
+            asn=data.get("asn"),
+            isp=data.get("isp") or data.get("organization") or data.get("asn_organization"),
+            lat=data.get("latitude"),
+            lon=data.get("longitude"),
+            postal=data.get("postal_code") or data.get("postal"),
+        )
+
+    if source == "freeipapi.com":
+        timezones = data.get("timeZones") if isinstance(data.get("timeZones"), list) else []
+        return _normal_network(
+            source=source,
+            ip=data.get("ipAddress"),
+            country_code=data.get("countryCode"),
+            country=data.get("countryName"),
+            region=data.get("regionName") or data.get("regionCode"),
+            city=data.get("cityName"),
+            timezone=timezones[0] if timezones else data.get("timeZone"),
+            asn=data.get("asn"),
+            isp=data.get("asnOrganization"),
+            lat=data.get("latitude"),
+            lon=data.get("longitude"),
+            postal=data.get("zipCode"),
+        )
+
+    if source == "ip.guide":
+        network = data.get("network") if isinstance(data.get("network"), dict) else {}
+        autonomous_system = (
+            network.get("autonomous_system")
+            if isinstance(network.get("autonomous_system"), dict)
+            else {}
+        )
+        location = data.get("location") if isinstance(data.get("location"), dict) else {}
+        return _normal_network(
+            source=source,
+            ip=data.get("ip"),
+            country_code=autonomous_system.get("country"),
+            country=location.get("country"),
+            region=location.get("region"),
+            city=location.get("city"),
+            timezone=location.get("timezone"),
+            asn=autonomous_system.get("asn"),
+            isp=autonomous_system.get("organization") or autonomous_system.get("name"),
+            lat=location.get("latitude"),
+            lon=location.get("longitude"),
+            postal=location.get("postal"),
+        )
+
     if source == "ip-api.com":
         if data.get("status") and data.get("status") != "success":
             return None
