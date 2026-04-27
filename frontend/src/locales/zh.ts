@@ -58,6 +58,8 @@ export default {
     deleteDescription: '浏览器容器和所有会话数据将被永久删除。',
     cancel: '取消',
     confirmDelete: '删除',
+    shortcutEnter: 'Enter',
+    shortcutEscape: 'Esc',
     deleting: '删除中…',
     creating: '创建中…',
     starting: '启动中…',

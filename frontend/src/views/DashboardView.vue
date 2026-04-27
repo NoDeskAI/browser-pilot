@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch, nextTick, onMounted, onUnmounted } from 'vue'
+import { ref, watch, nextTick, onMounted, onUnmounted, type ComponentPublicInstance } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useSessions } from '../composables/useSessions'
@@ -83,6 +83,7 @@ const inputRefs = ref<Record<string, HTMLInputElement>>({})
 const copiedId = ref<string | null>(null)
 const deleteDialogOpen = ref<Record<string, boolean>>({})
 const deleting = ref<Record<string, boolean>>({})
+const deleteButtonRefs = ref<Record<string, Element | ComponentPublicInstance>>({})
 const creating = ref(false)
 const starting = ref<Record<string, boolean>>({})
 const pausing = ref<Record<string, boolean>>({})
@@ -173,9 +174,30 @@ async function onDeleteSession(id: string) {
   }
 }
 
-function closeDeleteDialog(id: string) {
-  if (deleting.value[id]) return
-  deleteDialogOpen.value[id] = false
+function setDeleteButtonRef(id: string, el: Element | ComponentPublicInstance | null) {
+  if (el) {
+    deleteButtonRefs.value[id] = el
+  } else {
+    delete deleteButtonRefs.value[id]
+  }
+}
+
+function focusDeleteButton(id: string) {
+  const focus = () => {
+    const target = deleteButtonRefs.value[id]
+    const el = target instanceof HTMLElement
+      ? target
+      : target && '$el' in target
+        ? target.$el
+        : null
+    if (el instanceof HTMLElement) el.focus()
+  }
+
+  if (typeof requestAnimationFrame === 'function') {
+    requestAnimationFrame(focus)
+  } else {
+    setTimeout(focus, 0)
+  }
 }
 
 async function onStartContainer(id: string) {
@@ -347,22 +369,30 @@ async function onPauseContainer(id: string) {
                 </AlertDialogTrigger>
                 <AlertDialogContent
                   @click.stop
-                  @keydown.enter.prevent="onDeleteSession(s.id)"
-                  @keydown.escape.prevent="closeDeleteDialog(s.id)"
+                  @open-auto-focus.prevent="focusDeleteButton(s.id)"
                 >
                   <AlertDialogHeader>
                     <AlertDialogTitle>{{ t('session.deleteConfirm') }}</AlertDialogTitle>
                     <AlertDialogDescription>{{ t('session.deleteDescription') }}</AlertDialogDescription>
                   </AlertDialogHeader>
                   <AlertDialogFooter>
-                    <AlertDialogCancel :disabled="deleting[s.id]">{{ t('session.cancel') }}</AlertDialogCancel>
+                    <AlertDialogCancel :disabled="deleting[s.id]">
+                      {{ t('session.cancel') }}
+                      <kbd v-if="!deleting[s.id]" data-slot="kbd" class="ml-1 text-[10px] opacity-60 font-sans tracking-widest">
+                        {{ t('session.shortcutEscape') }}
+                      </kbd>
+                    </AlertDialogCancel>
                     <Button
+                      :ref="el => setDeleteButtonRef(s.id, el)"
                       variant="destructive"
                       :disabled="deleting[s.id]"
                       @click="onDeleteSession(s.id)"
                     >
                       <Loader2 v-if="deleting[s.id]" class="size-4 animate-spin" />
                       {{ deleting[s.id] ? t('session.deleting') : t('session.confirmDelete') }}
+                      <kbd v-if="!deleting[s.id]" data-slot="kbd" class="ml-1 text-[10px] opacity-60 font-sans tracking-widest">
+                        {{ t('session.shortcutEnter') }}
+                      </kbd>
                     </Button>
                   </AlertDialogFooter>
                 </AlertDialogContent>

@@ -58,6 +58,8 @@ export default {
     deleteDescription: 'The browser container and all session data will be permanently deleted.',
     cancel: 'Cancel',
     confirmDelete: 'Delete',
+    shortcutEnter: 'Enter',
+    shortcutEscape: 'Esc',
     deleting: 'Deleting…',
     creating: 'Creating…',
     starting: 'Starting…',
