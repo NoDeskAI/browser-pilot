@@ -27,7 +27,6 @@ def _env(key: str, default: str) -> str:
 
 
 DATABASE_URL = _env("DATABASE_URL", "postgresql://bpilot:bpilot@localhost:5432/bpilot")
-CLI_INSTALL_COMMAND = _env("CLI_INSTALL_COMMAND", "pip install bpilot-cli")
 DOCKER_HOST_ADDR = _env("DOCKER_HOST_ADDR", "localhost")
 API_BASE_URL = _env("API_BASE_URL", "http://localhost:8000")
 

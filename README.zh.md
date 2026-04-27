@@ -32,14 +32,12 @@ echo 'SELENIUM_BASE_IMAGE=seleniarm/standalone-chromium:latest' > .env
 
 ## 命令行工具
 
-安装 `bpilot` 命令行工具，可以从终端驱动浏览器，也可以对接 OpenClaw 等外部 Agent 框架。Web UI 中有一个 **CLI Access** 按钮，可一键生成完整的 CLI 命令参考文档，直接粘贴给你的 AI Agent 使用。
+安装由 Browser Pilot 后端提供的零依赖 `bpilot` 命令行工具，可以从终端驱动浏览器，也可以对接 OpenClaw 等外部 Agent 框架。Web UI 中有一个 **CLI Access** 按钮，可一键生成面向人类或 AI Agent 的 CLI 接入文档。
 
 ![CLI Access](docs/screenshots/cli-access.png)
 
 ```bash
-pip install bpilot-cli           # 从 PyPI 安装
-# 或
-pip install ./cli             # 从源码安装
+curl -fsSL http://localhost:8000/api/cli/install | bash
 ```
 
 配置并使用：

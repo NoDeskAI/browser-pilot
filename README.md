@@ -32,14 +32,12 @@ echo 'SELENIUM_BASE_IMAGE=seleniarm/standalone-chromium:latest' > .env
 
 ## CLI
 
-Install the `bpilot` command-line tool to drive the browser from your terminal or integrate with external Agent frameworks like OpenClaw. The web UI includes a **CLI Access** button that generates a ready-to-paste command reference for your AI agent.
+Install the zero-dependency `bpilot` command-line tool served by the Browser Pilot backend to drive the browser from your terminal or integrate with external Agent frameworks like OpenClaw. The web UI includes a **CLI Access** button that generates a ready-to-paste command reference for humans or AI agents.
 
 ![CLI Access](docs/screenshots/cli-access.png)
 
 ```bash
-pip install bpilot-cli           # from PyPI
-# or
-pip install ./cli             # from source
+curl -fsSL http://localhost:8000/api/cli/install | bash
 ```
 
 Configure and use:

@@ -32,7 +32,6 @@ docker compose build && docker compose up -d
 ```
 backend/          Python (FastAPI) — API server
 frontend/         Vue 3 + TypeScript + Tailwind — Web UI
-cli/              Python (Typer) — bpilot command-line tool
 services/
   selenium-chrome/  Browser container image (Dockerfile + stealth extensions)
 ```
