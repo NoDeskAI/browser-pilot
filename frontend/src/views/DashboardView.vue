@@ -173,6 +173,11 @@ async function onDeleteSession(id: string) {
   }
 }
 
+function closeDeleteDialog(id: string) {
+  if (deleting.value[id]) return
+  deleteDialogOpen.value[id] = false
+}
+
 async function onStartContainer(id: string) {
   if (starting.value[id]) return
   starting.value[id] = true
@@ -334,13 +339,17 @@ async function onPauseContainer(id: string) {
                 <TooltipContent>{{ s.containerStatus === 'paused' ? t('session.resumeFromHibernate') : t('session.startContainer') }}</TooltipContent>
               </Tooltip>
 
-              <AlertDialog :open="deleteDialogOpen[s.id]" @update:open="v => { if (!v && !deleting[s.id]) deleteDialogOpen[s.id] = v }">
+              <AlertDialog :open="deleteDialogOpen[s.id]" @update:open="v => { if (v || !deleting[s.id]) deleteDialogOpen[s.id] = v }">
                 <AlertDialogTrigger as-child>
                   <Button variant="ghost" size="sm" class="size-7 p-0 text-muted-foreground hover:text-destructive" @click.stop>
                     <Trash2 class="size-3.5" />
                   </Button>
                 </AlertDialogTrigger>
-                <AlertDialogContent @click.stop>
+                <AlertDialogContent
+                  @click.stop
+                  @keydown.enter.prevent="onDeleteSession(s.id)"
+                  @keydown.escape.prevent="closeDeleteDialog(s.id)"
+                >
                   <AlertDialogHeader>
                     <AlertDialogTitle>{{ t('session.deleteConfirm') }}</AlertDialogTitle>
                     <AlertDialogDescription>{{ t('session.deleteDescription') }}</AlertDialogDescription>

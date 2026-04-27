@@ -130,6 +130,11 @@ async function onDeleteSession() {
   }
 }
 
+function closeDeleteDialog() {
+  if (deleting.value) return
+  deleteDialogOpen.value = false
+}
+
 async function onStartContainer() {
   if (!activeSession.value || containerActionLoading.value) return
   containerActionLoading.value = true
@@ -240,13 +245,16 @@ async function onPauseContainer() {
           <TooltipContent>{{ t('session.generateTokenHint') }}</TooltipContent>
         </Tooltip>
 
-        <AlertDialog :open="deleteDialogOpen" @update:open="v => { if (!v && !deleting) deleteDialogOpen = v }">
+        <AlertDialog :open="deleteDialogOpen" @update:open="v => { if (v || !deleting) deleteDialogOpen = v }">
           <AlertDialogTrigger as-child>
             <Button variant="outline" size="sm" class="h-8 px-2.5 text-muted-foreground hover:text-destructive hover:bg-destructive/10 hover:border-destructive/20 transition-colors">
               <Trash2 class="size-3.5" />
             </Button>
           </AlertDialogTrigger>
-          <AlertDialogContent>
+          <AlertDialogContent
+            @keydown.enter.prevent="onDeleteSession"
+            @keydown.escape.prevent="closeDeleteDialog"
+          >
             <AlertDialogHeader>
               <AlertDialogTitle>{{ t('session.deleteConfirm') }}</AlertDialogTitle>
               <AlertDialogDescription>{{ t('session.deleteDescription') }}</AlertDialogDescription>
