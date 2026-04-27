@@ -15,7 +15,8 @@ const router = createRouter({
       meta: { requiresAuth: true },
       redirect: '/docs/cli',
       children: [
-        { path: 'cli', component: () => import('../views/CliDocPage.vue') },
+        { path: 'cli', component: () => import('../views/CliDocPage.vue'), props: { mode: 'manual' } },
+        { path: 'cli-agent', component: () => import('../views/CliDocPage.vue'), props: { mode: 'agent' } },
         { path: 'api-token', component: () => import('../views/ApiTokenDocView.vue') },
       ],
     },

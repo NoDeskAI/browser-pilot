@@ -11,7 +11,6 @@ interface SiteInfo {
   features: { sso: boolean; multiTenantManagement: boolean }
   cliCommandName: string
   cliInstallCommand: string
-  cliPythonInstallCommand: string
 }
 
 interface BrandConfig {
@@ -21,7 +20,6 @@ interface BrandConfig {
   features: { sso: boolean; multiTenantManagement: boolean }
   cliCommandName: string
   cliInstallCommand: string
-  cliPythonInstallCommand: string
 }
 
 const brand = reactive<BrandConfig>({
@@ -30,8 +28,7 @@ const brand = reactive<BrandConfig>({
   setupComplete: false,
   features: { sso: false, multiTenantManagement: false },
   cliCommandName: 'bpilot',
-  cliInstallCommand: 'pip install bpilot-cli',
-  cliPythonInstallCommand: 'pip install bpilot-cli',
+  cliInstallCommand: 'curl -fsSL http://localhost:8000/api/cli/install | bash',
 })
 
 async function fetchBrand(): Promise<void> {
@@ -44,7 +41,6 @@ async function fetchBrand(): Promise<void> {
     if (data.features) brand.features = data.features
     if (data.cliCommandName) brand.cliCommandName = data.cliCommandName
     if (data.cliInstallCommand) brand.cliInstallCommand = data.cliInstallCommand
-    if (data.cliPythonInstallCommand) brand.cliPythonInstallCommand = data.cliPythonInstallCommand
   } catch {
     // keep defaults
   }
@@ -166,6 +162,7 @@ async function _startContainerForSession(id: string): Promise<void> {
       if (s) {
         s.containerStatus = 'running'
         s.ports = data.ports
+        if (data.fingerprintProfile) s.fingerprintProfile = data.fingerprintProfile
       }
     }
   } catch {
@@ -205,6 +202,7 @@ async function startContainer(id: string): Promise<void> {
       if (s) {
         s.containerStatus = 'running'
         s.ports = data.ports
+        if (data.fingerprintProfile) s.fingerprintProfile = data.fingerprintProfile
       }
       if (isActive) {
         state.activePorts = {
