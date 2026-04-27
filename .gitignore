@@ -17,5 +17,7 @@ __pycache__/
 # Runtime
 logs/
 artifacts/
+scratch/
+release-deck/
 .env
 *.pid
