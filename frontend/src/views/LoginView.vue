@@ -30,6 +30,29 @@ const rememberMe = ref(!!savedEmail || true)
 const loading = ref(false)
 const error = ref('')
 
+async function readLoginErrorDetail(res: Response) {
+  const contentType = res.headers.get('content-type') || ''
+  if (!contentType.includes('application/json')) return ''
+  try {
+    const data = await res.json()
+    return typeof data?.detail === 'string' ? data.detail : ''
+  } catch {
+    return ''
+  }
+}
+
+function getLoginErrorMessage(status: number, detail: string) {
+  if (status === 401) {
+    return detail === 'Account disabled'
+      ? t('auth.accountDisabled')
+      : t('auth.loginError')
+  }
+  if (status >= 500 || status === 502 || status === 503 || status === 504) {
+    return t('auth.loginServiceUnavailable')
+  }
+  return t('auth.loginUnexpectedError')
+}
+
 async function handleLogin() {
   error.value = ''
   loading.value = true
@@ -40,7 +63,8 @@ async function handleLogin() {
       body: JSON.stringify({ email: email.value, password: password.value }),
     })
     if (!res.ok) {
-      error.value = t('auth.loginError')
+      const detail = await readLoginErrorDetail(res)
+      error.value = getLoginErrorMessage(res.status, detail)
       return
     }
     const data = await res.json()
@@ -52,7 +76,7 @@ async function handleLogin() {
     setAuth(data.access_token, data.user, rememberMe.value)
     router.push('/')
   } catch {
-    error.value = t('auth.loginError')
+    error.value = t('auth.loginNetworkError')
   } finally {
     loading.value = false
   }
