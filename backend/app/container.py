@@ -8,6 +8,7 @@ import json
 import logging
 import shlex
 import socket
+import time
 from typing import Any
 
 import httpx
@@ -17,10 +18,10 @@ from app.db import get_pool
 from app.device_presets import DEVICE_PRESETS, DEFAULT_PRESET, get_preset
 from app.fingerprint import (
     attach_network_profile,
+    declared_network_profile,
     failed_network_profile,
     generate_profile,
     normalize_network_probe,
-    resolve_network_via_container,
 )
 
 logger = logging.getLogger("container")
@@ -39,6 +40,9 @@ _STATIC_ENV = {
 GRID_READY_TIMEOUT = 15
 GRID_POLL_INTERVAL = 0.5
 BROWSER_NETWORK_PROBE_TIMEOUT = 10
+FAST_NETWORK_PROBE_TIMEOUT = 3.0
+DEEP_NETWORK_PROBE_TIMEOUT = 30.0
+NETWORK_PROFILE_CACHE_TTL = 600.0
 
 _BROWSER_NETWORK_APIS = [
     ("ipwho.is", "https://ipwho.is/"),
@@ -51,6 +55,18 @@ _BROWSER_NETWORK_APIS = [
     ),
     ("ipinfo.io", "https://ipinfo.io/json"),
     ("ip234.in", "https://ip234.in/ip.json"),
+]
+
+_BROWSER_FAST_OBSERVED_IP_APIS = [
+    ("api.ipify.org", "https://api.ipify.org?format=json"),
+]
+
+_BROWSER_FAST_IP_GEO_APIS = [
+    ("ipwho.is", "https://ipwho.is/{ip}"),
+]
+
+_BROWSER_FAST_NETWORK_APIS = [
+    ("api.ip.sb", "https://api.ip.sb/geoip"),
 ]
 
 _BROWSER_OBSERVED_IP_APIS = [
@@ -72,6 +88,9 @@ _CONTAINER_NEUTRAL_NETWORK_APIS = [
     ("freeipapi.com", "https://freeipapi.com/api/json/"),
     ("ip.guide", "https://ip.guide/"),
 ]
+
+_NETWORK_PROFILE_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+_BACKGROUND_NETWORK_TASKS: set[str] = set()
 
 
 def container_name(session_id: str) -> str:
@@ -132,7 +151,7 @@ def _needs_browser_network_reconcile(fingerprint_profile: dict | None) -> bool:
     network = fingerprint_profile.get("network")
     if not isinstance(network, dict):
         return True
-    return network.get("observedVia") not in ("browser", "container-fallback-neutral")
+    return network.get("observedVia") not in ("browser", "browser-hidden-cdp", "container-fallback-neutral")
 
 
 def _find_free_port() -> int:
@@ -140,6 +159,44 @@ def _find_free_port() -> int:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         sock.bind(("", 0))
         return int(sock.getsockname()[1])
+
+
+def _json_clone(value: dict[str, Any]) -> dict[str, Any]:
+    return json.loads(json.dumps(value, separators=(",", ":")))
+
+
+def _network_cache_key(
+    *,
+    image_name: str | None,
+    proxy: str | None,
+    fingerprint_profile: dict | None,
+) -> str:
+    payload = {
+        "image": image_name or "",
+        "proxy": proxy or "",
+        "dns": _dns_servers_from_profile(fingerprint_profile),
+    }
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+
+
+def _cached_network_profile(cache_key: str) -> dict[str, Any] | None:
+    cached = _NETWORK_PROFILE_CACHE.get(cache_key)
+    if not cached:
+        return None
+    created_at, network = cached
+    if time.monotonic() - created_at > NETWORK_PROFILE_CACHE_TTL:
+        _NETWORK_PROFILE_CACHE.pop(cache_key, None)
+        return None
+    result = _json_clone(network)
+    result["cacheHit"] = True
+    result["probeStatus"] = "cached"
+    return result
+
+
+def _store_network_profile_cache(cache_key: str, network: dict[str, Any]) -> None:
+    cached = _json_clone(network)
+    cached.pop("cacheHit", None)
+    _NETWORK_PROFILE_CACHE[cache_key] = (time.monotonic(), cached)
 
 
 def _extract_observed_ip(api_name: str, data: dict[str, Any]) -> str | None:
@@ -283,47 +340,6 @@ async def sync_fingerprint_profile_to_container(
             logger.warning("Failed to restart cdp-fingerprint-agent in %s: %s", name, stderr[:200])
 
 
-async def _wd_request(
-    client: httpx.AsyncClient,
-    base_url: str,
-    path: str,
-    method: str = "GET",
-    body: Any = None,
-    timeout: float = BROWSER_NETWORK_PROBE_TIMEOUT,
-) -> Any:
-    kwargs: dict[str, Any] = {}
-    if body is not None:
-        kwargs["json"] = body
-    resp = await client.request(method, f"{base_url}{path}", timeout=timeout, **kwargs)
-    data = resp.json()
-    value = data.get("value", data)
-    if isinstance(value, dict) and value.get("error"):
-        raise RuntimeError(f"WebDriver {value['error']}: {value.get('message', '')}")
-    return value
-
-
-async def _create_probe_webdriver_session(client: httpx.AsyncClient, base_url: str) -> str:
-    value = await _wd_request(
-        client,
-        base_url,
-        "/session",
-        "POST",
-        {
-            "capabilities": {
-                "alwaysMatch": {
-                    "browserName": "chrome",
-                    "goog:chromeOptions": {"debuggerAddress": "localhost:9222"},
-                },
-            }
-        },
-        timeout=15,
-    )
-    session_id = value.get("sessionId") if isinstance(value, dict) else None
-    if not session_id:
-        raise RuntimeError("WebDriver attach did not return a session id")
-    return str(session_id)
-
-
 def _json_from_text(text: str) -> dict[str, Any]:
     raw = str(text or "").strip()
     if raw.startswith("{") or raw.startswith("["):
@@ -338,81 +354,412 @@ def _json_from_text(text: str) -> dict[str, Any]:
     raise ValueError("probe response was not JSON or key=value text")
 
 
-async def _read_probe_page_text(
-    client: httpx.AsyncClient,
-    base_url: str,
-    webdriver_session_id: str,
-    url: str,
-) -> str:
-    await _wd_request(
-        client,
-        base_url,
-        f"/session/{webdriver_session_id}/url",
-        "POST",
-        {"url": url},
-        timeout=20,
+def _browser_probe_tasks(mode: str) -> dict[str, Any]:
+    if mode == "fast":
+        return {
+            "observed": [
+                {"source": source, "url": url, "geo": [
+                    {"source": geo_source, "url": geo_url}
+                    for geo_source, geo_url in _BROWSER_FAST_IP_GEO_APIS
+                ]}
+                for source, url in _BROWSER_FAST_OBSERVED_IP_APIS
+            ],
+            "direct": [{"source": source, "url": url} for source, url in _BROWSER_FAST_NETWORK_APIS],
+        }
+    return {
+        "observed": [
+            {"source": source, "url": url, "geo": [
+                {"source": geo_source, "url": geo_url}
+                for geo_source, geo_url in _BROWSER_IP_GEO_APIS
+            ]}
+            for source, url in _BROWSER_OBSERVED_IP_APIS
+        ],
+        "direct": [{"source": source, "url": url} for source, url in _BROWSER_NETWORK_APIS],
+    }
+
+
+def _hidden_cdp_probe_script(tasks: dict[str, Any], per_url_timeout: float, total_timeout: float) -> str:
+    script = r'''
+import base64
+import json
+import os
+import socket
+import struct
+import time
+import urllib.parse
+import urllib.request
+
+TASKS = __TASKS__
+PER_URL_TIMEOUT = __PER_URL_TIMEOUT__
+TOTAL_TIMEOUT = __TOTAL_TIMEOUT__
+
+
+def get_json(url):
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req, timeout=2) as resp:
+        return json.loads(resp.read().decode("utf-8", "replace"))
+
+
+def recv_exact(sock, size):
+    chunks = []
+    remaining = size
+    while remaining:
+        chunk = sock.recv(remaining)
+        if not chunk:
+            raise RuntimeError("websocket closed")
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    return b"".join(chunks)
+
+
+def send_frame(sock, text, opcode=1):
+    payload = text.encode("utf-8") if isinstance(text, str) else text
+    header = bytearray([0x80 | opcode])
+    length = len(payload)
+    if length < 126:
+        header.append(0x80 | length)
+    elif length < 65536:
+        header.append(0x80 | 126)
+        header.extend(struct.pack("!H", length))
+    else:
+        header.append(0x80 | 127)
+        header.extend(struct.pack("!Q", length))
+    mask = os.urandom(4)
+    header.extend(mask)
+    masked = bytes(payload[i] ^ mask[i % 4] for i in range(length))
+    sock.sendall(bytes(header) + masked)
+
+
+def recv_message(sock, deadline):
+    chunks = []
+    while True:
+        remaining = max(0.1, deadline - time.time())
+        sock.settimeout(remaining)
+        b1, b2 = recv_exact(sock, 2)
+        fin = bool(b1 & 0x80)
+        opcode = b1 & 0x0F
+        masked = bool(b2 & 0x80)
+        length = b2 & 0x7F
+        if length == 126:
+            length = struct.unpack("!H", recv_exact(sock, 2))[0]
+        elif length == 127:
+            length = struct.unpack("!Q", recv_exact(sock, 8))[0]
+        mask = recv_exact(sock, 4) if masked else b""
+        payload = recv_exact(sock, length) if length else b""
+        if masked:
+            payload = bytes(payload[i] ^ mask[i % 4] for i in range(length))
+        if opcode == 8:
+            raise RuntimeError("websocket closed")
+        if opcode == 9:
+            send_frame(sock, payload, opcode=10)
+            continue
+        if opcode in (1, 0):
+            chunks.append(payload)
+            if fin:
+                return b"".join(chunks).decode("utf-8", "replace")
+
+
+def open_ws(ws_url):
+    parsed = urllib.parse.urlparse(ws_url)
+    host = parsed.hostname or "127.0.0.1"
+    port = parsed.port or 80
+    path = parsed.path or "/"
+    if parsed.query:
+        path += "?" + parsed.query
+    sock = socket.create_connection((host, port), timeout=2)
+    key = base64.b64encode(os.urandom(16)).decode("ascii")
+    request = (
+        "GET " + path + " HTTP/1.1\r\n"
+        "Host: " + host + ":" + str(port) + "\r\n"
+        "Upgrade: websocket\r\n"
+        "Connection: Upgrade\r\n"
+        "Sec-WebSocket-Key: " + key + "\r\n"
+        "Sec-WebSocket-Version: 13\r\n\r\n"
     )
-    await asyncio.sleep(1.0)
-    text = await _wd_request(
-        client,
-        base_url,
-        f"/session/{webdriver_session_id}/execute/sync",
-        "POST",
-        {
-            "script": "return document.body ? document.body.innerText : document.documentElement.innerText",
-            "args": [],
-        },
-        timeout=10,
+    sock.sendall(request.encode("ascii"))
+    response = b""
+    while b"\r\n\r\n" not in response:
+        chunk = sock.recv(4096)
+        if not chunk:
+            raise RuntimeError("websocket handshake failed")
+        response += chunk
+    if b" 101 " not in response.split(b"\r\n", 1)[0]:
+        raise RuntimeError("websocket handshake rejected")
+    return sock
+
+
+class CDP:
+    def __init__(self, sock):
+        self.sock = sock
+        self.next_id = 0
+
+    def call(self, method, params=None, session_id=None, timeout=2):
+        self.next_id += 1
+        msg = {"id": self.next_id, "method": method, "params": params or {}}
+        if session_id:
+            msg["sessionId"] = session_id
+        send_frame(self.sock, json.dumps(msg, separators=(",", ":")))
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            raw = recv_message(self.sock, deadline)
+            data = json.loads(raw)
+            if data.get("id") != self.next_id:
+                continue
+            if "error" in data:
+                raise RuntimeError(method + " failed: " + json.dumps(data["error"], separators=(",", ":")))
+            return data.get("result", {})
+        raise RuntimeError(method + " timed out")
+
+
+def parse_probe_text(text):
+    raw = str(text or "").strip()
+    if raw.startswith("{") or raw.startswith("["):
+        return json.loads(raw)
+    data = {}
+    for line in raw.splitlines():
+        if "=" in line:
+            key, _, value = line.partition("=")
+            data[key.strip()] = value.strip()
+    return data
+
+
+def extract_ip(text):
+    data = parse_probe_text(text)
+    value = str(data.get("ip") or data.get("query") or "").strip()
+    if value:
+        return value
+    raise RuntimeError("missing observed IP")
+
+
+def has_budget(min_seconds=0.35):
+    return time.time() + min_seconds < STARTED_AT + TOTAL_TIMEOUT
+
+
+def read_page(cdp, session_id, url):
+    if not has_budget():
+        raise RuntimeError("probe time budget exhausted")
+    fetch_deadline = min(time.time() + PER_URL_TIMEOUT, STARTED_AT + TOTAL_TIMEOUT - 0.1)
+    try:
+        result = cdp.call(
+            "Runtime.evaluate",
+            {
+                "expression": "fetch(" + json.dumps(url) + ", {cache: 'no-store'}).then(r => r.text())",
+                "awaitPromise": True,
+                "returnByValue": True,
+            },
+            session_id=session_id,
+            timeout=max(0.2, fetch_deadline - time.time()),
+        )
+        value = ((result.get("result") or {}).get("value") or "").strip()
+        if value:
+            return value
+    except Exception:
+        pass
+    try:
+        cdp.call("Page.navigate", {"url": url}, session_id=session_id, timeout=0.8)
+    except Exception:
+        pass
+    deadline = min(time.time() + PER_URL_TIMEOUT, STARTED_AT + TOTAL_TIMEOUT - 0.1)
+    last_error = ""
+    expression = """(() => {
+      const body = document.body ? (document.body.innerText || document.body.textContent || '') : '';
+      const doc = document.documentElement ? (document.documentElement.innerText || document.documentElement.textContent || '') : '';
+      return String(body || doc || '').trim();
+    })()"""
+    while time.time() < deadline:
+        try:
+            timeout = min(0.8, max(0.2, deadline - time.time()))
+            result = cdp.call(
+                "Runtime.evaluate",
+                {"expression": expression, "returnByValue": True},
+                session_id=session_id,
+                timeout=timeout,
+            )
+            value = ((result.get("result") or {}).get("value") or "").strip()
+            if value:
+                return value
+        except Exception as exc:
+            last_error = str(exc)
+        time.sleep(0.15)
+    raise RuntimeError(last_error or "empty probe response")
+
+
+def main():
+    global STARTED_AT
+    STARTED_AT = time.time()
+    version = get_json("http://127.0.0.1:9222/json/version")
+    sock = open_ws(version["webSocketDebuggerUrl"])
+    cdp = CDP(sock)
+    context_id = None
+    target_id = None
+    session_id = None
+    out = []
+    try:
+        context_id = cdp.call("Target.createBrowserContext", {"disposeOnDetach": True}, timeout=2)["browserContextId"]
+        target_id = cdp.call(
+            "Target.createTarget",
+            {"url": "about:blank", "browserContextId": context_id},
+            timeout=2,
+        )["targetId"]
+        session_id = cdp.call("Target.attachToTarget", {"targetId": target_id, "flatten": True}, timeout=2)["sessionId"]
+        try:
+            cdp.call("Runtime.runIfWaitingForDebugger", session_id=session_id, timeout=1)
+        except Exception:
+            pass
+        cdp.call("Page.enable", session_id=session_id, timeout=2)
+        cdp.call("Runtime.enable", session_id=session_id, timeout=2)
+        try:
+            cdp.call("Runtime.runIfWaitingForDebugger", session_id=session_id, timeout=1)
+        except Exception:
+            pass
+
+        for item in TASKS.get("observed", []):
+            if not has_budget():
+                out.append({"kind": "observed_ip", "source": item.get("source", ""), "url": item.get("url", ""), "ok": False, "error": "probe time budget exhausted"})
+                break
+            ip_source = item["source"]
+            try:
+                ip_text = read_page(cdp, session_id, item["url"])
+                observed_ip = extract_ip(ip_text)
+            except Exception as exc:
+                out.append({"kind": "observed_ip", "source": ip_source, "url": item.get("url", ""), "ok": False, "error": str(exc)})
+                continue
+            for geo in item.get("geo", []):
+                if not has_budget():
+                    out.append({"kind": "observed_geo", "ipSource": ip_source, "geoSource": geo.get("source", ""), "ok": False, "error": "probe time budget exhausted"})
+                    break
+                geo_source = geo["source"]
+                url = geo["url"].replace("{ip}", observed_ip)
+                try:
+                    text = read_page(cdp, session_id, url)
+                    out.append({
+                        "kind": "observed_geo",
+                        "ipSource": ip_source,
+                        "geoSource": geo_source,
+                        "url": url,
+                        "ok": True,
+                        "text": text[:20000],
+                    })
+                except Exception as exc:
+                    out.append({
+                        "kind": "observed_geo",
+                        "ipSource": ip_source,
+                        "geoSource": geo_source,
+                        "url": url,
+                        "ok": False,
+                        "error": str(exc),
+                    })
+
+        for item in TASKS.get("direct", []):
+            if not has_budget():
+                out.append({"kind": "direct", "source": item.get("source", ""), "url": item.get("url", ""), "ok": False, "error": "probe time budget exhausted"})
+                break
+            source = item["source"]
+            try:
+                text = read_page(cdp, session_id, item["url"])
+                out.append({"kind": "direct", "source": source, "url": item["url"], "ok": True, "text": text[:20000]})
+            except Exception as exc:
+                out.append({"kind": "direct", "source": source, "url": item.get("url", ""), "ok": False, "error": str(exc)})
+    finally:
+        if target_id:
+            try:
+                cdp.call("Target.closeTarget", {"targetId": target_id}, timeout=1)
+            except Exception:
+                pass
+        if context_id:
+            try:
+                cdp.call("Target.disposeBrowserContext", {"browserContextId": context_id}, timeout=1)
+            except Exception:
+                pass
+        try:
+            sock.close()
+        except Exception:
+            pass
+    print(json.dumps(out, separators=(",", ":")))
+
+
+main()
+'''
+    return (
+        script
+        .replace("__TASKS__", json.dumps(tasks, separators=(",", ":")))
+        .replace("__PER_URL_TIMEOUT__", repr(per_url_timeout))
+        .replace("__TOTAL_TIMEOUT__", repr(total_timeout))
     )
-    return str(text or "")
 
 
-async def _read_probe_page_json(
-    client: httpx.AsyncClient,
-    base_url: str,
-    webdriver_session_id: str,
-    url: str,
-) -> dict[str, Any]:
-    return _json_from_text(await _read_probe_page_text(client, base_url, webdriver_session_id, url))
-
-
-async def _resolve_observed_ip_network(
-    client: httpx.AsyncClient,
-    base_url: str,
-    webdriver_session_id: str,
+async def _run_hidden_browser_probe(
+    session_id: str,
     *,
+    mode: str,
+    timeout: float,
+) -> list[dict[str, Any]]:
+    name = container_name(session_id)
+    per_url_timeout = 1.5 if mode == "fast" else 3.0
+    script = _hidden_cdp_probe_script(_browser_probe_tasks(mode), per_url_timeout, timeout)
+    stdout, stderr, rc = await _run(
+        f"docker exec {name} /usr/bin/python3 -c {shlex.quote(script)}",
+        timeout=timeout + 1,
+    )
+    if rc != 0:
+        raise RuntimeError(f"hidden CDP probe failed: {(stderr or stdout)[:300]}")
+    try:
+        result = json.loads(stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"hidden CDP probe returned invalid JSON: {stdout[:300]}") from exc
+    if not isinstance(result, list):
+        raise RuntimeError("hidden CDP probe returned non-list payload")
+    return result
+
+
+async def _resolve_hidden_browser_network(
+    session_id: str,
+    *,
+    mode: str,
+    timeout: float,
     warnings: list[str],
 ) -> dict[str, Any] | None:
+    started_at = time.monotonic()
     networks: list[dict[str, Any]] = []
-    for ip_api_name, ip_url in _BROWSER_OBSERVED_IP_APIS:
+    results = await _run_hidden_browser_probe(session_id, mode=mode, timeout=timeout)
+    for item in results:
+        kind = str(item.get("kind") or "")
+        if not item.get("ok"):
+            source = item.get("source") or item.get("ipSource") or item.get("geoSource") or "unknown"
+            warnings.append(f"{source} hidden browser probe failed: {item.get('error', '')}")
+            continue
         try:
-            ip_data = await _read_probe_page_json(client, base_url, webdriver_session_id, ip_url)
-            observed_ip = _extract_observed_ip(ip_api_name, ip_data)
-            if not observed_ip:
-                warnings.append(f"{ip_api_name} response missing usable observed IP")
-                continue
-
-            for geo_api_name, geo_url in _BROWSER_IP_GEO_APIS:
-                try:
-                    geo_data = await _read_probe_page_json(
-                        client,
-                        base_url,
-                        webdriver_session_id,
-                        geo_url.format(ip=observed_ip),
-                    )
-                    network = normalize_network_probe(geo_api_name, geo_data)
-                    if network:
-                        network["source"] = f"browser:{ip_api_name}+{geo_api_name}"
-                        network["observedVia"] = "browser"
-                        network["observedIpSource"] = ip_api_name
-                        networks.append(network)
-                    else:
-                        warnings.append(f"{ip_api_name}+{geo_api_name} response missing usable geo/timezone")
-                except Exception as exc:
-                    warnings.append(f"{ip_api_name}+{geo_api_name} browser probe failed: {exc}")
+            data = _json_from_text(str(item.get("text") or ""))
+            if kind == "observed_geo":
+                geo_source = str(item.get("geoSource") or "")
+                ip_source = str(item.get("ipSource") or "")
+                network = normalize_network_probe(geo_source, data)
+                if network:
+                    network["source"] = f"browser:{ip_source}+{geo_source}"
+                    network["observedIpSource"] = ip_source
+                else:
+                    warnings.append(f"{ip_source}+{geo_source} response missing usable geo/timezone")
+                    continue
+            else:
+                source = str(item.get("source") or "")
+                network = normalize_network_probe(source, data)
+                if network:
+                    network["source"] = f"browser:{source}"
+                else:
+                    warnings.append(f"{source} response missing usable IP/timezone")
+                    continue
+            network["observedVia"] = "browser-hidden-cdp"
+            networks.append(network)
         except Exception as exc:
-            warnings.append(f"{ip_api_name} browser IP probe failed: {exc}")
-    return _select_network_consensus(networks, warnings)
+            source = item.get("source") or item.get("ipSource") or item.get("geoSource") or "unknown"
+            warnings.append(f"{source} hidden browser response parse failed: {exc}")
+    selected = _select_network_consensus(networks, warnings)
+    if selected:
+        selected["observedVia"] = "browser-hidden-cdp"
+        selected["probeMode"] = mode
+        selected["probeStatus"] = "ready"
+        selected["probeDurationMs"] = int((time.monotonic() - started_at) * 1000)
+    return selected
 
 
 async def _resolve_neutral_network_via_container(
@@ -478,82 +825,156 @@ print(json.dumps(out, separators=(",", ":")))
     return selected
 
 
-async def resolve_network_via_browser(ports: dict[str, int], session_id: str | None = None) -> dict[str, Any]:
-    """Resolve network metadata from the already-running Chrome page path."""
-    base_url = f"http://{DOCKER_HOST_ADDR}:{ports['selenium_port']}"
+async def resolve_network_via_browser(
+    ports: dict[str, int],
+    session_id: str | None = None,
+    *,
+    mode: str = "fast",
+) -> dict[str, Any]:
+    """Resolve network metadata through a hidden browser-level CDP target.
+
+    The probe creates a temporary off-the-record BrowserContext inside Chrome,
+    so probe URLs do not touch the user's visible tab or persisted history.
+    """
+    if not session_id:
+        return failed_network_profile("hidden browser probe requires a session id", [])
+
     warnings: list[str] = []
-    webdriver_session_id: str | None = None
-    async with httpx.AsyncClient(timeout=20) as client:
-        try:
-            webdriver_session_id = await _create_probe_webdriver_session(client, base_url)
-            networks: list[dict[str, Any]] = []
-            observed_ip_network = await _resolve_observed_ip_network(
-                client,
-                base_url,
-                webdriver_session_id,
-                warnings=warnings,
+    timeout = FAST_NETWORK_PROBE_TIMEOUT if mode == "fast" else DEEP_NETWORK_PROBE_TIMEOUT
+    try:
+        selected = await _resolve_hidden_browser_network(
+            session_id,
+            mode=mode,
+            timeout=timeout,
+            warnings=warnings,
+        )
+        if selected:
+            logger.info(
+                "Resolved network via hidden browser CDP (%s): ip=%s tz=%s dns=%s confidence=%s",
+                mode,
+                selected.get("ip"),
+                selected.get("timezone"),
+                ",".join(selected.get("dnsServers", [])),
+                selected.get("confidence"),
             )
-            if observed_ip_network:
-                networks.append(observed_ip_network)
-            for api_name, url in _BROWSER_NETWORK_APIS:
-                try:
-                    data = await _read_probe_page_json(client, base_url, webdriver_session_id, url)
-                    network = normalize_network_probe(api_name, data)
-                    if network:
-                        network["source"] = f"browser:{api_name}"
-                        network["observedVia"] = "browser"
-                        networks.append(network)
-                    else:
-                        warnings.append(f"{api_name} response missing usable IP/timezone")
-                except Exception as exc:
-                    warnings.append(f"{api_name} browser probe failed: {exc}")
-            selected = _select_network_consensus(networks, warnings)
-            if selected:
-                selected["observedVia"] = "browser"
-                logger.info(
-                    "Resolved network via neutral browser consensus: ip=%s tz=%s dns=%s confidence=%s",
-                    selected.get("ip"),
-                    selected.get("timezone"),
-                    ",".join(selected.get("dnsServers", [])),
-                    selected.get("confidence"),
-                )
-                return selected
-        except Exception as exc:
-            warnings.append(f"browser probe setup failed: {exc}")
-        finally:
-            if webdriver_session_id:
-                try:
-                    await _wd_request(
-                        client,
-                        base_url,
-                        f"/session/{webdriver_session_id}/window",
-                        "POST",
-                        {"handle": await _wd_request(client, base_url, f"/session/{webdriver_session_id}/window")},
-                        timeout=3,
-                    )
-                except Exception:
-                    pass
-                try:
-                    await _wd_request(
-                        client,
-                        base_url,
-                        f"/session/{webdriver_session_id}/url",
-                        "POST",
-                        {"url": "chrome://newtab/"},
-                        timeout=5,
-                    )
-                except Exception:
-                    pass
-                try:
-                    await client.delete(f"{base_url}/session/{webdriver_session_id}", timeout=5)
-                except Exception:
-                    pass
-    if session_id:
+            return selected
+    except Exception as exc:
+        warnings.append(f"hidden browser probe failed: {exc}")
+
+    if mode != "fast":
         fallback = await _resolve_neutral_network_via_container(session_id, warnings=warnings)
         if fallback:
+            fallback["probeMode"] = mode
+            fallback["probeStatus"] = "ready"
             return fallback
-    logger.warning("Browser network probes failed: %s", "; ".join(warnings))
-    return failed_network_profile("all browser network probes failed", warnings)
+
+    logger.warning("Hidden browser network probe failed: %s", "; ".join(warnings))
+    return failed_network_profile("hidden browser network probe failed", warnings)
+
+
+def _add_network_runtime_warnings(fingerprint_profile: dict, network: dict[str, Any]) -> None:
+    observed_via = str(network.get("observedVia") or "")
+    if observed_via == "container-fallback-neutral":
+        _add_runtime_warning(
+            fingerprint_profile,
+            "browser_network_probe_fallback: browser probe failed; neutral network consensus was resolved through the running container path and container DNS was reconciled.",
+        )
+    network_warnings = [str(w) for w in network.get("warnings", []) if str(w or "").strip()]
+    if any(w.startswith("network_source_disagreement:") for w in network_warnings):
+        _add_runtime_warning(
+            fingerprint_profile,
+            "network_source_disagreement: neutral network probes disagree; this session should be treated as untrusted until the proxy/network path is stabilized.",
+        )
+    if any(w.startswith("network_consensus_low_confidence:") for w in network_warnings):
+        _add_runtime_warning(
+            fingerprint_profile,
+            "network_consensus_low_confidence: network profile is based on fewer than two agreeing neutral probes.",
+        )
+
+
+def _schedule_background_network_consensus(
+    session_id: str,
+    ports: dict[str, int],
+    *,
+    cache_key: str,
+) -> None:
+    if session_id in _BACKGROUND_NETWORK_TASKS:
+        return
+    _BACKGROUND_NETWORK_TASKS.add(session_id)
+    task = asyncio.create_task(
+        _background_network_consensus(session_id, dict(ports), cache_key=cache_key)
+    )
+
+    def _done(done_task: asyncio.Task) -> None:
+        _BACKGROUND_NETWORK_TASKS.discard(session_id)
+        try:
+            done_task.result()
+        except Exception as exc:
+            logger.warning("Background network consensus failed for %s: %s", session_id, exc)
+
+    task.add_done_callback(_done)
+
+
+async def _background_network_consensus(
+    session_id: str,
+    ports: dict[str, int],
+    *,
+    cache_key: str,
+) -> None:
+    observed = await resolve_network_via_browser(ports, session_id=session_id, mode="deep")
+    pool = get_pool()
+    row = await pool.fetchrow("SELECT fingerprint_profile FROM sessions WHERE id = $1", session_id)
+    if not row or not isinstance(row["fingerprint_profile"], dict):
+        return
+
+    fingerprint_profile = row["fingerprint_profile"]
+    if observed.get("source") == "unresolved":
+        _add_runtime_warning(
+            fingerprint_profile,
+            "network_probe_pending: background network consensus did not complete; provisional network profile is still in use.",
+        )
+        await pool.execute(
+            "UPDATE sessions SET fingerprint_profile = $1::jsonb, updated_at = NOW() WHERE id = $2",
+            fingerprint_profile,
+            session_id,
+        )
+        return
+
+    old_network = fingerprint_profile.get("network") if isinstance(fingerprint_profile.get("network"), dict) else {}
+    old_signature = _network_signature(old_network)
+    old_dns = _dns_servers_from_profile(fingerprint_profile)
+
+    attach_network_profile(fingerprint_profile, observed)
+    new_network = fingerprint_profile.get("network") if isinstance(fingerprint_profile.get("network"), dict) else {}
+    new_network["observedVia"] = str(observed.get("observedVia") or "browser-hidden-cdp")
+    new_network.setdefault("provisionalSource", old_network.get("source") or "")
+    new_network["probeStatus"] = "background-ready"
+    fingerprint_profile["network"] = new_network
+    _add_network_runtime_warnings(fingerprint_profile, new_network)
+
+    new_signature = _network_signature(new_network)
+    new_dns = _dns_servers_from_profile(fingerprint_profile)
+    if old_signature != new_signature:
+        _add_runtime_warning(
+            fingerprint_profile,
+            "network_probe_background_reconciled: background neutral network consensus updated the runtime fingerprint profile.",
+        )
+    if old_dns != new_dns:
+        _add_runtime_warning(
+            fingerprint_profile,
+            "dns_recreate_required: background network consensus changed DNS requirements; restart this session to apply container DNS.",
+        )
+
+    await pool.execute(
+        "UPDATE sessions SET fingerprint_profile = $1::jsonb, updated_at = NOW() WHERE id = $2",
+        fingerprint_profile,
+        session_id,
+    )
+    _store_network_profile_cache(cache_key, new_network)
+    try:
+        await sync_fingerprint_profile_to_container(session_id, fingerprint_profile)
+    except Exception as exc:
+        logger.warning("Background profile sync failed for %s: %s", session_id, exc)
 
 
 async def create_container(
@@ -760,17 +1181,25 @@ async def reconcile_browser_network_profile(
     if not isinstance(fingerprint_profile, dict):
         return ports, fingerprint_profile
 
-    observed = await resolve_network_via_browser(ports, session_id=session_id)
+    cache_key = _network_cache_key(
+        image_name=image_name,
+        proxy=proxy,
+        fingerprint_profile=fingerprint_profile,
+    )
+    observed = _cached_network_profile(cache_key)
+    if observed is None:
+        observed = await resolve_network_via_browser(ports, session_id=session_id, mode="fast")
     if observed.get("source") == "unresolved":
         _add_runtime_warning(
             fingerprint_profile,
-            "browser_network_probe_failed: browser-observed network probe failed; provisional network profile is still in use.",
+            "network_probe_pending: fast hidden browser network probe did not complete; provisional network profile is still in use while background consensus continues.",
         )
         await get_pool().execute(
             "UPDATE sessions SET fingerprint_profile = $1::jsonb, updated_at = NOW() WHERE id = $2",
             fingerprint_profile,
             session_id,
         )
+        _schedule_background_network_consensus(session_id, ports, cache_key=cache_key)
         return ports, fingerprint_profile
 
     old_network = fingerprint_profile.get("network") if isinstance(fingerprint_profile.get("network"), dict) else {}
@@ -779,26 +1208,11 @@ async def reconcile_browser_network_profile(
 
     attach_network_profile(fingerprint_profile, observed)
     new_network = fingerprint_profile.get("network") if isinstance(fingerprint_profile.get("network"), dict) else {}
-    observed_via = str(observed.get("observedVia") or "browser")
+    observed_via = str(observed.get("observedVia") or "browser-hidden-cdp")
     new_network["observedVia"] = observed_via
     new_network.setdefault("provisionalSource", old_network.get("source") or "")
     fingerprint_profile["network"] = new_network
-    if observed_via == "container-fallback-neutral":
-        _add_runtime_warning(
-            fingerprint_profile,
-            "browser_network_probe_fallback: browser probe failed; neutral network consensus was resolved through the running container path and container DNS was reconciled.",
-        )
-    network_warnings = [str(w) for w in new_network.get("warnings", []) if str(w or "").strip()]
-    if any(w.startswith("network_source_disagreement:") for w in network_warnings):
-        _add_runtime_warning(
-            fingerprint_profile,
-            "network_source_disagreement: neutral network probes disagree; this session should be treated as untrusted until the proxy/network path is stabilized.",
-        )
-    if any(w.startswith("network_consensus_low_confidence:") for w in network_warnings):
-        _add_runtime_warning(
-            fingerprint_profile,
-            "network_consensus_low_confidence: network profile is based on fewer than two agreeing neutral probes.",
-        )
+    _add_network_runtime_warnings(fingerprint_profile, new_network)
 
     new_signature = _network_signature(new_network)
     new_dns = _dns_servers_from_profile(fingerprint_profile)
@@ -863,6 +1277,15 @@ async def reconcile_browser_network_profile(
             )
             logger.warning("Profile sync failed for %s: %s", session_id, exc)
 
+    _store_network_profile_cache(cache_key, new_network)
+    updated_cache_key = _network_cache_key(
+        image_name=image_name,
+        proxy=proxy,
+        fingerprint_profile=fingerprint_profile,
+    )
+    if updated_cache_key != cache_key:
+        _store_network_profile_cache(updated_cache_key, new_network)
+    _schedule_background_network_consensus(session_id, ports, cache_key=cache_key)
     return ports, fingerprint_profile
 
 
@@ -908,8 +1331,8 @@ async def _session_container_params(session_id: str) -> tuple[int, int, str | No
         if img_row:
             image_name = img_row["image_tag"]
 
-    if isinstance(fp_profile, dict) and not fp_profile.get("network") and image_name:
-        network = await resolve_network_via_container(proxy, image_name)
+    if isinstance(fp_profile, dict) and not fp_profile.get("network"):
+        network = declared_network_profile(proxy, image_name)
         attach_network_profile(fp_profile, network)
         await pool.execute(
             "UPDATE sessions SET fingerprint_profile = $1::jsonb WHERE id = $2",
@@ -932,17 +1355,6 @@ async def ensure_container_running(session_id: str) -> dict[str, int]:
         await create_container(session_id, width=width, height=height, user_agent=ua, proxy=proxy, fingerprint_profile=fp_profile, browser_lang=lang, image_name=img)
         ports = await get_container_ports(session_id)
         await _wait_grid_ready(ports["selenium_port"])
-        ports, _ = await reconcile_browser_network_profile(
-            session_id,
-            ports,
-            width=width,
-            height=height,
-            user_agent=ua,
-            proxy=proxy,
-            fingerprint_profile=fp_profile,
-            browser_lang=lang,
-            image_name=img,
-        )
         return ports
 
     if status == "paused":
@@ -954,33 +1366,10 @@ async def ensure_container_running(session_id: str) -> dict[str, int]:
         await start_container(session_id)
         ports = await get_container_ports(session_id)
         await _wait_grid_ready(ports["selenium_port"])
-        ports, _ = await reconcile_browser_network_profile(
-            session_id,
-            ports,
-            width=width,
-            height=height,
-            user_agent=ua,
-            proxy=proxy,
-            fingerprint_profile=fp_profile,
-            browser_lang=lang,
-            image_name=img,
-        )
         return ports
 
-    width, height, ua, proxy, fp_profile, lang, img = await _session_container_params(session_id)
     ports = await get_container_ports(session_id)
     await _wait_grid_ready(ports["selenium_port"])
-    ports, _ = await reconcile_browser_network_profile(
-        session_id,
-        ports,
-        width=width,
-        height=height,
-        user_agent=ua,
-        proxy=proxy,
-        fingerprint_profile=fp_profile,
-        browser_lang=lang,
-        image_name=img,
-    )
     return ports
 
 
@@ -993,7 +1382,7 @@ async def recreate_container(
     fingerprint_profile: dict | None = None,
     browser_lang: str = "zh-CN",
     image_name: str | None = None,
-    reconcile_network: bool = True,
+    reconcile_network: bool = False,
 ) -> dict[str, int]:
     """Stop, remove (keep volume), create with new params, wait for grid."""
     try:

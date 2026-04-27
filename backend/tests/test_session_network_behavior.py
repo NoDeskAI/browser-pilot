@@ -2,8 +2,19 @@ import asyncio
 import json
 from types import SimpleNamespace
 
+import pytest
+
 from app import container
 from app.routes import sessions
+
+
+@pytest.fixture(autouse=True)
+def clear_container_network_state():
+    container._NETWORK_PROFILE_CACHE.clear()
+    container._BACKGROUND_NETWORK_TASKS.clear()
+    yield
+    container._NETWORK_PROFILE_CACHE.clear()
+    container._BACKGROUND_NETWORK_TASKS.clear()
 
 
 def _network(timezone="Europe/Berlin", country_code="DE"):
@@ -88,6 +99,37 @@ def test_create_session_binds_network_timezone_without_changing_browser_lang(mon
     assert profile["timezone"] == "America/New_York"
     assert profile["network"]["timezone"] == "America/New_York"
     assert profile["navigator"]["languages"] == ["fr-FR", "fr", "en"]
+
+
+def test_create_session_uses_declared_network_without_container_probe(monkeypatch):
+    pool = FakePool([
+        {"chrome_version": "147.0.0.0", "image_tag": "browser-pilot:test"},
+    ])
+    calls = {}
+    monkeypatch.setattr(sessions, "get_pool", lambda: pool)
+    monkeypatch.setattr(sessions.uuid, "uuid4", lambda: "session-1")
+
+    def fake_declared_network(proxy_url, image_tag):
+        calls["proxy_url"] = proxy_url
+        calls["image_tag"] = image_tag
+        return _network("Asia/Shanghai", "CN")
+
+    async def fake_generate_profile(tenant_id, browser_lang, chrome_version=None):
+        return _profile(browser_lang)
+
+    monkeypatch.setattr(sessions, "declared_network_profile", fake_declared_network)
+    monkeypatch.setattr(sessions, "generate_profile", fake_generate_profile)
+
+    result = asyncio.run(
+        sessions.create_session(
+            sessions.CreateSessionBody(name="test", browserLang="zh-CN"),
+            _user(),
+        )
+    )
+
+    assert calls == {"proxy_url": None, "image_tag": "browser-pilot:test"}
+    assert result["fingerprintProfile"]["network"]["source"] == "test"
+    assert result["fingerprintProfile"]["timezone"] == "Asia/Shanghai"
 
 
 def test_change_proxy_refreshes_network_and_keeps_language(monkeypatch):
@@ -200,6 +242,147 @@ def test_create_container_passes_profile_dns_to_docker(monkeypatch):
     assert "bad" not in commands[0]
 
 
+def test_session_params_attach_declared_network_without_container_probe(monkeypatch):
+    profile = _profile("zh-CN")
+    pool = FakePool([
+        {
+            "device_preset": "desktop",
+            "proxy_url": None,
+            "fingerprint_profile": profile,
+            "browser_lang": "zh-CN",
+            "tenant_id": "tenant-1",
+            "chrome_version": "147.0.0.0",
+        },
+        {"image_tag": "browser-pilot:test"},
+    ])
+    calls = {}
+    monkeypatch.setattr(container, "get_pool", lambda: pool)
+
+    def fake_declared_network(proxy_url, image_tag):
+        calls["proxy_url"] = proxy_url
+        calls["image_tag"] = image_tag
+        return _network("Asia/Shanghai", "CN")
+
+    async def fail_browser_network(*args, **kwargs):
+        raise AssertionError("default session params must not probe through browser")
+
+    monkeypatch.setattr(container, "declared_network_profile", fake_declared_network)
+    monkeypatch.setattr(container, "resolve_network_via_browser", fail_browser_network)
+
+    width, height, ua, proxy, fp_profile, lang, image_name = asyncio.run(
+        container._session_container_params("session-1")
+    )
+
+    assert width == 1920
+    assert height == 1080
+    assert proxy is None
+    assert lang == "zh-CN"
+    assert image_name == "browser-pilot:test"
+    assert calls == {"proxy_url": None, "image_tag": "browser-pilot:test"}
+    assert fp_profile["timezone"] == "Asia/Shanghai"
+    assert pool.executed
+
+
+def test_ensure_container_running_default_path_does_not_probe(monkeypatch):
+    calls = []
+    profile = _profile("zh-CN")
+    profile["network"] = _network("Asia/Shanghai", "CN")
+    profile["timezone"] = "Asia/Shanghai"
+
+    async def fake_status(session_id):
+        return "not_found"
+
+    async def fake_params(session_id):
+        return 1920, 1080, "UA", None, profile, "zh-CN", "browser-pilot:test"
+
+    async def fake_create(session_id, **kwargs):
+        calls.append(("create", kwargs))
+
+    async def fake_ports(session_id):
+        return {"selenium_port": 4444, "vnc_port": 7900}
+
+    async def fake_wait(port):
+        calls.append(("wait", port))
+
+    async def fail_reconcile(*args, **kwargs):
+        raise AssertionError("container/start must not reconcile network by default")
+
+    async def fail_browser_network(*args, **kwargs):
+        raise AssertionError("container/start must not run browser network probe")
+
+    def fail_background(*args, **kwargs):
+        raise AssertionError("container/start must not schedule background network consensus")
+
+    monkeypatch.setattr(container, "get_container_status", fake_status)
+    monkeypatch.setattr(container, "_session_container_params", fake_params)
+    monkeypatch.setattr(container, "create_container", fake_create)
+    monkeypatch.setattr(container, "get_container_ports", fake_ports)
+    monkeypatch.setattr(container, "_wait_grid_ready", fake_wait)
+    monkeypatch.setattr(container, "reconcile_browser_network_profile", fail_reconcile)
+    monkeypatch.setattr(container, "resolve_network_via_browser", fail_browser_network)
+    monkeypatch.setattr(container, "_schedule_background_network_consensus", fail_background)
+
+    ports = asyncio.run(container.ensure_container_running("session-1"))
+
+    assert ports == {"selenium_port": 4444, "vnc_port": 7900}
+    assert calls[0][0] == "create"
+    assert calls[1] == ("wait", 4444)
+
+
+def test_recreate_container_default_path_does_not_probe(monkeypatch):
+    calls = []
+
+    async def fake_stop(session_id):
+        calls.append("stop")
+
+    async def fake_remove(session_id, keep_volume=False):
+        calls.append(("remove", keep_volume))
+
+    async def fake_create(session_id, **kwargs):
+        calls.append(("create", kwargs))
+
+    async def fake_ports(session_id):
+        return {"selenium_port": 4444, "vnc_port": 7900}
+
+    async def fake_wait(port):
+        calls.append(("wait", port))
+
+    async def fail_reconcile(*args, **kwargs):
+        raise AssertionError("recreate_container must not reconcile network by default")
+
+    monkeypatch.setattr(container, "stop_container", fake_stop)
+    monkeypatch.setattr(container, "remove_container", fake_remove)
+    monkeypatch.setattr(container, "create_container", fake_create)
+    monkeypatch.setattr(container, "get_container_ports", fake_ports)
+    monkeypatch.setattr(container, "_wait_grid_ready", fake_wait)
+    monkeypatch.setattr(container, "reconcile_browser_network_profile", fail_reconcile)
+
+    ports = asyncio.run(
+        container.recreate_container(
+            "session-1",
+            width=1920,
+            height=1080,
+            fingerprint_profile={"network": _network("Asia/Shanghai", "CN")},
+        )
+    )
+
+    assert ports == {"selenium_port": 4444, "vnc_port": 7900}
+    assert calls == [
+        "stop",
+        ("remove", True),
+        ("create", {
+            "width": 1920,
+            "height": 1080,
+            "user_agent": None,
+            "proxy": None,
+            "fingerprint_profile": {"network": _network("Asia/Shanghai", "CN")},
+            "browser_lang": "zh-CN",
+            "image_name": None,
+        }),
+        ("wait", 4444),
+    ]
+
+
 def test_browser_network_reconcile_overrides_profile_and_recreates_for_dns(monkeypatch):
     profile = _profile("zh-CN")
     profile["network"] = _network("Asia/Singapore", "SG")
@@ -229,6 +412,7 @@ def test_browser_network_reconcile_overrides_profile_and_recreates_for_dns(monke
 
     monkeypatch.setattr(container, "resolve_network_via_browser", fake_browser_network)
     monkeypatch.setattr(container, "recreate_container", fake_recreate_container)
+    monkeypatch.setattr(container, "_schedule_background_network_consensus", lambda *args, **kwargs: None)
 
     ports, updated = asyncio.run(
         container.reconcile_browser_network_profile(
@@ -283,6 +467,7 @@ def test_browser_network_reconcile_does_not_recreate_when_dns_unchanged(monkeypa
     monkeypatch.setattr(container, "resolve_network_via_browser", fake_browser_network)
     monkeypatch.setattr(container, "recreate_container", fail_recreate_container)
     monkeypatch.setattr(container, "sync_fingerprint_profile_to_container", fake_sync_profile)
+    monkeypatch.setattr(container, "_schedule_background_network_consensus", lambda *args, **kwargs: None)
 
     ports, updated = asyncio.run(
         container.reconcile_browser_network_profile(
@@ -307,48 +492,56 @@ def test_browser_network_reconcile_does_not_recreate_when_dns_unchanged(monkeypa
     assert synced["fingerprint_profile"]["network"]["observedVia"] == "browser"
 
 
-def test_neutral_observed_ip_is_enriched_without_detector_provider(monkeypatch):
+def test_hidden_fast_probe_uses_neutral_results_without_webdriver_navigation(monkeypatch):
     calls = []
 
-    async def fake_read_probe_page_json(client, base_url, webdriver_session_id, url):
-        calls.append(url)
-        if "api.ipify.org" in url:
-            return {"ip": "115.198.151.18"}
-        if "ipwho.is/115.198.151.18" in url:
-            return {
-                "ip": "115.198.151.18",
-                "success": True,
-                "country": "China",
-                "country_code": "CN",
-                "region": "Zhejiang",
-                "city": "Hangzhou",
-                "latitude": "30.2943",
-                "longitude": "120.1663",
-                "timezone": {"id": "Asia/Shanghai"},
-                "connection": {"asn": 4134, "isp": "Chinanet"},
-            }
-        if "freeipapi.com/api/json/115.198.151.18" in url:
-            return {
-                "ipAddress": "115.198.151.18",
-                "countryName": "China",
-                "countryCode": "CN",
-                "regionName": "Zhejiang",
-                "cityName": "Hangzhou",
-                "latitude": "30.2943",
-                "longitude": "120.1663",
-                "timeZones": ["Asia/Shanghai"],
-                "asn": "4134",
-                "asnOrganization": "Chinanet",
-            }
-        raise RuntimeError("probe unavailable")
+    async def fake_hidden_probe(session_id, *, mode, timeout):
+        calls.append({"session_id": session_id, "mode": mode, "timeout": timeout})
+        return [
+            {
+                "kind": "observed_geo",
+                "ipSource": "api.ipify.org",
+                "geoSource": "ipwho.is",
+                "ok": True,
+                "text": json.dumps({
+                    "ip": "115.198.151.18",
+                    "success": True,
+                    "country": "China",
+                    "country_code": "CN",
+                    "region": "Zhejiang",
+                    "city": "Hangzhou",
+                    "latitude": "30.2943",
+                    "longitude": "120.1663",
+                    "timezone": {"id": "Asia/Shanghai"},
+                    "connection": {"asn": 4134, "isp": "Chinanet"},
+                }),
+            },
+            {
+                "kind": "direct",
+                "source": "api.ip.sb",
+                "ok": True,
+                "text": json.dumps({
+                    "ip": "115.198.151.18",
+                    "country": "China",
+                    "country_code": "CN",
+                    "region": "Zhejiang",
+                    "city": "Hangzhou",
+                    "latitude": "30.2943",
+                    "longitude": "120.1663",
+                    "timezone": "Asia/Shanghai",
+                    "asn": "4134",
+                    "isp": "Chinanet",
+                }),
+            },
+        ]
 
-    monkeypatch.setattr(container, "_read_probe_page_json", fake_read_probe_page_json)
+    monkeypatch.setattr(container, "_run_hidden_browser_probe", fake_hidden_probe)
 
     network = asyncio.run(
-        container._resolve_observed_ip_network(
-            client=None,
-            base_url="http://selenium",
-            webdriver_session_id="wd-1",
+        container._resolve_hidden_browser_network(
+            "session-1",
+            mode="fast",
+            timeout=3,
             warnings=[],
         )
     )
@@ -359,9 +552,13 @@ def test_neutral_observed_ip_is_enriched_without_detector_provider(monkeypatch):
     assert network["timezone"] == "Asia/Shanghai"
     assert network["dnsServers"] == ["223.5.5.5", "119.29.29.29"]
     assert network["source"] == "browser:api.ipify.org+ipwho.is"
+    assert network["observedVia"] == "browser-hidden-cdp"
     assert network["observedIpSource"] == "api.ipify.org"
     assert network["confidence"] == "high"
-    assert "api.ipify.org" in calls[0]
+    assert network["probeMode"] == "fast"
+    assert calls == [{"session_id": "session-1", "mode": "fast", "timeout": 3}]
+    assert len(container._browser_probe_tasks("fast")["observed"]) == 1
+    assert len(container._browser_probe_tasks("fast")["direct"]) == 1
 
 
 def test_neutral_container_fallback_returns_cn_dns(monkeypatch):
@@ -422,3 +619,136 @@ def test_neutral_container_fallback_returns_cn_dns(monkeypatch):
     assert network["dnsServers"] == ["223.5.5.5", "119.29.29.29"]
     assert network["confidence"] == "high"
     assert "browser probe failed" in network["warnings"]
+
+
+def test_fast_probe_failure_marks_pending_without_blocking(monkeypatch):
+    profile = _profile("zh-CN")
+    profile["network"] = _network("Asia/Singapore", "SG")
+    profile["timezone"] = "Asia/Singapore"
+    pool = FakePool([])
+    scheduled = {}
+    monkeypatch.setattr(container, "get_pool", lambda: pool)
+
+    async def fake_browser_network(ports, **kwargs):
+        assert kwargs["mode"] == "fast"
+        return {"source": "unresolved", "warnings": ["timeout"]}
+
+    def fake_schedule(session_id, ports, *, cache_key):
+        scheduled["session_id"] = session_id
+        scheduled["ports"] = ports
+        scheduled["cache_key"] = cache_key
+
+    monkeypatch.setattr(container, "resolve_network_via_browser", fake_browser_network)
+    monkeypatch.setattr(container, "_schedule_background_network_consensus", fake_schedule)
+
+    ports, updated = asyncio.run(
+        container.reconcile_browser_network_profile(
+            "session-1",
+            {"selenium_port": 4444, "vnc_port": 7900},
+            width=1920,
+            height=1080,
+            user_agent=None,
+            proxy=None,
+            fingerprint_profile=profile,
+            browser_lang="zh-CN",
+            image_name="browser-pilot:test",
+        )
+    )
+
+    assert ports == {"selenium_port": 4444, "vnc_port": 7900}
+    assert updated["network"]["timezone"] == "Asia/Singapore"
+    assert any("network_probe_pending" in w for w in updated["runtimeWarnings"])
+    assert scheduled["session_id"] == "session-1"
+    assert pool.executed
+
+
+def test_network_profile_cache_skips_fast_probe(monkeypatch):
+    profile = _profile("zh-CN")
+    profile["network"] = _network("Asia/Singapore", "SG")
+    profile["timezone"] = "Asia/Singapore"
+    pool = FakePool([])
+    monkeypatch.setattr(container, "get_pool", lambda: pool)
+    monkeypatch.setattr(container, "_schedule_background_network_consensus", lambda *args, **kwargs: None)
+    synced = {}
+
+    async def fail_browser_network(*args, **kwargs):
+        raise AssertionError("cache hit should avoid the blocking fast probe")
+
+    async def fake_sync_profile(session_id, fingerprint_profile, restart_agent=True):
+        synced["profile"] = fingerprint_profile
+
+    cached_network = _network("Europe/Paris", "FR")
+    cached_network["observedVia"] = "browser-hidden-cdp"
+    cache_key = container._network_cache_key(
+        image_name="browser-pilot:test",
+        proxy=None,
+        fingerprint_profile=profile,
+    )
+    container._NETWORK_PROFILE_CACHE.clear()
+    container._store_network_profile_cache(cache_key, cached_network)
+
+    monkeypatch.setattr(container, "resolve_network_via_browser", fail_browser_network)
+    monkeypatch.setattr(container, "sync_fingerprint_profile_to_container", fake_sync_profile)
+
+    ports, updated = asyncio.run(
+        container.reconcile_browser_network_profile(
+            "session-1",
+            {"selenium_port": 4444, "vnc_port": 7900},
+            width=1920,
+            height=1080,
+            user_agent=None,
+            proxy=None,
+            fingerprint_profile=profile,
+            browser_lang="zh-CN",
+            image_name="browser-pilot:test",
+        )
+    )
+
+    assert ports == {"selenium_port": 4444, "vnc_port": 7900}
+    assert updated["timezone"] == "Europe/Paris"
+    assert updated["network"]["cacheHit"] is True
+    assert updated["network"]["probeStatus"] == "cached"
+    assert synced["profile"]["network"]["countryCode"] == "FR"
+
+
+def test_background_dns_change_sets_restart_warning_without_recreate(monkeypatch):
+    profile = _profile("zh-CN")
+    profile["network"] = _network("Asia/Singapore", "SG")
+    profile["timezone"] = "Asia/Singapore"
+    pool = FakePool([{"fingerprint_profile": profile}])
+    synced = {}
+    monkeypatch.setattr(container, "get_pool", lambda: pool)
+
+    async def fake_browser_network(ports, **kwargs):
+        assert kwargs["mode"] == "deep"
+        network = _network("Asia/Shanghai", "CN")
+        network["observedVia"] = "browser-hidden-cdp"
+        network["source"] = "browser:api.ipify.org+ipwho.is"
+        return network
+
+    async def fake_sync_profile(session_id, fingerprint_profile, restart_agent=True):
+        synced["session_id"] = session_id
+        synced["profile"] = fingerprint_profile
+
+    monkeypatch.setattr(container, "resolve_network_via_browser", fake_browser_network)
+    monkeypatch.setattr(container, "sync_fingerprint_profile_to_container", fake_sync_profile)
+
+    cache_key = container._network_cache_key(
+        image_name="browser-pilot:test",
+        proxy=None,
+        fingerprint_profile=profile,
+    )
+    asyncio.run(
+        container._background_network_consensus(
+            "session-1",
+            {"selenium_port": 4444, "vnc_port": 7900},
+            cache_key=cache_key,
+        )
+    )
+
+    saved_profile = pool.executed[-1][1]
+    assert saved_profile["network"]["countryCode"] == "CN"
+    assert saved_profile["network"]["dnsServers"] == ["223.5.5.5", "119.29.29.29"]
+    assert any("network_probe_background_reconciled" in w for w in saved_profile["runtimeWarnings"])
+    assert any("dns_recreate_required" in w for w in saved_profile["runtimeWarnings"])
+    assert synced["session_id"] == "session-1"

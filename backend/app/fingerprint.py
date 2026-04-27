@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import ipaddress
 import logging
 import re
 import secrets
@@ -19,6 +20,14 @@ from typing import Any
 
 import httpx
 
+from app.config import (
+    DEFAULT_NETWORK_CITY,
+    DEFAULT_NETWORK_COUNTRY,
+    DEFAULT_NETWORK_COUNTRY_CODE,
+    DEFAULT_NETWORK_DNS_SERVERS,
+    DEFAULT_NETWORK_REGION,
+    DEFAULT_NETWORK_TIMEZONE,
+)
 from app.db import get_pool
 
 logger = logging.getLogger("fingerprint")
@@ -592,6 +601,28 @@ def _dns_servers_for_country(country_code: str) -> list[str]:
     return list(_DNS_CN if _clean_country_code(country_code) == "CN" else _DNS_GLOBAL)
 
 
+def _valid_timezone_value(value: str) -> bool:
+    return value == "UTC" or "/" in value
+
+
+def _declared_dns_servers(country_code: str) -> list[str]:
+    raw = str(DEFAULT_NETWORK_DNS_SERVERS or "").strip()
+    servers: list[str] = []
+    if raw:
+        for item in re.split(r"[,;\s]+", raw):
+            server = item.strip()
+            if not server:
+                continue
+            try:
+                ipaddress.ip_address(server)
+            except ValueError:
+                continue
+            servers.append(server)
+            if len(servers) >= 3:
+                break
+    return servers or _dns_servers_for_country(country_code)
+
+
 def _normal_network(
     *,
     source: str,
@@ -610,7 +641,7 @@ def _normal_network(
 ) -> dict[str, Any] | None:
     tz = str(timezone or "").strip()
     ip_value = str(ip or "").strip()
-    if not ip_value or "/" not in tz:
+    if not ip_value or not _valid_timezone_value(tz):
         return None
 
     code = _clean_country_code(country_code)
@@ -796,6 +827,56 @@ def failed_network_profile(reason: str, warnings: list[str] | None = None) -> di
     }
 
 
+def declared_network_profile(proxy_url: str | None = None, image_tag: str | None = None) -> dict[str, Any]:
+    """Build network metadata from explicit configuration without external probes."""
+    country_code = _clean_country_code(DEFAULT_NETWORK_COUNTRY_CODE)
+    timezone = str(DEFAULT_NETWORK_TIMEZONE or "").strip() or _system_timezone()
+    warnings: list[str] = []
+    has_declared_geo = any(
+        str(value or "").strip()
+        for value in (
+            DEFAULT_NETWORK_COUNTRY_CODE,
+            DEFAULT_NETWORK_COUNTRY,
+            DEFAULT_NETWORK_REGION,
+            DEFAULT_NETWORK_CITY,
+            DEFAULT_NETWORK_TIMEZONE,
+            DEFAULT_NETWORK_DNS_SERVERS,
+        )
+    )
+
+    if not timezone or not _valid_timezone_value(timezone):
+        timezone = "UTC"
+        warnings.append("declared network timezone missing or invalid; using UTC")
+
+    if proxy_url:
+        warnings.append(
+            "proxy_network_metadata_unavailable: proxy-specific network metadata is not configured; using declared worker network profile."
+        )
+    if not has_declared_geo or proxy_url:
+        warnings.append("network_profile_unverified")
+
+    return {
+        "ip": "",
+        "countryCode": country_code,
+        "country": str(DEFAULT_NETWORK_COUNTRY or "").strip(),
+        "region": str(DEFAULT_NETWORK_REGION or "").strip(),
+        "city": str(DEFAULT_NETWORK_CITY or "").strip(),
+        "timezone": timezone,
+        "asn": "",
+        "isp": "",
+        "lat": None,
+        "lon": None,
+        "postal": "",
+        "source": "declared:env" if has_declared_geo else "declared:unverified",
+        "probedAt": "",
+        "dnsServers": _declared_dns_servers(country_code),
+        "warnings": warnings,
+        "observedVia": "declared",
+        "imageTag": image_tag or "",
+        "proxyConfigured": bool(proxy_url),
+    }
+
+
 def attach_network_profile(profile: dict[str, Any], network: dict[str, Any]) -> dict[str, Any]:
     """Bind network-derived timezone/DNS metadata to an existing fingerprint profile."""
     normalized = dict(network or failed_network_profile("network probe did not return data"))
@@ -804,12 +885,19 @@ def attach_network_profile(profile: dict[str, Any], network: dict[str, Any]) -> 
         normalized.get("countryCode", "")
     )
     tz = normalized.get("timezone") if isinstance(normalized.get("timezone"), str) else None
-    if not tz or "/" not in tz:
+    if not tz or not _valid_timezone_value(tz):
         tz = "UTC"
         normalized["timezone"] = tz
         normalized["warnings"].append("network timezone missing or invalid; using UTC")
     profile["network"] = normalized
     profile["timezone"] = tz
+    if "network_profile_unverified" in normalized.get("warnings", []):
+        runtime_warnings = profile.get("runtimeWarnings")
+        if not isinstance(runtime_warnings, list):
+            runtime_warnings = []
+        if "network_profile_unverified" not in runtime_warnings:
+            runtime_warnings.append("network_profile_unverified")
+        profile["runtimeWarnings"] = runtime_warnings
     return profile
 
 

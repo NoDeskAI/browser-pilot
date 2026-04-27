@@ -26,9 +26,8 @@ from app.device_presets import DEVICE_PRESETS, DEFAULT_PRESET, get_preset
 from app.fingerprint import (
     PoolEmptyError,
     attach_network_profile,
-    failed_network_profile,
+    declared_network_profile,
     generate_profile,
-    resolve_network_via_container,
 )
 
 logger = logging.getLogger("routes.sessions")
@@ -78,9 +77,7 @@ _VALID_PROXY_SCHEMES = ("http://", "https://", "socks4://", "socks5://")
 
 
 async def _resolve_session_network(proxy_url: str | None, image_tag: str | None) -> dict:
-    if image_tag:
-        return await resolve_network_via_container(proxy_url, image_tag)
-    return failed_network_profile("No browser image available for container network probe")
+    return declared_network_profile(proxy_url, image_tag)
 
 
 async def _resolve_session_image(session_id: str) -> str | None:

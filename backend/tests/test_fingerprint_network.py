@@ -1,4 +1,5 @@
-from app.fingerprint import attach_network_profile, failed_network_profile, normalize_network_probe
+from app import fingerprint
+from app.fingerprint import attach_network_profile, declared_network_profile, failed_network_profile, normalize_network_probe
 
 
 def test_normalize_ip_api_success_sets_timezone_asn_and_dns():
@@ -73,3 +74,66 @@ def test_attach_network_profile_binds_timezone_and_network():
     assert profile["timezone"] == "Australia/Sydney"
     assert profile["network"]["timezone"] == "Australia/Sydney"
     assert profile["navigator"]["languages"] == ["zh-CN", "zh", "en"]
+
+
+def test_declared_network_profile_unconfigured_is_unverified_without_probe(monkeypatch):
+    for name in (
+        "DEFAULT_NETWORK_COUNTRY_CODE",
+        "DEFAULT_NETWORK_COUNTRY",
+        "DEFAULT_NETWORK_REGION",
+        "DEFAULT_NETWORK_CITY",
+        "DEFAULT_NETWORK_TIMEZONE",
+        "DEFAULT_NETWORK_DNS_SERVERS",
+    ):
+        monkeypatch.setattr(fingerprint, name, "")
+    monkeypatch.setattr(fingerprint, "_system_timezone", lambda: "Asia/Shanghai")
+
+    network = declared_network_profile()
+
+    assert network["source"] == "declared:unverified"
+    assert network["observedVia"] == "declared"
+    assert network["timezone"] == "Asia/Shanghai"
+    assert network["countryCode"] == ""
+    assert network["dnsServers"] == ["1.1.1.1", "8.8.8.8"]
+    assert "network_profile_unverified" in network["warnings"]
+
+    profile = {"navigator": {"languages": ["zh-CN", "zh", "en"]}}
+    attach_network_profile(profile, network)
+    assert "network_profile_unverified" in profile["runtimeWarnings"]
+
+
+def test_declared_network_profile_uses_env_country_timezone_and_dns(monkeypatch):
+    monkeypatch.setattr(fingerprint, "DEFAULT_NETWORK_COUNTRY_CODE", "CN")
+    monkeypatch.setattr(fingerprint, "DEFAULT_NETWORK_COUNTRY", "China")
+    monkeypatch.setattr(fingerprint, "DEFAULT_NETWORK_REGION", "Zhejiang")
+    monkeypatch.setattr(fingerprint, "DEFAULT_NETWORK_CITY", "Hangzhou")
+    monkeypatch.setattr(fingerprint, "DEFAULT_NETWORK_TIMEZONE", "Asia/Shanghai")
+    monkeypatch.setattr(fingerprint, "DEFAULT_NETWORK_DNS_SERVERS", "223.5.5.5, bad,119.29.29.29")
+
+    network = declared_network_profile(image_tag="browser-pilot:test")
+
+    assert network["source"] == "declared:env"
+    assert network["timezone"] == "Asia/Shanghai"
+    assert network["countryCode"] == "CN"
+    assert network["country"] == "China"
+    assert network["city"] == "Hangzhou"
+    assert network["dnsServers"] == ["223.5.5.5", "119.29.29.29"]
+    assert network["imageTag"] == "browser-pilot:test"
+    assert "network_profile_unverified" not in network["warnings"]
+
+
+def test_declared_proxy_without_metadata_is_marked_unverified(monkeypatch):
+    monkeypatch.setattr(fingerprint, "DEFAULT_NETWORK_COUNTRY_CODE", "US")
+    monkeypatch.setattr(fingerprint, "DEFAULT_NETWORK_COUNTRY", "United States")
+    monkeypatch.setattr(fingerprint, "DEFAULT_NETWORK_REGION", "")
+    monkeypatch.setattr(fingerprint, "DEFAULT_NETWORK_CITY", "")
+    monkeypatch.setattr(fingerprint, "DEFAULT_NETWORK_TIMEZONE", "America/New_York")
+    monkeypatch.setattr(fingerprint, "DEFAULT_NETWORK_DNS_SERVERS", "")
+
+    network = declared_network_profile(proxy_url="http://proxy.example:8080")
+
+    assert network["source"] == "declared:env"
+    assert network["proxyConfigured"] is True
+    assert network["timezone"] == "America/New_York"
+    assert "network_profile_unverified" in network["warnings"]
+    assert any("proxy_network_metadata_unavailable" in w for w in network["warnings"])
