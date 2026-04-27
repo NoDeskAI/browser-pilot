@@ -18,10 +18,31 @@ _load_config() {
   [[ -f "$CONFIG_FILE" ]] || return 0
   local v
   v=$(grep -o '"api_url" *: *"[^"]*"' "$CONFIG_FILE" 2>/dev/null | head -1 | sed 's/.*: *"//;s/"//') || true
-  [[ -n "$v" ]] && API_URL="$v"
+  if [[ -n "$v" ]]; then
+    API_URL="$v"
+  fi
+  if [[ -n "${BPILOT_API_URL:-}" ]]; then
+    API_URL="$BPILOT_API_URL"
+  fi
+  return 0
+}
+
+_config_env_get() {
+  case "$1" in
+    api_url) printf '%s' "${BPILOT_API_URL:-}" ;;
+    api_token) printf '%s' "${BPILOT_API_TOKEN:-}" ;;
+    active_session) printf '%s' "${BPILOT_ACTIVE_SESSION:-}" ;;
+    *) printf '' ;;
+  esac
 }
 
 _config_get() {
+  local env_v
+  env_v="$(_config_env_get "$1")"
+  if [[ -n "$env_v" ]]; then
+    printf '%s' "$env_v"
+    return
+  fi
   [[ -f "$CONFIG_FILE" ]] || { echo ""; return; }
   grep -o "\"$1\" *: *\"[^\"]*\"" "$CONFIG_FILE" 2>/dev/null | head -1 | sed 's/.*: *"//;s/"//' || echo ""
 }
@@ -57,14 +78,14 @@ _esc() {
 }
 
 _resolve_url() {
-  local u="${API_URL_OPT:-$API_URL}"
+  local u="${API_URL_OPT:-${BPILOT_API_URL:-$API_URL}}"
   printf '%s' "${u%/}"
 }
 
 _sid() {
   local s="${SESSION_OPT:-$(_config_get active_session)}"
   if [[ -z "$s" ]]; then
-    echo "Error: No active session. Run: $CLI_NAME session use <id>" >&2
+    echo "Error: No session target. Pass --session <id> or run: $CLI_NAME session use <id>" >&2
     exit 1
   fi
   printf '%s' "$s"
@@ -72,18 +93,38 @@ _sid() {
 
 _api_get() {
   local path="$1"; shift
-  curl -sfS "$(_resolve_url)${path}" "$@"
+  local token
+  token="$(_config_get api_token)"
+  if [[ -n "$token" ]]; then
+    curl -sfS -H "Authorization: Bearer $token" "$(_resolve_url)${path}" "$@"
+  else
+    curl -sfS "$(_resolve_url)${path}" "$@"
+  fi
 }
 
 _api_post() {
   local path="$1" body="${2:-{\}}"
-  curl -sfS -X POST "$(_resolve_url)${path}" \
-    -H "Content-Type: application/json" -d "$body"
+  local token
+  token="$(_config_get api_token)"
+  if [[ -n "$token" ]]; then
+    curl -sfS -X POST "$(_resolve_url)${path}" \
+      -H "Authorization: Bearer $token" \
+      -H "Content-Type: application/json" -d "$body"
+  else
+    curl -sfS -X POST "$(_resolve_url)${path}" \
+      -H "Content-Type: application/json" -d "$body"
+  fi
 }
 
 _api_delete() {
   local path="$1"
-  curl -sfS -X DELETE "$(_resolve_url)${path}"
+  local token
+  token="$(_config_get api_token)"
+  if [[ -n "$token" ]]; then
+    curl -sfS -X DELETE -H "Authorization: Bearer $token" "$(_resolve_url)${path}"
+  else
+    curl -sfS -X DELETE "$(_resolve_url)${path}"
+  fi
 }
 
 _out() {
@@ -118,7 +159,11 @@ cmd_config_set() {
   fi
   key="${key//-/_}"
   _config_set_key "$key" "$val"
-  _green "$key = $val"
+  if [[ "$key" == "api_token" ]]; then
+    _green "$key = (set)"
+  else
+    _green "$key = $val"
+  fi
 }
 
 cmd_config_show() {
@@ -129,6 +174,8 @@ cmd_config_show() {
   _bold "api_url: $(_resolve_url)"
   local sess; sess=$(_config_get active_session)
   _bold "active_session: ${sess:-(not set)}"
+  local token; token=$(_config_get api_token)
+  _bold "api_token: $([[ -n "$token" ]] && echo "(set)" || echo "(not set)")"
   _dim "config: $CONFIG_FILE"
 }
 
@@ -181,7 +228,7 @@ cmd_session_stop() {
 }
 
 cmd_session_delete() {
-  local sid="${1:-}"
+  local sid="${1:-${SESSION_OPT:-}}"
   [[ -n "$sid" ]] || { echo "Usage: $CLI_NAME session delete <session-id>"; exit 1; }
   _api_delete "/api/sessions/$sid" | _out
 }
@@ -375,16 +422,24 @@ Usage: $CLI_NAME <command> [options]
 
 Config:
   config init                  Interactive setup
-  config set <key> <value>     Set config value (api-url, active-session)
+  config set <key> <value>     Set config value (api-url, active-session, api-token)
   config show                  Show current configuration
+
+Environment:
+  BPILOT_API_URL               Override API URL for the current shell
+  BPILOT_API_TOKEN             Use API token for the current shell
+  BPILOT_ACTIVE_SESSION        Override active session for the current shell
 
 Sessions:
   session list                 List all sessions
   session create [--name <n>]  Create a new session
   session use <id>             Set active session
-  session start [id]           Start browser container
-  session stop [id]            Stop browser container
+  session start <id>           Start browser container
+  session stop <id>            Stop browser container
   session delete <id>          Delete session and container
+
+Session target:
+  Commands may omit <id> after 'session use <id>', or use --session/-s.
 
 Browser (require active session):
   navigate <url>               Go to URL
