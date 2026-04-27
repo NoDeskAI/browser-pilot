@@ -207,11 +207,12 @@ async function onPauseContainer() {
           class="ml-2 font-normal uppercase text-[10px] px-1.5"
           :class="{
             'bg-green-500/10 text-green-500 border-green-500/20': activeSession.containerStatus === 'running',
+            'bg-blue-500/10 text-blue-500 border-blue-500/20': activeSession.containerStatus === 'starting',
             'bg-yellow-500/10 text-yellow-500 border-yellow-500/20': activeSession.containerStatus === 'paused',
-            'text-muted-foreground': activeSession.containerStatus !== 'running' && activeSession.containerStatus !== 'paused'
+            'text-muted-foreground': activeSession.containerStatus !== 'running' && activeSession.containerStatus !== 'paused' && activeSession.containerStatus !== 'starting'
           }"
         >
-          {{ activeSession.containerStatus === 'running' ? t('session.running') : activeSession.containerStatus === 'paused' ? t('session.paused') : t('session.stopped') }}
+          {{ activeSession.containerStatus === 'running' ? t('session.running') : activeSession.containerStatus === 'starting' ? t('session.starting') : activeSession.containerStatus === 'paused' ? t('session.paused') : t('session.stopped') }}
         </Badge>
       </div>
 
@@ -235,15 +236,15 @@ async function onPauseContainer() {
           <TooltipTrigger as-child>
             <Button
               variant="default" size="sm" class="h-8 gap-1.5"
-              :disabled="containerActionLoading"
+              :disabled="containerActionLoading || activeSession.containerStatus === 'starting'"
               @click="onStartContainer"
             >
-              <Loader2 v-if="containerActionLoading" class="size-3.5 animate-spin" />
+              <Loader2 v-if="containerActionLoading || activeSession.containerStatus === 'starting'" class="size-3.5 animate-spin" />
               <Play v-else class="size-3.5" />
-              {{ containerActionLoading ? t('session.starting') : (activeSession.containerStatus === 'paused' ? t('session.resumeFromHibernate') : t('session.startContainer')) }}
+              {{ containerActionLoading || activeSession.containerStatus === 'starting' ? t('session.starting') : (activeSession.containerStatus === 'paused' ? t('session.resumeFromHibernate') : t('session.startContainer')) }}
             </Button>
           </TooltipTrigger>
-          <TooltipContent>{{ activeSession.containerStatus === 'paused' ? t('session.resumeFromHibernate') : t('session.startContainer') }}</TooltipContent>
+          <TooltipContent>{{ activeSession.containerStatus === 'starting' ? t('session.starting') : activeSession.containerStatus === 'paused' ? t('session.resumeFromHibernate') : t('session.startContainer') }}</TooltipContent>
         </Tooltip>
 
         <Tooltip>
@@ -339,6 +340,11 @@ async function onPauseContainer() {
         <p class="text-xs mt-1 opacity-60 mb-4 max-w-sm text-center">
           {{ activeSession?.containerStatus === 'paused' ? t('app.browserHibernatedHint') : t('app.containerStoppedHint') }}
         </p>
+      </div>
+      <div v-else-if="sessions.activeId && !vncUrl && sessions.containerLoading" class="absolute inset-0 flex flex-col items-center justify-center text-muted-foreground">
+        <Loader2 class="size-8 mb-3 animate-spin opacity-70" />
+        <p class="text-sm">{{ t('app.startingBrowser') }}</p>
+        <p class="text-xs mt-1 opacity-60 max-w-sm text-center">{{ t('app.startingBrowserHint') }}</p>
       </div>
     </div>
     <BrowserLogPanel :session-id="sessions.activeId" />

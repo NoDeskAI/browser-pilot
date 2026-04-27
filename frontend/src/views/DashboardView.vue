@@ -293,11 +293,12 @@ async function onPauseContainer(id: string) {
               class="shrink-0 font-medium uppercase text-[10px] px-2 py-0.5"
               :class="{
                 'bg-green-500/10 text-green-500 border-green-500/20': s.containerStatus === 'running',
+                'bg-blue-500/10 text-blue-500 border-blue-500/20': s.containerStatus === 'starting',
                 'bg-yellow-500/10 text-yellow-500 border-yellow-500/20': s.containerStatus === 'paused',
-                'bg-muted/50 text-muted-foreground border-border': s.containerStatus !== 'running' && s.containerStatus !== 'paused'
+                'bg-muted/50 text-muted-foreground border-border': s.containerStatus !== 'running' && s.containerStatus !== 'paused' && s.containerStatus !== 'starting'
               }"
             >
-              {{ s.containerStatus === 'running' ? t('session.running') : s.containerStatus === 'paused' ? t('session.paused') : t('session.stopped') }}
+              {{ s.containerStatus === 'running' ? t('session.running') : s.containerStatus === 'starting' ? t('session.starting') : s.containerStatus === 'paused' ? t('session.paused') : t('session.stopped') }}
             </Badge>
           </div>
 
@@ -351,14 +352,14 @@ async function onPauseContainer(id: string) {
                 <TooltipTrigger as-child>
                   <Button
                     variant="ghost" size="sm" class="size-7 p-0 text-muted-foreground hover:text-foreground"
-                    :disabled="starting[s.id]"
+                    :disabled="starting[s.id] || s.containerStatus === 'starting'"
                     @click.stop="onStartContainer(s.id)"
                   >
-                    <Loader2 v-if="starting[s.id]" class="size-3.5 animate-spin" />
+                    <Loader2 v-if="starting[s.id] || s.containerStatus === 'starting'" class="size-3.5 animate-spin" />
                     <Play v-else class="size-3.5" />
                   </Button>
                 </TooltipTrigger>
-                <TooltipContent>{{ s.containerStatus === 'paused' ? t('session.resumeFromHibernate') : t('session.startContainer') }}</TooltipContent>
+                <TooltipContent>{{ s.containerStatus === 'starting' ? t('session.starting') : s.containerStatus === 'paused' ? t('session.resumeFromHibernate') : t('session.startContainer') }}</TooltipContent>
               </Tooltip>
 
               <AlertDialog :open="deleteDialogOpen[s.id]" @update:open="v => { if (v || !deleting[s.id]) deleteDialogOpen[s.id] = v }">

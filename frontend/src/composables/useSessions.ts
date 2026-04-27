@@ -66,6 +66,18 @@ const state = reactive<SessionsState>({
   devicePresets: [],
 })
 
+const startingSessionIds = new Set<string>()
+
+function restoreContainerStatus(status: Session['containerStatus'] | undefined): Session['containerStatus'] {
+  return status && status !== 'starting' ? status : 'not_found'
+}
+
+function clearStartingSoon(id: string): void {
+  window.setTimeout(() => {
+    startingSessionIds.delete(id)
+  }, 15000)
+}
+
 async function fetchDevicePresets(): Promise<void> {
   try {
     const res = await api('/api/device-presets')
@@ -80,17 +92,38 @@ async function fetchSessions(): Promise<void> {
   try {
     const res = await api('/api/sessions')
     const data = await res.json()
-    state.sessions = (data.sessions || []).map((s: any) => ({
-      ...s,
-      currentUrl: s.currentUrl || '',
-      currentTitle: s.currentTitle || '',
-      containerStatus: s.containerStatus || 'not_found',
-      ports: s.ports || null,
-      devicePreset: s.devicePreset || '',
-      proxyUrl: s.proxyUrl || '',
-      fingerprintProfile: s.fingerprintProfile || null,
-      browserLang: s.browserLang || 'zh-CN',
-    }))
+    const localById = new Map(state.sessions.map(s => [s.id, s]))
+    const seenIds = new Set<string>()
+    state.sessions = (data.sessions || []).map((s: any) => {
+      const local = localById.get(s.id)
+      const containerStatus: Session['containerStatus'] = (() => {
+        const backendStatus = s.containerStatus || 'not_found'
+        seenIds.add(s.id)
+        if (backendStatus === 'running') {
+          startingSessionIds.delete(s.id)
+          return backendStatus
+        }
+        if (startingSessionIds.has(s.id)) {
+          return local?.containerStatus === 'running' ? 'running' : 'starting'
+        }
+        return backendStatus
+      })()
+
+      return {
+        ...s,
+        currentUrl: s.currentUrl || '',
+        currentTitle: s.currentTitle || '',
+        containerStatus,
+        ports: containerStatus === 'running' ? (s.ports || local?.ports || null) : (s.ports || null),
+        devicePreset: s.devicePreset || '',
+        proxyUrl: s.proxyUrl || '',
+        fingerprintProfile: s.fingerprintProfile || local?.fingerprintProfile || null,
+        browserLang: s.browserLang || 'zh-CN',
+      }
+    })
+    for (const id of [...startingSessionIds]) {
+      if (!seenIds.has(id)) startingSessionIds.delete(id)
+    }
   } catch {
     // silently ignore
   }
@@ -136,7 +169,7 @@ async function createSession(name?: string, chromeVersion?: string): Promise<Ses
     updatedAt: new Date().toISOString(),
     currentUrl: '',
     currentTitle: '',
-    containerStatus: 'not_found',
+    containerStatus: 'starting',
     ports: null,
     fingerprintProfile: data.fingerprintProfile || null,
     browserLang: data.browserLang || browserLang,
@@ -149,11 +182,18 @@ async function _startContainerForSession(id: string): Promise<void> {
   const sess = state.sessions.find(s => s.id === id)
   if (sess?.containerStatus === 'paused') return
 
+  const previousStatus = sess?.containerStatus
+  startingSessionIds.add(id)
+  if (sess && sess.containerStatus !== 'running') {
+    sess.containerStatus = 'starting'
+  }
   state.containerLoading = true
+  let started = false
   try {
     const res = await api(`/api/sessions/${id}/container/start`, { method: 'POST' })
     const data = await res.json()
     if (data.ok && data.ports) {
+      started = true
       state.activePorts = {
         seleniumPort: data.ports.selenium_port,
         vncPort: data.ports.vnc_port,
@@ -164,10 +204,17 @@ async function _startContainerForSession(id: string): Promise<void> {
         s.ports = data.ports
         if (data.fingerprintProfile) s.fingerprintProfile = data.fingerprintProfile
       }
+    } else {
+      const current = state.sessions.find(s => s.id === id)
+      if (current) current.containerStatus = restoreContainerStatus(previousStatus)
     }
   } catch {
+    const current = state.sessions.find(s => s.id === id)
+    if (current) current.containerStatus = restoreContainerStatus(previousStatus)
     toast.error(i18n.global.t('app.containerStartError'))
   } finally {
+    if (started) clearStartingSoon(id)
+    else startingSessionIds.delete(id)
     state.containerLoading = false
   }
 }
@@ -193,12 +240,19 @@ async function switchSession(id: string): Promise<void> {
 async function startContainer(id: string): Promise<void> {
   const s = state.sessions.find(s => s.id === id)
   const isActive = state.activeId === id
+  const previousStatus = s?.containerStatus
 
+  startingSessionIds.add(id)
+  if (s && s.containerStatus !== 'running') {
+    s.containerStatus = 'starting'
+  }
   if (isActive) state.containerLoading = true
+  let started = false
   try {
     const res = await api(`/api/sessions/${id}/container/start`, { method: 'POST' })
     const data = await res.json()
     if (data.ok && data.ports) {
+      started = true
       if (s) {
         s.containerStatus = 'running'
         s.ports = data.ports
@@ -210,8 +264,17 @@ async function startContainer(id: string): Promise<void> {
           vncPort: data.ports.vnc_port,
         }
       }
+    } else {
+      const current = state.sessions.find(s => s.id === id)
+      if (current) current.containerStatus = restoreContainerStatus(previousStatus)
     }
+  } catch (err) {
+    const current = state.sessions.find(s => s.id === id)
+    if (current) current.containerStatus = restoreContainerStatus(previousStatus)
+    throw err
   } finally {
+    if (started) clearStartingSoon(id)
+    else startingSessionIds.delete(id)
     if (isActive) state.containerLoading = false
   }
 }
@@ -219,6 +282,7 @@ async function startContainer(id: string): Promise<void> {
 async function pauseContainer(id: string): Promise<void> {
   try {
     await api(`/api/sessions/${id}/container/pause`, { method: 'POST' })
+    startingSessionIds.delete(id)
     const s = state.sessions.find(s => s.id === id)
     if (s) {
       s.containerStatus = 'paused'
@@ -235,6 +299,7 @@ async function pauseContainer(id: string): Promise<void> {
 async function stopContainer(id: string): Promise<void> {
   try {
     await api(`/api/sessions/${id}/container/stop`, { method: 'POST' })
+    startingSessionIds.delete(id)
     const s = state.sessions.find(s => s.id === id)
     if (s) {
       s.containerStatus = 'exited'
@@ -338,6 +403,7 @@ async function regenerateFingerprint(id: string): Promise<void> {
 
 async function deleteSession(id: string): Promise<void> {
   await api(`/api/sessions/${id}`, { method: 'DELETE' })
+  startingSessionIds.delete(id)
   state.sessions = state.sessions.filter(s => s.id !== id)
   if (state.activeId === id) {
     state.activePorts = null
