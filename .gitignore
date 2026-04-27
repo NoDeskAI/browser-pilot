@@ -16,5 +16,6 @@ __pycache__/
 
 # Runtime
 logs/
+artifacts/
 .env
 *.pid
