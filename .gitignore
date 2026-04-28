@@ -19,5 +19,7 @@ logs/
 artifacts/
 scratch/
 release-deck/
+data/network-egress/
+tmp/
 .env
 *.pid
