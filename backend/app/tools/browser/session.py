@@ -21,10 +21,43 @@ logger = logging.getLogger("browser.session")
 _client: httpx.AsyncClient | None = None
 
 
+def _response_preview(text: str, limit: int = 240) -> str:
+    raw = (text or "").strip()
+    if not raw:
+        return "<empty>"
+    return raw[:limit].replace("\n", "\\n")
+
+
+def _decode_json_response(resp: httpx.Response, *, url_path: str) -> dict[str, Any]:
+    try:
+        return resp.json()
+    except ValueError as exc:
+        content_type = resp.headers.get("content-type", "")
+        preview = _response_preview(resp.text)
+        raise RuntimeError(
+            f"WebDriver returned non-JSON response for {url_path} "
+            f"(HTTP {resp.status_code}, content-type={content_type or 'unknown'}, body={preview})"
+        ) from exc
+
+
+def _raise_for_webdriver_error(data: dict[str, Any]) -> None:
+    value = data.get("value", data)
+    if isinstance(value, dict) and value.get("error"):
+        raise RuntimeError(f"WebDriver {value['error']}: {value.get('message', '')}")
+
+
+def _raise_for_http_error(resp: httpx.Response, *, url_path: str) -> None:
+    if resp.status_code >= 400:
+        preview = _response_preview(resp.text)
+        raise RuntimeError(f"WebDriver HTTP {resp.status_code} for {url_path}: {preview}")
+
+
 def _get_client() -> httpx.AsyncClient:
     global _client
     if _client is None or _client.is_closed:
-        _client = httpx.AsyncClient(timeout=30.0)
+        # Internal WebDriver calls must never be routed through deployment-level
+        # HTTP_PROXY/HTTPS_PROXY settings.
+        _client = httpx.AsyncClient(timeout=30.0, trust_env=False)
     return _client
 
 
@@ -57,16 +90,17 @@ async def wd_fetch(
 
     try:
         resp = await client.request(method, url, timeout=timeout, **kwargs)
-        data = resp.json()
+        data = _decode_json_response(resp, url_path=url_path)
+        _raise_for_webdriver_error(data)
+        _raise_for_http_error(resp, url_path=url_path)
     except httpx.TimeoutException:
         raise RuntimeError(f"WebDriver timeout ({timeout}s): {url_path}")
+    except RuntimeError:
+        raise
     except Exception as exc:
         raise RuntimeError(f"WebDriver request failed: {exc}") from exc
 
-    value = data.get("value", data)
-    if isinstance(value, dict) and value.get("error"):
-        raise RuntimeError(f"WebDriver {value['error']}: {value.get('message', '')}")
-    return value
+    return data.get("value", data)
 
 
 async def _cleanup_stale_session(base: str, sid: str) -> None:
@@ -82,7 +116,7 @@ async def _find_existing_session(base: str) -> str | None:
     try:
         client = _get_client()
         resp = await client.get(f"{base}/status", timeout=5)
-        status = resp.json()
+        status = _decode_json_response(resp, url_path="/status")
         for node in status.get("value", {}).get("nodes", []):
             for slot in node.get("slots", []):
                 sid = (slot.get("session") or {}).get("sessionId")
@@ -246,8 +280,16 @@ async def _ensure_session_impl(bs: BrowserSession) -> str:
         },
         timeout=15,
     )
-    data = resp.json()
-    bs.wd_session_id = data["value"]["sessionId"]
+    data = _decode_json_response(resp, url_path="/session")
+    _raise_for_webdriver_error(data)
+    _raise_for_http_error(resp, url_path="/session")
+    value = data.get("value")
+    if not isinstance(value, dict) or not value.get("sessionId"):
+        raise RuntimeError(
+            "WebDriver session creation returned unexpected response: "
+            f"{_response_preview(json.dumps(data, separators=(',', ':')))}"
+        )
+    bs.wd_session_id = value["sessionId"]
     logger.info("WebDriver session attached: %s", bs.wd_session_id)
     return bs.wd_session_id
 

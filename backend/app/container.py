@@ -1169,7 +1169,8 @@ async def get_all_container_statuses() -> dict[str, str]:
 async def _wait_grid_ready(selenium_port: int) -> None:
     url = f"http://{DOCKER_HOST_ADDR}:{selenium_port}/status"
     elapsed = 0.0
-    async with httpx.AsyncClient(timeout=3) as client:
+    # This is an internal Docker-host request; deployment proxy env vars must not intercept it.
+    async with httpx.AsyncClient(timeout=3, trust_env=False) as client:
         while elapsed < GRID_READY_TIMEOUT:
             try:
                 resp = await client.get(url)

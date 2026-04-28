@@ -1,0 +1,24 @@
+---
+description: 写代码和改构建配置时，必须站在最小用户环境（CE 裸 clone）视角验证，不能只在自己的全量开发环境里通过
+alwaysApply: true
+---
+
+# 从用户视角写代码
+
+开发者的环境 ≠ 用户的环境。开发者有子模块、有 .env、有本地缓存、有完整数据；用户可能只有 `git clone` 后的裸仓库、空数据库、零配置。**每一行代码都要假设运行在最小环境里。**
+
+## 规则
+
+1. **可选依赖必须有降级路径**——EE 模块、第三方服务、特定环境变量、本地文件，任何不保证存在的东西，代码都必须处理"它不在"的情况。`import` 要有 try/except 或条件守卫，配置要有默认值，UI 要有空状态。
+2. **可选组件显式 opt-in**——不能让功能隐式依赖可选组件的存在。默认路径必须是不含可选组件的最小版本（CE）。
+3. **文件系统探测不可靠**——`mkdir -p` 会创建空目录骗过 `existsSync`，Docker COPY 会传播空目录。如果用文件存在性做判断，检查具体文件而非目录。
+4. **构建期解析必须隔离可选模块**——`if (__EE__) import('@ee/...')` 不是 CE 构建隔离；Vite/Rollup 仍会解析 import 路径。所有 `@ee/*` import 在 CE 模式下都必须有可解析的 stub/alias。
+5. **改完代码后做环境差异检查**——在脑中走一遍"CE 用户裸 clone → docker compose build → 首次启动"的完整路径：每一个 COPY / import / 路径引用 / API 调用，在裸环境里能工作吗？
+
+## 本项目特定
+
+- `ee/` 是 git 子模块，CE 用户没有。Dockerfile 用 `mkdir -p ee/frontend ee/backend` 保证 COPY 不报错，但 **版本检测必须通过 `EDITION` 环境变量**，不能靠 `ee/` 目录是否存在。
+- 前端 `vite.config.ts`：`process.env.EDITION` 优先，未设置时降级为 `existsSync(resolve(eeDir, 'index.ts'))`。CE 模式下 `@ee` 必须指向 `frontend/src/ee-stubs`，不能省略 alias。
+- 后端 `config.py`：`_env("EDITION", "")` 优先，未设置时降级为文件系统检测。
+- Docker 构建：`ARG EDITION=ce`，默认 CE。EE 通过 `.env` 中 `EDITION=ee` 或 `--build-arg EDITION=ee` 显式启用。
+- 涉及 EE import、前端构建配置、Dockerfile、可选模块时，必须至少跑一次 `EDITION=ce npm run build`；不能用本地带 `ee` submodule 的默认构建结果替代 CE 验证。
