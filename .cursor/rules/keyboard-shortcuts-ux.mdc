@@ -1,0 +1,36 @@
+---
+description: 快捷键交互必须有可见 UI 提示，并使用统一 kbd 样式
+globs: "*.vue, *.ts, *.tsx, *.css"
+---
+
+# 快捷键 UX 规范
+
+所有新增或修改的快捷键交互，都必须同时更新用户可见的 UI 提示。不能只实现键盘监听而不在界面上标注快捷键。
+
+## 规则
+
+1. **快捷键必须可见**：有快捷键的按钮、菜单项、Tooltip 或 Dialog 操作，必须在对应操作旁展示快捷键提示。
+2. **统一使用 kbd 样式**：快捷键提示使用 `<kbd data-slot="kbd">...</kbd>`，不要在业务组件里手写背景、边框、字号、阴影或额外间距等 Tailwind 样式。
+3. **文案走 i18n**：用户可见的快捷键文本必须复用或新增 locale key；不要在 Vue 模板中硬编码英文文案。
+4. **Enter/Return 用图标**：确认类回车快捷键优先使用回车/Return 图标，例如 `CornerDownLeft`；保留 `sr-only` 文案用于可访问性。
+5. **ESC 用文字**：取消/关闭类快捷键显示为 `ESC`，不要写成 `Esc` 或其它大小写形式。
+6. **文字不替代状态**：快捷键提示只标注快捷键，不改变按钮主文案；例如 `删除 + ↵`，不要把按钮文案改成“回车删除”。
+7. **Keycap 必须轻量**：快捷键提示是辅助信息，样式应跟随当前按钮颜色，只使用 10% 透明叠色底；不要加边框，不要做成按钮里的第二个按钮。
+8. **底色算法固定**：keycap 底色基于 `currentColor` 计算，使用类似 `color-mix(in srgb, currentColor var(--kbd-bg-strength), transparent)` 的算法；默认强度为 10%，深色背景会被浅色前景提亮，浅色背景会被深色前景压暗。需要微调时只改全局 `--kbd-bg-strength`。
+
+## 示例
+
+```vue
+<Button>
+  {{ t('session.confirmDelete') }}
+  <kbd data-slot="kbd" data-icon="true">
+    <CornerDownLeft aria-hidden="true" />
+    <span class="sr-only">{{ t('session.shortcutEnter') }}</span>
+  </kbd>
+</Button>
+
+<Button variant="outline">
+  {{ t('session.cancel') }}
+  <kbd data-slot="kbd">{{ t('session.shortcutEscape') }}</kbd>
+</Button>
+```

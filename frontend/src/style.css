@@ -133,6 +133,39 @@
   }
 }
 
+@layer components {
+  kbd[data-slot="kbd"] {
+    --kbd-color: currentColor;
+    --kbd-bg-strength: 10%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 0.9375rem;
+    min-width: 1rem;
+    padding: 0 0.3125rem;
+    border: 0;
+    border-radius: calc(var(--radius) - 1px);
+    background: color-mix(in srgb, var(--kbd-color) var(--kbd-bg-strength), transparent);
+    color: color-mix(in srgb, var(--kbd-color) 78%, transparent);
+    font-family: var(--font-sans);
+    font-size: 0.625rem;
+    font-weight: 500;
+    line-height: 1;
+    letter-spacing: 0;
+    white-space: nowrap;
+  }
+
+  kbd[data-slot="kbd"][data-icon="true"] {
+    width: 1rem;
+    padding: 0;
+  }
+
+  kbd[data-slot="kbd"] svg {
+    width: 0.75rem;
+    height: 0.75rem;
+  }
+}
+
 /* Custom Scrollbar for Webkit */
 ::-webkit-scrollbar {
   width: 6px;

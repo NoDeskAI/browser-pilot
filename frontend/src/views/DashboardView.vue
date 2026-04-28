@@ -4,7 +4,7 @@ import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useSessions } from '../composables/useSessions'
 import { useNotify } from '../composables/useNotify'
-import { Plus, Play, Pause, Trash2, Monitor, Globe, Hash, Clock, RefreshCw, Loader2 } from 'lucide-vue-next'
+import { Plus, Play, Pause, Trash2, Monitor, Globe, Hash, Clock, RefreshCw, Loader2, CornerDownLeft } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
@@ -244,7 +244,7 @@ async function onPauseContainer(id: string) {
             <Loader2 v-if="creating" class="size-4 animate-spin" />
             <Plus v-else class="size-4" />
             {{ creating ? t('session.creating') : t('dashboard.create') }}
-            <kbd v-if="!creating" class="ml-1 text-[10px] opacity-60 font-sans tracking-widest">{{ shortcutLabel }}</kbd>
+            <kbd v-if="!creating" data-slot="kbd">{{ shortcutLabel }}</kbd>
           </Button>
           <Tooltip v-else>
             <TooltipTrigger as-child>
@@ -252,7 +252,7 @@ async function onPauseContainer(id: string) {
                 <Button disabled class="gap-2">
                   <Plus class="size-4" />
                   {{ t('dashboard.create') }}
-                  <kbd class="ml-1 text-[10px] opacity-60 font-sans tracking-widest">{{ shortcutLabel }}</kbd>
+                  <kbd data-slot="kbd">{{ shortcutLabel }}</kbd>
                 </Button>
               </span>
             </TooltipTrigger>
@@ -379,7 +379,7 @@ async function onPauseContainer(id: string) {
                   <AlertDialogFooter>
                     <AlertDialogCancel :disabled="deleting[s.id]">
                       {{ t('session.cancel') }}
-                      <kbd v-if="!deleting[s.id]" data-slot="kbd" class="ml-1 text-[10px] opacity-60 font-sans tracking-widest">
+                      <kbd v-if="!deleting[s.id]" data-slot="kbd">
                         {{ t('session.shortcutEscape') }}
                       </kbd>
                     </AlertDialogCancel>
@@ -391,8 +391,9 @@ async function onPauseContainer(id: string) {
                     >
                       <Loader2 v-if="deleting[s.id]" class="size-4 animate-spin" />
                       {{ deleting[s.id] ? t('session.deleting') : t('session.confirmDelete') }}
-                      <kbd v-if="!deleting[s.id]" data-slot="kbd" class="ml-1 text-[10px] opacity-60 font-sans tracking-widest">
-                        {{ t('session.shortcutEnter') }}
+                      <kbd v-if="!deleting[s.id]" data-slot="kbd" data-icon="true">
+                        <CornerDownLeft aria-hidden="true" />
+                        <span class="sr-only">{{ t('session.shortcutEnter') }}</span>
                       </kbd>
                     </Button>
                   </AlertDialogFooter>
@@ -411,7 +412,7 @@ async function onPauseContainer(id: string) {
           <Loader2 v-if="creating" class="size-4 animate-spin" />
           <Plus v-else class="size-4" />
           {{ creating ? t('session.creating') : t('dashboard.create') }}
-          <kbd v-if="!creating" class="ml-1 text-[10px] opacity-60 font-sans tracking-widest">{{ shortcutLabel }}</kbd>
+          <kbd v-if="!creating" data-slot="kbd">{{ shortcutLabel }}</kbd>
         </Button>
         <Tooltip v-else>
           <TooltipTrigger as-child>

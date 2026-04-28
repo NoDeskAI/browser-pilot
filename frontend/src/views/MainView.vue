@@ -5,7 +5,7 @@ import { useI18n } from 'vue-i18n'
 import { useSessions } from '../composables/useSessions'
 import { useNotify } from '../composables/useNotify'
 import { api } from '../lib/api'
-import { Play, Pause, Trash2, ChevronRight, Monitor, Key, Loader2, Copy, Check } from 'lucide-vue-next'
+import { Play, Pause, Trash2, ChevronRight, Monitor, Key, Loader2, Copy, Check, CornerDownLeft } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -274,15 +274,16 @@ async function onPauseContainer() {
             <AlertDialogFooter>
               <AlertDialogCancel :disabled="deleting">
                 {{ t('session.cancel') }}
-                <kbd v-if="!deleting" data-slot="kbd" class="ml-1 text-[10px] opacity-60 font-sans tracking-widest">
+                <kbd v-if="!deleting" data-slot="kbd">
                   {{ t('session.shortcutEscape') }}
                 </kbd>
               </AlertDialogCancel>
               <Button ref="deleteButtonRef" variant="destructive" :disabled="deleting" @click="onDeleteSession">
                 <Loader2 v-if="deleting" class="size-4 animate-spin" />
                 {{ deleting ? t('session.deleting') : t('session.confirmDelete') }}
-                <kbd v-if="!deleting" data-slot="kbd" class="ml-1 text-[10px] opacity-60 font-sans tracking-widest">
-                  {{ t('session.shortcutEnter') }}
+                <kbd v-if="!deleting" data-slot="kbd" data-icon="true">
+                  <CornerDownLeft aria-hidden="true" />
+                  <span class="sr-only">{{ t('session.shortcutEnter') }}</span>
                 </kbd>
               </Button>
             </AlertDialogFooter>

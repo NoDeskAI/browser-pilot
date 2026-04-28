@@ -59,7 +59,7 @@ export default {
     cancel: 'Cancel',
     confirmDelete: 'Delete',
     shortcutEnter: 'Enter',
-    shortcutEscape: 'Esc',
+    shortcutEscape: 'ESC',
     deleting: 'Deleting…',
     creating: 'Creating…',
     starting: 'Starting…',
