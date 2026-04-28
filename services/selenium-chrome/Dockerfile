@@ -45,9 +45,9 @@ RUN if [ ! -f /usr/lib/chromium/locales/zh-CN.pak ]; then \
             || echo "WARN: chromium-l10n not installed, browser UI will be English"; \
         fi; \
     fi
-RUN mkdir -p /etc/chromium/policies/managed && \
-    echo '{"RestoreOnStartup":5,"CommandLineFlagSecurityWarningsEnabled":false,"DnsOverHttpsMode":"off","BuiltInDnsClientEnabled":false}' \
-    > /etc/chromium/policies/managed/default_homepage.json
+RUN mkdir -p /etc/chromium/policies/managed /etc/opt/chrome/policies/managed && \
+    printf '%s\n' '{"RestoreOnStartup":5,"CommandLineFlagSecurityWarningsEnabled":false,"DnsOverHttpsMode":"off","BuiltInDnsClientEnabled":false,"PasswordManagerEnabled":false}' \
+    | tee /etc/chromium/policies/managed/browser-pilot.json /etc/opt/chrome/policies/managed/browser-pilot.json >/dev/null
 COPY start-browser.sh /opt/bin/start-browser.sh
 RUN chmod +x /opt/bin/start-browser.sh
 COPY browser.conf /etc/supervisor/conf.d/browser.conf

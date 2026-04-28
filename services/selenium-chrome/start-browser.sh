@@ -19,6 +19,32 @@ fi
 rm -f /home/seluser/chrome-data/manual/SingletonLock \
       /home/seluser/chrome-data/manual/SingletonCookie \
       /home/seluser/chrome-data/manual/SingletonSocket 2>/dev/null
+PREF_PATH="/home/seluser/chrome-data/manual/Default/Preferences"
+mkdir -p "$(dirname "$PREF_PATH")"
+PREF_PATH="$PREF_PATH" /usr/bin/python3 - <<'PY'
+import json
+import os
+
+path = os.environ["PREF_PATH"]
+prefs = {}
+try:
+    with open(path, encoding="utf-8") as f:
+        prefs = json.load(f)
+except (FileNotFoundError, json.JSONDecodeError):
+    prefs = {}
+
+prefs["credentials_enable_service"] = False
+profile = prefs.get("profile")
+if not isinstance(profile, dict):
+    profile = {}
+    prefs["profile"] = profile
+profile["password_manager_enabled"] = False
+
+tmp_path = f"{path}.tmp"
+with open(tmp_path, "w", encoding="utf-8") as f:
+    json.dump(prefs, f, separators=(",", ":"))
+os.replace(tmp_path, path)
+PY
 W=${SE_SCREEN_WIDTH:-1280}
 H=${SE_SCREEN_HEIGHT:-800}
 LANG_CODE=$(cat /tmp/browser-lang 2>/dev/null || echo "${BROWSER_LANG:-zh-CN}")
