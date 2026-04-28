@@ -6,6 +6,7 @@ import vue from '@vitejs/plugin-vue'
 import tailwindcss from '@tailwindcss/vite'
 
 const eeDir = resolve(__dirname, '../ee/frontend')
+const eeStubDir = resolve(__dirname, './src/ee-stubs')
 const edition = process.env.EDITION
 const hasEE = edition ? edition === 'ee' : existsSync(resolve(eeDir, 'index.ts'))
 
@@ -15,7 +16,7 @@ export default defineConfig({
     alias: {
       '@': path.resolve(__dirname, './src'),
       'lucide-vue-next': path.resolve(__dirname, './node_modules/lucide-vue-next'),
-      ...(hasEE ? { '@ee': eeDir } : {}),
+      '@ee': hasEE ? eeDir : eeStubDir,
     },
     dedupe: ['vue', 'vue-router', 'vue-i18n'],
   },

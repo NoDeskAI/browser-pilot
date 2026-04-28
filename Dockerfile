@@ -29,7 +29,7 @@ COPY backend/ ./
 RUN pip install --no-cache-dir .
 
 COPY --from=context /ctx/ee/ /app/ee/
-RUN if [ -f /app/ee/backend/requirements.txt ]; then pip install --no-cache-dir -r /app/ee/backend/requirements.txt; fi
+RUN if [ "$EDITION" = "ee" ] && [ -f /app/ee/backend/requirements.txt ]; then pip install --no-cache-dir -r /app/ee/backend/requirements.txt; fi
 COPY --from=frontend /build/dist /app/static
 
 EXPOSE 8000
