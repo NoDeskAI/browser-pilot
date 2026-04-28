@@ -58,8 +58,14 @@ def _base_image_for(ver: str) -> str:
     return f"selenium/standalone-chrome:{ver}"
 
 
-def _image_tag_for(major: int) -> str:
-    return f"browser-pilot-selenium:chrome-{major}"
+def _is_full_chrome_version(ver: str) -> bool:
+    return bool(re.fullmatch(r"\d+\.\d+\.\d+\.\d+", ver.strip()))
+
+
+def _image_tag_for(ver_tag: str, image_id: str) -> str:
+    slug = re.sub(r"[^A-Za-z0-9_.-]+", "-", ver_tag.strip()).strip(".-")
+    slug = slug[:80] or "unknown"
+    return f"browser-pilot-selenium:chrome-{slug}-{image_id[:8]}"
 
 
 async def _check_tag_exists(repo: str, tag: str) -> bool:
@@ -93,6 +99,7 @@ async def _run(cmd: str, timeout: float = 600) -> tuple[str, str, int]:
 
 async def _do_build(
     image_id: str,
+    tenant_id: str,
     base_image: str,
     image_tag: str,
     major: int,
@@ -150,13 +157,50 @@ async def _do_build(
             pass
         return
 
-    await pool.execute(
-        "UPDATE browser_images SET status = 'ready', chrome_version = $1, build_log = $2 WHERE id = $3",
-        chrome_version or f"{major}.0.0.0",
-        f"Build OK. Detected version: {chrome_version or 'unknown'}",
-        image_id,
-    )
-    logger.info("Image built: %s -> Chrome %s", image_tag, chrome_version)
+    detected_version = chrome_version or f"{major}.0.0.0"
+    duplicate_image_tag = ""
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute(
+                "SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))",
+                tenant_id,
+                detected_version,
+            )
+            duplicate = await conn.fetchrow(
+                "SELECT id, image_tag FROM browser_images "
+                "WHERE tenant_id = $1 AND chrome_version = $2 AND status = 'ready' AND id <> $3 "
+                "ORDER BY created_at DESC LIMIT 1",
+                tenant_id,
+                detected_version,
+                image_id,
+            )
+            if duplicate:
+                await conn.execute(
+                    "UPDATE browser_images SET status = 'failed', build_log = $1 WHERE id = $2",
+                    f"Chrome {detected_version} is already built.",
+                    image_id,
+                )
+                duplicate_image_tag = duplicate["image_tag"]
+            else:
+                await conn.execute(
+                    "UPDATE browser_images SET status = 'ready', chrome_version = $1, build_log = $2 WHERE id = $3",
+                    detected_version,
+                    f"Build OK. Detected version: {detected_version}",
+                    image_id,
+                )
+    if duplicate_image_tag:
+        logger.info(
+            "Duplicate Chrome version detected for %s: %s already provided by %s",
+            image_tag,
+            detected_version,
+            duplicate_image_tag,
+        )
+        try:
+            await _run(f"docker rmi {image_tag}", timeout=30)
+        except Exception:
+            pass
+        return
+    logger.info("Image built: %s -> Chrome %s", image_tag, detected_version)
 
 
 class BuildBody(BaseModel):
@@ -169,14 +213,19 @@ async def build_image(
     user: CurrentUser = Depends(require_role(["superadmin", "admin"])),
 ):
     raw = body.chromeVersion.strip()
-    major = int(raw.split(".")[0])
+    if not raw:
+        raise HTTPException(422, "Chrome version is required.")
+    try:
+        major = int(raw.split(".")[0])
+    except ValueError as exc:
+        raise HTTPException(422, "Invalid Chrome version.") from exc
     ver_tag = f"{major}.0" if "." not in raw or raw == str(major) else raw
 
     base_image = _base_image_for(ver_tag)
     repo = base_image.split(":")[0]
     tag = base_image.split(":")[1]
 
-    chrome_version_arg = ""
+    chrome_version_arg = raw if _is_full_chrome_version(raw) else ""
     docker_platform = ""
     exists = await _check_tag_exists(repo, tag)
     if not exists:
@@ -200,33 +249,38 @@ async def build_image(
             raise HTTPException(422, f"Docker Hub tag '{base_image}' not found. Check available versions on Docker Hub.")
 
     pool = get_pool()
-    image_tag = _image_tag_for(major)
-
-    existing = await pool.fetchrow(
-        "SELECT id, status FROM browser_images WHERE tenant_id = $1 AND image_tag = $2",
-        user.tenant_id, image_tag,
+    if _is_full_chrome_version(raw):
+        existing_version = await pool.fetchrow(
+            "SELECT id, status FROM browser_images "
+            "WHERE tenant_id = $1 AND chrome_version = $2 AND status = 'ready' "
+            "ORDER BY created_at DESC LIMIT 1",
+            user.tenant_id,
+            raw,
+        )
+        if existing_version:
+            raise HTTPException(409, f"Chrome {raw} is already built.")
+    existing_build = await pool.fetchrow(
+        "SELECT id, status FROM browser_images "
+        "WHERE tenant_id = $1 AND base_image = $2 AND status IN ('pending', 'building') "
+        "ORDER BY created_at DESC LIMIT 1",
+        user.tenant_id,
+        base_image,
     )
-    if existing:
-        if existing["status"] in ("building", "pending"):
-            raise HTTPException(409, "This version is already being built.")
-        if existing["status"] == "ready":
-            raise HTTPException(409, "This version is already built.")
-        image_id = existing["id"]
-        await pool.execute(
-            "UPDATE browser_images SET status = 'pending', build_log = '', base_image = $1, chrome_version = '' WHERE id = $2",
-            base_image, image_id,
-        )
-    else:
-        image_id = str(uuid.uuid4())
-        await pool.execute(
-            "INSERT INTO browser_images (id, tenant_id, chrome_major, chrome_version, base_image, image_tag, status) "
-            "VALUES ($1, $2, $3, $4, $5, $6, 'pending')",
-            image_id, user.tenant_id, major, "", base_image, image_tag,
-        )
+    if existing_build:
+        raise HTTPException(409, "This version is already being built.")
+
+    image_id = str(uuid.uuid4())
+    image_tag = _image_tag_for(ver_tag, image_id)
+    await pool.execute(
+        "INSERT INTO browser_images (id, tenant_id, chrome_major, chrome_version, base_image, image_tag, status) "
+        "VALUES ($1, $2, $3, $4, $5, $6, 'pending')",
+        image_id, user.tenant_id, major, "", base_image, image_tag,
+    )
 
     asyncio.create_task(
         _do_build(
             image_id,
+            user.tenant_id,
             base_image,
             image_tag,
             major,
