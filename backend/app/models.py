@@ -81,6 +81,7 @@ class Session(Base):
         Text, server_default="desktop-1280x800"
     )
     proxy_url: Mapped[str | None] = mapped_column(Text, server_default="")
+    network_egress_id: Mapped[str | None] = mapped_column(Text)
     tenant_id: Mapped[str | None] = mapped_column(Text)
     user_id: Mapped[str | None] = mapped_column(Text)
 
@@ -90,3 +91,25 @@ class AppState(Base):
 
     key: Mapped[str] = mapped_column(Text, primary_key=True)
     value: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class NetworkEgressProfile(Base):
+    __tablename__ = "network_egress_profiles"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("tenants.id"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    type: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="unchecked")
+    proxy_url: Mapped[str | None] = mapped_column(Text, server_default="")
+    config_ref: Mapped[str | None] = mapped_column(Text, server_default="")
+    health_error: Mapped[str | None] = mapped_column(Text, server_default="")
+    last_checked_at: Mapped[datetime | None] = mapped_column()
+    created_at: Mapped[datetime] = mapped_column(
+        nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        nullable=False, server_default=func.now()
+    )

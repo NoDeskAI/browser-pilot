@@ -8,6 +8,7 @@ services:
       - "8000:8000"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      - egressdata:/app/data/network-egress
     extra_hosts:
       - "host.docker.internal:host-gateway"
     env_file:
@@ -17,6 +18,12 @@ services:
       PROJECT_ROOT: /app
       DATABASE_URL: postgresql://${POSTGRES_USER:-bpilot}:${POSTGRES_PASSWORD:-bpilot}@postgres:5432/${POSTGRES_DB:-bpilot}
       DOCKER_HOST_ADDR: host.docker.internal
+      NETWORK_EGRESS_DOCKER_NETWORK: ${NETWORK_EGRESS_DOCKER_NETWORK:-browser-pilot-net}
+      NETWORK_EGRESS_CONFIG_DIR: ${NETWORK_EGRESS_CONFIG_DIR:-/app/data/network-egress}
+      NETWORK_EGRESS_CLASH_IMAGE: ${NETWORK_EGRESS_CLASH_IMAGE:-ghcr.io/metacubex/mihomo:latest}
+      NETWORK_EGRESS_CLASH_PROXY_PORT: ${NETWORK_EGRESS_CLASH_PROXY_PORT:-7890}
+      NETWORK_EGRESS_OPENVPN_IMAGE: ${NETWORK_EGRESS_OPENVPN_IMAGE:-browser-pilot-openvpn-egress:latest}
+      NETWORK_EGRESS_OPENVPN_PROXY_PORT: ${NETWORK_EGRESS_OPENVPN_PROXY_PORT:-8888}
     depends_on:
       postgres:
         condition: service_healthy
@@ -48,3 +55,4 @@ services:
 
 volumes:
   pgdata:
+  egressdata:

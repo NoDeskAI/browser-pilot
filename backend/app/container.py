@@ -13,7 +13,11 @@ from typing import Any
 
 import httpx
 
-from app.config import DOCKER_HOST_ADDR, CONTAINER_PREFIX as _PREFIX
+from app.config import (
+    DOCKER_HOST_ADDR,
+    CONTAINER_PREFIX as _PREFIX,
+    NETWORK_EGRESS_DOCKER_NETWORK,
+)
 from app.db import get_pool
 from app.device_presets import DEVICE_PRESETS, DEFAULT_PRESET, get_preset
 from app.fingerprint import (
@@ -22,6 +26,10 @@ from app.fingerprint import (
     failed_network_profile,
     generate_profile,
     normalize_network_probe,
+)
+from app.network_egress import (
+    ensure_docker_network,
+    resolve_egress,
 )
 
 logger = logging.getLogger("container")
@@ -95,6 +103,17 @@ _BACKGROUND_NETWORK_TASKS: set[str] = set()
 
 def container_name(session_id: str) -> str:
     return f"{CONTAINER_PREFIX}{session_id[:12]}"
+
+
+def _egress_network_name() -> str:
+    return NETWORK_EGRESS_DOCKER_NETWORK
+
+
+def _row_get(row, key: str, default=None):
+    try:
+        return row[key]
+    except (KeyError, IndexError, TypeError):
+        return default
 
 
 def _dns_servers_from_profile(fingerprint_profile: dict | None) -> list[str]:
@@ -1009,6 +1028,7 @@ async def create_container(
         raise RuntimeError(
             "No browser image available. Build one in Settings > Browser Images."
         )
+    await ensure_docker_network()
     logger.info("Creating container: %s (%dx%d)", name, width, height)
     last_error = ""
     for _attempt in range(5):
@@ -1017,6 +1037,8 @@ async def create_container(
         cmd = (
             f"docker run -d --name {name} "
             f"--label {_PREFIX}.session_id={session_id} "
+            f"--network {shlex.quote(_egress_network_name())} "
+            f"--add-host host.docker.internal:host-gateway "
             f"-p {selenium_port}:4444 -p {vnc_port}:7900 "
             f"--shm-size={SHM_SIZE} "
             f"{dns_args + ' ' if dns_args else ''}"
@@ -1293,7 +1315,7 @@ async def _session_container_params(session_id: str) -> tuple[int, int, str | No
     """Read device_preset + proxy_url + fingerprint_profile + browser_lang + chrome_version from DB and resolve to container params."""
     pool = get_pool()
     row = await pool.fetchrow(
-        "SELECT device_preset, proxy_url, fingerprint_profile, browser_lang, tenant_id, chrome_version FROM sessions WHERE id = $1",
+        "SELECT device_preset, proxy_url, network_egress_id, fingerprint_profile, browser_lang, tenant_id, chrome_version FROM sessions WHERE id = $1",
         session_id,
     )
     if not row:
@@ -1301,6 +1323,15 @@ async def _session_container_params(session_id: str) -> tuple[int, int, str | No
         return preset_data["width"], preset_data["height"], None, None, None, "zh-CN", None
     preset_data = get_preset(row["device_preset"] or DEFAULT_PRESET)
     proxy = row["proxy_url"] or None
+    if row["tenant_id"]:
+        proxy = (
+            await resolve_egress(
+                row["tenant_id"],
+                _row_get(row, "network_egress_id"),
+                row["proxy_url"] or "",
+                ensure=True,
+            )
+        ).proxy_url or None
     browser_lang = row["browser_lang"] or "zh-CN"
 
     fp_profile = row["fingerprint_profile"]
@@ -1317,7 +1348,9 @@ async def _session_container_params(session_id: str) -> tuple[int, int, str | No
     image_name: str | None = None
     if chrome_version and tenant_id:
         img_row = await pool.fetchrow(
-            "SELECT image_tag FROM browser_images WHERE tenant_id = $1 AND chrome_version = $2 AND status = 'ready' LIMIT 1",
+            "SELECT image_tag FROM browser_images "
+            "WHERE tenant_id = $1 AND chrome_version = $2 AND status = 'ready' "
+            "ORDER BY created_at DESC LIMIT 1",
             tenant_id, chrome_version,
         )
         if img_row:
@@ -1325,7 +1358,8 @@ async def _session_container_params(session_id: str) -> tuple[int, int, str | No
 
     if not image_name and tenant_id:
         img_row = await pool.fetchrow(
-            "SELECT image_tag FROM browser_images WHERE tenant_id = $1 AND status = 'ready' ORDER BY chrome_major DESC LIMIT 1",
+            "SELECT image_tag FROM browser_images "
+            "WHERE tenant_id = $1 AND status = 'ready' ORDER BY chrome_major DESC, created_at DESC LIMIT 1",
             row["tenant_id"],
         )
         if img_row:

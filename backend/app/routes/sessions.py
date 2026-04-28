@@ -29,6 +29,12 @@ from app.fingerprint import (
     declared_network_profile,
     generate_profile,
 )
+from app.network_egress import (
+    EgressError,
+    EffectiveEgress,
+    resolve_egress,
+    validate_proxy_url,
+)
 
 logger = logging.getLogger("routes.sessions")
 router = APIRouter()
@@ -50,6 +56,7 @@ class CreateSessionBody(BaseModel):
     name: str = "新会话"
     devicePreset: str = DEFAULT_PRESET
     proxyUrl: str = ""
+    networkEgressId: str | None = None
     browserLang: str = "zh-CN"
     chromeVersion: str | None = None
 
@@ -66,6 +73,10 @@ class ProxyBody(BaseModel):
     proxyUrl: str = ""
 
 
+class SessionNetworkEgressBody(BaseModel):
+    networkEgressId: str | None = None
+
+
 class FingerprintActionBody(BaseModel):
     action: str = "regenerate"
 
@@ -74,6 +85,100 @@ class AppStateBody(BaseModel):
     value: str
 
 _VALID_PROXY_SCHEMES = ("http://", "https://", "socks4://", "socks5://")
+
+
+def _row_get(row, key: str, default=None):
+    try:
+        return row[key]
+    except (KeyError, IndexError, TypeError):
+        return default
+
+
+def _is_full_chrome_version(ver: str) -> bool:
+    return bool(re.fullmatch(r"\d+\.\d+\.\d+\.\d+", ver.strip()))
+
+
+def _chrome_major(ver: str) -> int:
+    try:
+        return int(ver.strip().split(".")[0])
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise HTTPException(422, "Invalid Chrome version.") from exc
+
+
+async def _resolve_browser_image(pool, tenant_id: str, requested: str | None):
+    if requested:
+        raw = requested.strip()
+        if _is_full_chrome_version(raw):
+            row = await pool.fetchrow(
+                "SELECT chrome_version, image_tag FROM browser_images "
+                "WHERE tenant_id = $1 AND chrome_version = $2 AND status = 'ready' "
+                "ORDER BY created_at DESC LIMIT 1",
+                tenant_id,
+                raw,
+            )
+            if row:
+                return row
+        row = await pool.fetchrow(
+            "SELECT chrome_version, image_tag FROM browser_images "
+            "WHERE tenant_id = $1 AND chrome_major = $2 AND status = 'ready' "
+            "ORDER BY created_at DESC LIMIT 1",
+            tenant_id,
+            _chrome_major(raw),
+        )
+        if row:
+            return row
+        raise HTTPException(422, f"Chrome {raw} is not available. Please build it first in Settings > Browser Images.")
+
+    row = await pool.fetchrow(
+        "SELECT chrome_version, image_tag FROM browser_images "
+        "WHERE tenant_id = $1 AND status = 'ready' ORDER BY chrome_major DESC, created_at DESC LIMIT 1",
+        tenant_id,
+    )
+    if row:
+        return row
+    raise HTTPException(422, "No browser images available. Please build one first in Settings > Browser Images.")
+
+
+def _egress_payload(effective: EffectiveEgress) -> dict:
+    return {
+        "networkEgressId": effective.id,
+        "networkEgressName": effective.name,
+        "networkEgressType": effective.type,
+        "networkEgressStatus": effective.status,
+        "networkEgressProxyUrl": effective.proxy_url,
+        "networkEgressHealthError": effective.health_error,
+    }
+
+
+def _egress_payload_from_row(row) -> dict:
+    egress_id = _row_get(row, "network_egress_id")
+    if not egress_id:
+        proxy_url = _row_get(row, "proxy_url", "") or ""
+        if proxy_url:
+            return {
+                "networkEgressId": None,
+                "networkEgressName": "Manual proxy",
+                "networkEgressType": "external_proxy",
+                "networkEgressStatus": "unchecked",
+                "networkEgressProxyUrl": proxy_url,
+                "networkEgressHealthError": "",
+            }
+        return {
+            "networkEgressId": None,
+            "networkEgressName": "Direct",
+            "networkEgressType": "direct",
+            "networkEgressStatus": "healthy",
+            "networkEgressProxyUrl": "",
+            "networkEgressHealthError": "",
+        }
+    return {
+        "networkEgressId": egress_id,
+        "networkEgressName": _row_get(row, "network_egress_name", "") or "",
+        "networkEgressType": _row_get(row, "network_egress_type", "") or "",
+        "networkEgressStatus": _row_get(row, "network_egress_status", "unchecked") or "unchecked",
+        "networkEgressProxyUrl": _row_get(row, "proxy_url", "") or "",
+        "networkEgressHealthError": _row_get(row, "network_egress_health_error", "") or "",
+    }
 
 
 async def _resolve_session_network(proxy_url: str | None, image_tag: str | None) -> dict:
@@ -90,14 +195,17 @@ async def _resolve_session_image(session_id: str) -> str | None:
         return None
     if row["chrome_version"] and row["tenant_id"]:
         img_row = await pool.fetchrow(
-            "SELECT image_tag FROM browser_images WHERE tenant_id = $1 AND chrome_version = $2 AND status = 'ready' LIMIT 1",
+            "SELECT image_tag FROM browser_images "
+            "WHERE tenant_id = $1 AND chrome_version = $2 AND status = 'ready' "
+            "ORDER BY created_at DESC LIMIT 1",
             row["tenant_id"], row["chrome_version"],
         )
         if img_row:
             return img_row["image_tag"]
     if row["tenant_id"]:
         img_row = await pool.fetchrow(
-            "SELECT image_tag FROM browser_images WHERE tenant_id = $1 AND status = 'ready' ORDER BY chrome_major DESC LIMIT 1",
+            "SELECT image_tag FROM browser_images "
+            "WHERE tenant_id = $1 AND status = 'ready' ORDER BY chrome_major DESC, created_at DESC LIMIT 1",
             row["tenant_id"],
         )
         if img_row:
@@ -184,17 +292,31 @@ async def list_sessions(user: CurrentUser = Depends(get_current_user)):
     pool = get_pool()
     if user.role in ("superadmin", "admin"):
         rows = await pool.fetch("""
-            SELECT id, name, created_at, updated_at, current_url, current_title,
-                   device_preset, proxy_url, user_id, fingerprint_profile, browser_lang
-            FROM sessions WHERE tenant_id = $1
-            ORDER BY updated_at DESC
+            SELECT s.id, s.name, s.created_at, s.updated_at, s.current_url, s.current_title,
+                   s.device_preset, s.proxy_url, s.network_egress_id, s.user_id,
+                   s.fingerprint_profile, s.browser_lang,
+                   e.name AS network_egress_name,
+                   e.type AS network_egress_type,
+                   e.status AS network_egress_status,
+                   e.health_error AS network_egress_health_error
+            FROM sessions s
+            LEFT JOIN network_egress_profiles e ON e.id = s.network_egress_id
+            WHERE s.tenant_id = $1
+            ORDER BY s.updated_at DESC
         """, user.tenant_id)
     else:
         rows = await pool.fetch("""
-            SELECT id, name, created_at, updated_at, current_url, current_title,
-                   device_preset, proxy_url, user_id, fingerprint_profile, browser_lang
-            FROM sessions WHERE tenant_id = $1 AND user_id = $2
-            ORDER BY updated_at DESC
+            SELECT s.id, s.name, s.created_at, s.updated_at, s.current_url, s.current_title,
+                   s.device_preset, s.proxy_url, s.network_egress_id, s.user_id,
+                   s.fingerprint_profile, s.browser_lang,
+                   e.name AS network_egress_name,
+                   e.type AS network_egress_type,
+                   e.status AS network_egress_status,
+                   e.health_error AS network_egress_health_error
+            FROM sessions s
+            LEFT JOIN network_egress_profiles e ON e.id = s.network_egress_id
+            WHERE s.tenant_id = $1 AND s.user_id = $2
+            ORDER BY s.updated_at DESC
         """, user.tenant_id, user.id)
 
     all_statuses = await get_all_container_statuses()
@@ -230,6 +352,7 @@ async def list_sessions(user: CurrentUser = Depends(get_current_user)):
             "proxyUrl": r["proxy_url"] or "",
             "fingerprintProfile": fp_response,
             "browserLang": r["browser_lang"] or "zh-CN",
+            **_egress_payload_from_row(r),
         }
 
         if container_status == "running":
@@ -252,28 +375,20 @@ async def create_session(body: CreateSessionBody, user: CurrentUser = Depends(ge
     preset_id = body.devicePreset if body.devicePreset in DEVICE_PRESETS else DEFAULT_PRESET
     safe_lang = re.sub(r"[^a-zA-Z0-9_-]", "", body.browserLang or "zh-CN") or "zh-CN"
 
-    resolved_chrome_version: str | None = None
-    resolved_image_tag: str | None = None
-    if body.chromeVersion:
-        row_img = await pool.fetchrow(
-            "SELECT chrome_version, image_tag FROM browser_images WHERE tenant_id = $1 AND chrome_major = $2 AND status = 'ready' LIMIT 1",
-            user.tenant_id, int(body.chromeVersion.split(".")[0]),
-        )
-        if row_img:
-            resolved_chrome_version = row_img["chrome_version"]
-            resolved_image_tag = row_img["image_tag"]
-    else:
-        row_img = await pool.fetchrow(
-            "SELECT chrome_version, image_tag FROM browser_images WHERE tenant_id = $1 AND status = 'ready' ORDER BY chrome_major DESC LIMIT 1",
-            user.tenant_id,
-        )
-        if row_img:
-            resolved_chrome_version = row_img["chrome_version"]
-            resolved_image_tag = row_img["image_tag"]
-        else:
-            raise HTTPException(422, "No browser images available. Please build one first in Settings > Browser Images.")
+    row_img = await _resolve_browser_image(pool, user.tenant_id, body.chromeVersion)
+    resolved_chrome_version: str | None = row_img["chrome_version"]
+    resolved_image_tag: str | None = row_img["image_tag"]
 
-    network_profile = await _resolve_session_network(body.proxyUrl or None, resolved_image_tag)
+    try:
+        effective_egress = await resolve_egress(
+            user.tenant_id,
+            body.networkEgressId,
+            body.proxyUrl,
+            ensure=False,
+        )
+    except EgressError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    network_profile = await _resolve_session_network(effective_egress.proxy_url or None, resolved_image_tag)
 
     try:
         fp_profile = await generate_profile(
@@ -290,11 +405,34 @@ async def create_session(body: CreateSessionBody, user: CurrentUser = Depends(ge
     fp_profile["screen"]["height"] = preset_data["height"]
 
     await pool.execute(
-        "INSERT INTO sessions (id, name, device_preset, proxy_url, tenant_id, user_id, fingerprint_profile, browser_lang, chrome_version) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9)",
-        session_id, body.name, preset_id, body.proxyUrl, user.tenant_id, user.id, fp_profile, safe_lang, resolved_chrome_version,
+        """
+        INSERT INTO sessions
+            (id, name, device_preset, proxy_url, network_egress_id, tenant_id, user_id,
+             fingerprint_profile, browser_lang, chrome_version)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10)
+        """,
+        session_id,
+        body.name,
+        preset_id,
+        effective_egress.proxy_url,
+        effective_egress.id,
+        user.tenant_id,
+        user.id,
+        fp_profile,
+        safe_lang,
+        resolved_chrome_version,
     )
     logger.info("Session created: %s (%s) preset=%s lang=%s chrome=%s", session_id, body.name, preset_id, safe_lang, resolved_chrome_version or "default")
-    return {"id": session_id, "name": body.name, "devicePreset": preset_id, "proxyUrl": body.proxyUrl, "fingerprintProfile": fp_profile, "browserLang": safe_lang, "chromeVersion": resolved_chrome_version}
+    return {
+        "id": session_id,
+        "name": body.name,
+        "devicePreset": preset_id,
+        "proxyUrl": effective_egress.proxy_url,
+        "fingerprintProfile": fp_profile,
+        "browserLang": safe_lang,
+        "chromeVersion": resolved_chrome_version,
+        **_egress_payload(effective_egress),
+    }
 
 
 @router.get("/api/sessions/{session_id}")
@@ -302,7 +440,17 @@ async def get_session(session_id: str, user: CurrentUser = Depends(get_session_a
     await verify_session_access(session_id, user)
     pool = get_pool()
     row = await pool.fetchrow(
-        "SELECT id, name, created_at, updated_at, current_url, current_title, device_preset, proxy_url, fingerprint_profile, browser_lang FROM sessions WHERE id = $1",
+        """
+        SELECT s.id, s.name, s.created_at, s.updated_at, s.current_url, s.current_title,
+               s.device_preset, s.proxy_url, s.network_egress_id, s.fingerprint_profile, s.browser_lang,
+               e.name AS network_egress_name,
+               e.type AS network_egress_type,
+               e.status AS network_egress_status,
+               e.health_error AS network_egress_health_error
+        FROM sessions s
+        LEFT JOIN network_egress_profiles e ON e.id = s.network_egress_id
+        WHERE s.id = $1
+        """,
         session_id,
     )
     if not row:
@@ -329,6 +477,7 @@ async def get_session(session_id: str, user: CurrentUser = Depends(get_session_a
         "proxyUrl": row["proxy_url"] or "",
         "fingerprintProfile": fp_response,
         "browserLang": row["browser_lang"] or "zh-CN",
+        **_egress_payload_from_row(row),
     }
 
 
@@ -438,7 +587,10 @@ async def change_device_preset(session_id: str, body: DevicePresetBody, user: Cu
     if body.preset not in DEVICE_PRESETS:
         return {"ok": False, "error": f"Unknown preset: {body.preset}"}
     pool = get_pool()
-    row = await pool.fetchrow("SELECT proxy_url, fingerprint_profile, browser_lang FROM sessions WHERE id = $1", session_id)
+    row = await pool.fetchrow(
+        "SELECT proxy_url, network_egress_id, fingerprint_profile, browser_lang, tenant_id FROM sessions WHERE id = $1",
+        session_id,
+    )
     if not row:
         return {"ok": False, "error": "Session not found"}
     await pool.execute(
@@ -446,7 +598,16 @@ async def change_device_preset(session_id: str, body: DevicePresetBody, user: Cu
         body.preset, session_id,
     )
     preset_data = get_preset(body.preset)
-    proxy = row["proxy_url"] or None
+    try:
+        effective_egress = await resolve_egress(
+            _row_get(row, "tenant_id") or user.tenant_id,
+            _row_get(row, "network_egress_id"),
+            row["proxy_url"] or "",
+            ensure=True,
+        )
+    except EgressError as exc:
+        return {"ok": False, "error": str(exc)}
+    proxy = effective_egress.proxy_url or None
     fp_profile = row["fingerprint_profile"]
     image_name = await _resolve_session_image(session_id)
     if isinstance(fp_profile, dict) and not fp_profile.get("network"):
@@ -475,9 +636,10 @@ async def change_device_preset(session_id: str, body: DevicePresetBody, user: Cu
 @router.post("/api/sessions/{session_id}/proxy")
 async def change_proxy(session_id: str, body: ProxyBody, user: CurrentUser = Depends(get_current_user)):
     await _verify_session_tenant(session_id, user)
-    proxy_url = body.proxyUrl.strip()
-    if proxy_url and not proxy_url.startswith(_VALID_PROXY_SCHEMES):
-        return {"ok": False, "error": "Proxy URL must start with http://, https://, socks4://, or socks5://"}
+    try:
+        proxy_url = validate_proxy_url(body.proxyUrl)
+    except EgressError as exc:
+        return {"ok": False, "error": str(exc)}
     pool = get_pool()
     row = await pool.fetchrow("SELECT device_preset, fingerprint_profile, browser_lang FROM sessions WHERE id = $1", session_id)
     if not row:
@@ -489,7 +651,7 @@ async def change_proxy(session_id: str, body: ProxyBody, user: CurrentUser = Dep
         await _resolve_session_network(proxy_url or None, image_name),
     )
     await pool.execute(
-        "UPDATE sessions SET proxy_url = $1, fingerprint_profile = $2::jsonb, updated_at = NOW() WHERE id = $3",
+        "UPDATE sessions SET proxy_url = $1, network_egress_id = NULL, fingerprint_profile = $2::jsonb, updated_at = NOW() WHERE id = $3",
         proxy_url, fp_profile, session_id,
     )
     preset_data = get_preset(row["device_preset"] or DEFAULT_PRESET)
@@ -507,17 +669,107 @@ async def change_proxy(session_id: str, body: ProxyBody, user: CurrentUser = Dep
         image_name=image_name,
     )
     fp_response = await _with_runtime_health(session_id, fp_profile)
-    return {"ok": True, "ports": ports, "proxyUrl": proxy_url, "fingerprintProfile": fp_response}
+    effective_egress = EffectiveEgress(
+        id=None,
+        name="Manual proxy" if proxy_url else "Direct",
+        type="external_proxy" if proxy_url else "direct",
+        status="unchecked" if proxy_url else "healthy",
+        proxy_url=proxy_url,
+    )
+    return {
+        "ok": True,
+        "ports": ports,
+        "proxyUrl": proxy_url,
+        "fingerprintProfile": fp_response,
+        **_egress_payload(effective_egress),
+    }
+
+
+@router.post("/api/sessions/{session_id}/network-egress")
+async def change_network_egress(
+    session_id: str,
+    body: SessionNetworkEgressBody,
+    user: CurrentUser = Depends(get_current_user),
+):
+    await _verify_session_tenant(session_id, user)
+    pool = get_pool()
+    row = await pool.fetchrow(
+        "SELECT device_preset, fingerprint_profile, browser_lang, tenant_id FROM sessions WHERE id = $1",
+        session_id,
+    )
+    if not row:
+        return {"ok": False, "error": "Session not found"}
+    try:
+        effective_egress = await resolve_egress(
+            _row_get(row, "tenant_id") or user.tenant_id,
+            body.networkEgressId,
+            "",
+            ensure=True,
+        )
+    except EgressError as exc:
+        return {"ok": False, "error": str(exc)}
+
+    fp_profile = row["fingerprint_profile"] or {}
+    image_name = await _resolve_session_image(session_id)
+    attach_network_profile(
+        fp_profile,
+        await _resolve_session_network(effective_egress.proxy_url or None, image_name),
+    )
+    await pool.execute(
+        """
+        UPDATE sessions
+        SET network_egress_id = $1, proxy_url = $2, fingerprint_profile = $3::jsonb, updated_at = NOW()
+        WHERE id = $4
+        """,
+        effective_egress.id,
+        effective_egress.proxy_url,
+        fp_profile,
+        session_id,
+    )
+    preset_data = get_preset(row["device_preset"] or DEFAULT_PRESET)
+    fp_ua = fp_profile.get("navigator", {}).get("userAgent") if isinstance(fp_profile, dict) else None
+    from app.tools.browser.session import invalidate_session_cache
+    invalidate_session_cache(session_id)
+    ports = await recreate_container(
+        session_id,
+        width=preset_data["width"],
+        height=preset_data["height"],
+        user_agent=fp_ua,
+        proxy=effective_egress.proxy_url or None,
+        fingerprint_profile=fp_profile,
+        browser_lang=row["browser_lang"] or "zh-CN",
+        image_name=image_name,
+    )
+    fp_response = await _with_runtime_health(session_id, fp_profile)
+    return {
+        "ok": True,
+        "ports": ports,
+        "proxyUrl": effective_egress.proxy_url,
+        "fingerprintProfile": fp_response,
+        **_egress_payload(effective_egress),
+    }
 
 
 @router.post("/api/sessions/{session_id}/fingerprint")
 async def regenerate_fingerprint(session_id: str, body: FingerprintActionBody, user: CurrentUser = Depends(get_current_user)):
     await _verify_session_tenant(session_id, user)
     pool = get_pool()
-    row = await pool.fetchrow("SELECT device_preset, proxy_url, browser_lang, chrome_version FROM sessions WHERE id = $1", session_id)
+    row = await pool.fetchrow(
+        "SELECT device_preset, proxy_url, network_egress_id, browser_lang, chrome_version, tenant_id FROM sessions WHERE id = $1",
+        session_id,
+    )
     if not row:
         return {"ok": False, "error": "Session not found"}
-    proxy = row["proxy_url"] or None
+    try:
+        effective_egress = await resolve_egress(
+            _row_get(row, "tenant_id") or user.tenant_id,
+            _row_get(row, "network_egress_id"),
+            row["proxy_url"] or "",
+            ensure=True,
+        )
+    except EgressError as exc:
+        return {"ok": False, "error": str(exc)}
+    proxy = effective_egress.proxy_url or None
     try:
         fp_profile = await generate_profile(
             user.tenant_id,
@@ -554,7 +806,13 @@ async def regenerate_fingerprint(session_id: str, body: FingerprintActionBody, u
         image_name=image_name,
     )
     fp_response = await _with_runtime_health(session_id, fp_profile)
-    return {"ok": True, "ports": ports, "fingerprintProfile": fp_response}
+    return {
+        "ok": True,
+        "ports": ports,
+        "fingerprintProfile": fp_response,
+        "proxyUrl": effective_egress.proxy_url,
+        **_egress_payload(effective_egress),
+    }
 
 
 # -----------------------------------------------------------------------

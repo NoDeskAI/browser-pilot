@@ -5,6 +5,7 @@ import StorageSettings from '../components/StorageSettings.vue'
 import OrgSettings from '../components/OrgSettings.vue'
 import FingerprintPoolSettings from '../components/FingerprintPoolSettings.vue'
 import BrowserImageSettings from '../components/BrowserImageSettings.vue'
+import NetworkEgressSettings from '../components/NetworkEgressSettings.vue'
 
 const isEE = __EE__
 const SsoConfigPanel = isEE
@@ -56,6 +57,13 @@ const activeTab = ref('organization')
               {{ t('settings.browserImages') }}
             </button>
             <button
+              @click="activeTab = 'networkEgress'"
+              class="px-3 py-2 text-sm rounded-md transition-colors text-left whitespace-nowrap"
+              :class="activeTab === 'networkEgress' ? 'bg-accent text-accent-foreground font-medium' : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground'"
+            >
+              {{ t('settings.networkEgress') }}
+            </button>
+            <button
               v-if="isEE"
               @click="activeTab = 'sso'"
               class="px-3 py-2 text-sm rounded-md transition-colors text-left whitespace-nowrap"
@@ -79,6 +87,7 @@ const activeTab = ref('organization')
             <StorageSettings v-else-if="activeTab === 'storage'" />
             <FingerprintPoolSettings v-else-if="activeTab === 'fingerprintPool'" />
             <BrowserImageSettings v-else-if="activeTab === 'browserImages'" />
+            <NetworkEgressSettings v-else-if="activeTab === 'networkEgress'" />
             <component v-else-if="isEE && activeTab === 'sso' && SsoConfigPanel" :is="SsoConfigPanel" />
             <component v-else-if="isEE && activeTab === 'tenants' && TenantManager" :is="TenantManager" />
           </div>

@@ -3,8 +3,9 @@ import { ref, watch, nextTick, onMounted, onUnmounted, type ComponentPublicInsta
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useSessions } from '../composables/useSessions'
+import { useNetworkEgress } from '../composables/useNetworkEgress'
 import { useNotify } from '../composables/useNotify'
-import { Plus, Play, Pause, Trash2, Monitor, Globe, Hash, Clock, RefreshCw, Loader2, CornerDownLeft } from 'lucide-vue-next'
+import { Plus, Play, Pause, Trash2, Monitor, Globe, Hash, Clock, RefreshCw, Loader2, Network, CornerDownLeft } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
@@ -32,12 +33,15 @@ const {
   startContainer, pauseContainer, fetchSessions,
   fetchBrowserImages,
 } = useSessions()
+const { state: egressState, fetchNetworkEgress } = useNetworkEgress()
 
 const readyImages = ref<any[]>([])
 const hasReadyImages = ref(false)
 const createDialogOpen = ref(false)
 const createName = ref('')
 const createVersion = ref('')
+const createNetworkEgressId = ref('__direct__')
+const DIRECT_EGRESS_VALUE = '__direct__'
 
 const isMac = navigator.platform.includes('Mac')
 const shortcutLabel = isMac ? '⌘N' : 'Ctrl+N'
@@ -65,11 +69,11 @@ onMounted(async () => {
     fetchSessions()
   }
   try {
-    const imgs = await fetchBrowserImages()
+    const [imgs] = await Promise.all([fetchBrowserImages(), fetchNetworkEgress()])
     readyImages.value = imgs
     hasReadyImages.value = imgs.length > 0
     if (imgs.length > 0 && !createVersion.value) {
-      createVersion.value = String(imgs[0].chromeMajor)
+      createVersion.value = imgs[0].chromeVersion || String(imgs[0].chromeMajor)
     }
   } catch {
     // keep optimistic default
@@ -120,20 +124,22 @@ function formatRelativeTime(iso: string): string {
 function openCreateDialog() {
   if (!hasReadyImages.value) return
   if (!createVersion.value && readyImages.value.length > 0) {
-    createVersion.value = String(readyImages.value[0].chromeMajor)
+    createVersion.value = readyImages.value[0].chromeVersion || String(readyImages.value[0].chromeMajor)
   }
   createDialogOpen.value = true
 }
 
-async function handleCreateSession(name?: string, chromeVersion?: string) {
+async function handleCreateSession(name?: string, chromeVersion?: string, networkEgressId?: string) {
   if (creating.value) return
   creating.value = true
   try {
-    const session = await createSession(name?.trim() || undefined, chromeVersion || undefined)
+    const selectedEgress = networkEgressId && networkEgressId !== DIRECT_EGRESS_VALUE ? networkEgressId : null
+    const session = await createSession(name?.trim() || undefined, chromeVersion || undefined, selectedEgress)
     if (session) {
       notify.success(t('app.sessionCreated'))
       createDialogOpen.value = false
       createName.value = ''
+      createNetworkEgressId.value = DIRECT_EGRESS_VALUE
       router.push(`/s/${session.id}`)
     }
   } catch {
@@ -326,6 +332,19 @@ async function onPauseContainer(id: string) {
                 {{ formatUrl(s.currentUrl) || '-' }}
               </span>
             </div>
+            <div class="flex items-center gap-2 min-w-0">
+              <div class="flex items-center gap-1.5 text-muted-foreground shrink-0 w-10">
+                <Network class="size-3.5" />
+                <span class="text-[11px]">{{ t('networkEgress.shortLabel') }}</span>
+              </div>
+              <span
+                class="text-xs truncate flex-1 min-w-0"
+                :class="s.networkEgressStatus === 'unhealthy' || s.networkEgressStatus === 'unsupported' ? 'text-destructive' : 'text-muted-foreground'"
+                :title="s.networkEgressHealthError || s.networkEgressProxyUrl || s.networkEgressName"
+              >
+                {{ s.networkEgressName || t('networkEgress.direct') }}
+              </span>
+            </div>
           </div>
 
           <div class="px-4 py-3 border-t border-border/50 flex items-center justify-between bg-muted/10">
@@ -433,7 +452,7 @@ async function onPauseContainer(id: string) {
         <DialogHeader>
           <DialogTitle>{{ t('dashboard.create') }}</DialogTitle>
         </DialogHeader>
-        <form class="space-y-4" @submit.prevent="handleCreateSession(createName, createVersion)">
+        <form class="space-y-4" @submit.prevent="handleCreateSession(createName, createVersion, createNetworkEgressId)">
           <div class="space-y-2">
             <Label for="create-session-name">{{ t('session.name') }}</Label>
             <Input
@@ -454,10 +473,29 @@ async function onPauseContainer(id: string) {
                 <SelectItem
                   v-for="img in readyImages"
                   :key="img.id"
-                  :value="String(img.chromeMajor)"
+                  :value="img.chromeVersion || String(img.chromeMajor)"
                 >
                   Chrome {{ img.chromeMajor }}
                   <span v-if="img.chromeVersion" class="text-xs text-muted-foreground">({{ img.chromeVersion }})</span>
+                </SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div class="space-y-2">
+            <Label for="create-session-network">{{ t('networkEgress.sessionNetwork') }}</Label>
+            <Select v-model="createNetworkEgressId" :disabled="creating">
+              <SelectTrigger id="create-session-network">
+                <SelectValue :placeholder="t('networkEgress.direct')" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem
+                  v-for="profile in egressState.profiles"
+                  :key="profile.id || DIRECT_EGRESS_VALUE"
+                  :value="profile.id || DIRECT_EGRESS_VALUE"
+                  :disabled="profile.status === 'disabled' || profile.status === 'unhealthy' || profile.status === 'unsupported'"
+                >
+                  {{ profile.name }}
+                  <span v-if="profile.type !== 'direct'" class="text-xs text-muted-foreground">({{ t(`networkEgress.type.${profile.type}`, profile.type) }})</span>
                 </SelectItem>
               </SelectContent>
             </Select>

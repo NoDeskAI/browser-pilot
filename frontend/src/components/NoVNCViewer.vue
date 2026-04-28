@@ -3,6 +3,7 @@ import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import RFB from '@novnc/novnc'
 import { useSessions } from '../composables/useSessions'
+import { useNetworkEgress } from '../composables/useNetworkEgress'
 import { api } from '../lib/api'
 import {
   Keyboard, Maximize, Minimize, Eye, MousePointer,
@@ -12,7 +13,6 @@ import {
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
 import { Slider } from '@/components/ui/slider'
-import { Input } from '@/components/ui/input'
 import {
   Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue,
 } from '@/components/ui/select'
@@ -25,7 +25,8 @@ import {
 import { Toggle } from '@/components/ui/toggle'
 
 const { t } = useI18n()
-const { state: sessState, changeDevicePreset, changeProxy, regenerateFingerprint } = useSessions()
+const { state: sessState, changeDevicePreset, changeNetworkEgress, regenerateFingerprint } = useSessions()
+const { state: egressState, fetchNetworkEgress } = useNetworkEgress()
 
 const props = defineProps<{
   wsUrl: string
@@ -62,14 +63,18 @@ const LANG_OPTIONS = [
   { value: 'ru', label: 'Русский' },
 ]
 const reconnectExhausted = ref(false)
-const proxyOpen = ref(false)
-const proxyInput = ref('')
+const networkOpen = ref(false)
+const selectedNetworkEgressId = ref('__direct__')
 const fpOpen = ref(false)
 const fpConfirmRegenerate = ref(false)
+const DIRECT_EGRESS_VALUE = '__direct__'
 
 const currentSession = computed(() => sessState.sessions.find(s => s.id === props.sessionId))
 const currentPreset = computed(() => currentSession.value?.devicePreset || 'desktop-1920x1080')
-const currentProxy = computed(() => currentSession.value?.proxyUrl || '')
+const currentNetworkEgressId = computed(() => currentSession.value?.networkEgressId || DIRECT_EGRESS_VALUE)
+const currentNetworkName = computed(() => currentSession.value?.networkEgressName || t('networkEgress.direct'))
+const currentNetworkStatus = computed(() => currentSession.value?.networkEgressStatus || 'healthy')
+const currentNetworkError = computed(() => currentSession.value?.networkEgressHealthError || '')
 const fpProfile = computed(() => currentSession.value?.fingerprintProfile || null)
 const desktopPresets = computed(() => sessState.devicePresets.filter(p => p.category === 'desktop'))
 const mobilePresets = computed(() => sessState.devicePresets.filter(p => p.category === 'mobile'))
@@ -335,22 +340,21 @@ async function onDeviceChange(preset: string | number | bigint | Record<string, 
   await changeDevicePreset(props.sessionId, val)
 }
 
-function onProxyOpenChange(open: boolean) {
-  proxyOpen.value = open
-  if (open) proxyInput.value = currentProxy.value
+async function onNetworkOpenChange(open: boolean) {
+  networkOpen.value = open
+  if (open) {
+    selectedNetworkEgressId.value = currentNetworkEgressId.value
+    await fetchNetworkEgress()
+  }
 }
 
-async function saveProxy() {
+async function saveNetworkEgress() {
   if (sessState.containerRestarting) return
-  proxyOpen.value = false
-  await changeProxy(props.sessionId, proxyInput.value.trim())
-}
-
-async function clearProxy() {
-  if (sessState.containerRestarting) return
-  proxyInput.value = ''
-  proxyOpen.value = false
-  await changeProxy(props.sessionId, '')
+  networkOpen.value = false
+  await changeNetworkEgress(
+    props.sessionId,
+    selectedNetworkEgressId.value === DIRECT_EGRESS_VALUE ? null : selectedNetworkEgressId.value,
+  )
 }
 
 async function regenerateFp() {
@@ -561,41 +565,54 @@ watch(inputBarOpen, (open) => {
           </SelectContent>
         </Select>
 
-        <!-- Proxy popover -->
-        <Popover :open="proxyOpen" @update:open="onProxyOpenChange">
+        <!-- Network egress popover -->
+        <Popover :open="networkOpen" @update:open="onNetworkOpenChange">
           <PopoverTrigger as-child>
             <Button
               variant="ghost" size="sm"
               :disabled="sessState.containerRestarting"
               class="h-5 px-1.5 text-[10px] gap-1"
-              :class="currentProxy ? 'text-emerald-400' : ''"
-              :title="currentProxy ? t('vnc.proxyActive') + ': ' + currentProxy : t('vnc.proxy')"
+              :class="currentNetworkStatus === 'unhealthy' || currentNetworkStatus === 'unsupported' ? 'text-red-400' : currentNetworkEgressId !== DIRECT_EGRESS_VALUE ? 'text-emerald-400' : ''"
+              :title="currentNetworkError || currentNetworkName"
             >
               <Network class="size-3" />
-              {{ t('vnc.proxy') }}
+              {{ t('vnc.network') }}
             </Button>
           </PopoverTrigger>
-          <PopoverContent class="w-64 p-2" align="start">
-            <Input
-              v-model="proxyInput"
-              type="text"
-              class="h-7 text-xs"
-              :placeholder="t('vnc.proxyPlaceholder')"
-              @keydown.enter="saveProxy"
-            />
-            <div class="flex gap-1.5 mt-1.5">
+          <PopoverContent class="w-72 p-2" align="start">
+            <div class="space-y-1.5">
+              <Select v-model="selectedNetworkEgressId" :disabled="sessState.containerRestarting">
+                <SelectTrigger class="h-7 text-xs">
+                  <SelectValue :placeholder="t('networkEgress.direct')" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem
+                    v-for="profile in egressState.profiles"
+                    :key="profile.id || DIRECT_EGRESS_VALUE"
+                    :value="profile.id || DIRECT_EGRESS_VALUE"
+                    :disabled="profile.status === 'disabled' || profile.status === 'unhealthy' || profile.status === 'unsupported'"
+                    class="text-xs"
+                  >
+                    {{ profile.name }}
+                    <span v-if="profile.type !== 'direct'" class="text-xs text-muted-foreground">({{ t(`networkEgress.type.${profile.type}`, profile.type) }})</span>
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+              <p
+                v-if="currentNetworkError"
+                class="text-[10px] leading-tight text-destructive"
+              >
+                {{ currentNetworkError }}
+              </p>
+              <p v-else class="text-[10px] leading-tight text-muted-foreground">
+                {{ currentNetworkName }}
+              </p>
               <Button
-                @click="saveProxy"
+                @click="saveNetworkEgress"
                 :disabled="sessState.containerRestarting"
                 variant="outline" size="sm"
-                class="flex-1 h-6 text-[10px] border-lime-600/30 text-lime-400 hover:bg-lime-600/10"
-              >{{ sessState.containerRestarting ? t('vnc.proxySaving') : t('vnc.proxySave') }}</Button>
-              <Button
-                @click="clearProxy"
-                :disabled="sessState.containerRestarting || !currentProxy"
-                variant="outline" size="sm"
-                class="flex-1 h-6 text-[10px] border-destructive/30 text-destructive hover:bg-destructive/10"
-              >{{ t('vnc.proxyClear') }}</Button>
+                class="w-full h-6 text-[10px] border-lime-600/30 text-lime-400 hover:bg-lime-600/10"
+              >{{ sessState.containerRestarting ? t('vnc.networkSaving') : t('vnc.networkSave') }}</Button>
             </div>
           </PopoverContent>
         </Popover>

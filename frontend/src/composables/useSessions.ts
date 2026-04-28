@@ -72,6 +72,25 @@ function restoreContainerStatus(status: Session['containerStatus'] | undefined):
   return status && status !== 'starting' ? status : 'not_found'
 }
 
+function applyNetworkEgressFields(target: Session, data: any): void {
+  if (
+    !('networkEgressId' in data) &&
+    !('networkEgressType' in data) &&
+    !('networkEgressName' in data) &&
+    !('networkEgressProxyUrl' in data) &&
+    !('proxyUrl' in data)
+  ) {
+    return
+  }
+  target.proxyUrl = data.proxyUrl || ''
+  target.networkEgressId = data.networkEgressId ?? null
+  target.networkEgressName = data.networkEgressName || (data.proxyUrl ? 'Manual proxy' : 'Direct')
+  target.networkEgressType = data.networkEgressType || (data.proxyUrl ? 'external_proxy' : 'direct')
+  target.networkEgressStatus = data.networkEgressStatus || (data.proxyUrl ? 'unchecked' : 'healthy')
+  target.networkEgressProxyUrl = data.networkEgressProxyUrl || data.proxyUrl || ''
+  target.networkEgressHealthError = data.networkEgressHealthError || ''
+}
+
 function clearStartingSoon(id: string): void {
   window.setTimeout(() => {
     startingSessionIds.delete(id)
@@ -117,6 +136,12 @@ async function fetchSessions(): Promise<void> {
         ports: containerStatus === 'running' ? (s.ports || local?.ports || null) : (s.ports || null),
         devicePreset: s.devicePreset || '',
         proxyUrl: s.proxyUrl || '',
+        networkEgressId: s.networkEgressId ?? null,
+        networkEgressName: s.networkEgressName || (s.proxyUrl ? 'Manual proxy' : 'Direct'),
+        networkEgressType: s.networkEgressType || (s.proxyUrl ? 'external_proxy' : 'direct'),
+        networkEgressStatus: s.networkEgressStatus || (s.proxyUrl ? 'unchecked' : 'healthy'),
+        networkEgressProxyUrl: s.networkEgressProxyUrl || s.proxyUrl || '',
+        networkEgressHealthError: s.networkEgressHealthError || '',
         fingerprintProfile: s.fingerprintProfile || local?.fingerprintProfile || null,
         browserLang: s.browserLang || 'zh-CN',
       }
@@ -141,7 +166,7 @@ async function fetchBrowserImages(): Promise<any[]> {
   }
 }
 
-async function createSession(name?: string, chromeVersion?: string): Promise<Session> {
+async function createSession(name?: string, chromeVersion?: string, networkEgressId?: string | null): Promise<Session> {
   if (!name) name = i18n.global.t('session.defaultName')
   const browserLang = _LOCALE_TO_BROWSER_LANG[(i18n.global.locale as any).value] ?? 'en-US'
 
@@ -149,12 +174,13 @@ async function createSession(name?: string, chromeVersion?: string): Promise<Ses
   if (!effectiveChromeVersion) {
     const readyImages = await fetchBrowserImages()
     if (readyImages.length > 0) {
-      effectiveChromeVersion = String(readyImages[0].chromeMajor)
+      effectiveChromeVersion = readyImages[0].chromeVersion || String(readyImages[0].chromeMajor)
     }
   }
 
   const body: Record<string, any> = { name, browserLang }
   if (effectiveChromeVersion) body.chromeVersion = effectiveChromeVersion
+  if (networkEgressId) body.networkEgressId = networkEgressId
 
   const res = await api('/api/sessions', {
     method: 'POST',
@@ -171,6 +197,13 @@ async function createSession(name?: string, chromeVersion?: string): Promise<Ses
     currentTitle: '',
     containerStatus: 'starting',
     ports: null,
+    proxyUrl: data.proxyUrl || '',
+    networkEgressId: data.networkEgressId ?? null,
+    networkEgressName: data.networkEgressName || (data.proxyUrl ? 'Manual proxy' : 'Direct'),
+    networkEgressType: data.networkEgressType || (data.proxyUrl ? 'external_proxy' : 'direct'),
+    networkEgressStatus: data.networkEgressStatus || (data.proxyUrl ? 'unchecked' : 'healthy'),
+    networkEgressProxyUrl: data.networkEgressProxyUrl || data.proxyUrl || '',
+    networkEgressHealthError: data.networkEgressHealthError || '',
     fingerprintProfile: data.fingerprintProfile || null,
     browserLang: data.browserLang || browserLang,
   }
@@ -203,6 +236,7 @@ async function _startContainerForSession(id: string): Promise<void> {
         s.containerStatus = 'running'
         s.ports = data.ports
         if (data.fingerprintProfile) s.fingerprintProfile = data.fingerprintProfile
+        applyNetworkEgressFields(s, data)
       }
     } else {
       const current = state.sessions.find(s => s.id === id)
@@ -257,6 +291,7 @@ async function startContainer(id: string): Promise<void> {
         s.containerStatus = 'running'
         s.ports = data.ports
         if (data.fingerprintProfile) s.fingerprintProfile = data.fingerprintProfile
+        applyNetworkEgressFields(s, data)
       }
       if (isActive) {
         state.activePorts = {
@@ -329,6 +364,7 @@ async function changeDevicePreset(id: string, preset: string): Promise<void> {
         s.ports = data.ports
         s.containerStatus = 'running'
         if (data.fingerprintProfile) s.fingerprintProfile = data.fingerprintProfile
+        applyNetworkEgressFields(s, data)
       }
       if (state.activeId === id) {
         state.activePorts = {
@@ -358,6 +394,7 @@ async function changeProxy(id: string, proxyUrl: string): Promise<void> {
         s.ports = data.ports
         s.containerStatus = 'running'
         if (data.fingerprintProfile) s.fingerprintProfile = data.fingerprintProfile
+        applyNetworkEgressFields(s, data)
       }
       if (state.activeId === id) {
         state.activePorts = {
@@ -365,6 +402,37 @@ async function changeProxy(id: string, proxyUrl: string): Promise<void> {
           vncPort: data.ports.vnc_port,
         }
       }
+    }
+  } finally {
+    state.containerRestarting = false
+  }
+}
+
+async function changeNetworkEgress(id: string, networkEgressId: string | null): Promise<void> {
+  state.containerRestarting = true
+  try {
+    const res = await api(`/api/sessions/${id}/network-egress`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ networkEgressId }),
+    })
+    const data = await res.json()
+    if (data.ok && data.ports) {
+      const s = state.sessions.find(s => s.id === id)
+      if (s) {
+        s.ports = data.ports
+        s.containerStatus = 'running'
+        if (data.fingerprintProfile) s.fingerprintProfile = data.fingerprintProfile
+        applyNetworkEgressFields(s, data)
+      }
+      if (state.activeId === id) {
+        state.activePorts = {
+          seleniumPort: data.ports.selenium_port,
+          vncPort: data.ports.vnc_port,
+        }
+      }
+    } else if (data?.error) {
+      throw new Error(data.error)
     }
   } finally {
     state.containerRestarting = false
@@ -388,6 +456,7 @@ async function regenerateFingerprint(id: string): Promise<void> {
           s.ports = data.ports
           s.containerStatus = 'running'
         }
+        applyNetworkEgressFields(s, data)
       }
       if (state.activeId === id && data.ports) {
         state.activePorts = {
@@ -467,6 +536,7 @@ export function useSessions() {
     stopContainer,
     changeDevicePreset,
     changeProxy,
+    changeNetworkEgress,
     regenerateFingerprint,
     fetchBrowserImages,
   }

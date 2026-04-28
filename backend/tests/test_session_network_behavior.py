@@ -132,6 +132,76 @@ def test_create_session_uses_declared_network_without_container_probe(monkeypatc
     assert result["fingerprintProfile"]["timezone"] == "Asia/Shanghai"
 
 
+def test_create_session_prefers_exact_chrome_version(monkeypatch):
+    pool = FakePool([
+        {"chrome_version": "147.0.7727.60", "image_tag": "browser-pilot:147-60"},
+    ])
+    captured = {}
+    monkeypatch.setattr(sessions, "get_pool", lambda: pool)
+    monkeypatch.setattr(sessions.uuid, "uuid4", lambda: "session-1")
+
+    async def fake_network(proxy_url, image_tag):
+        captured["image_tag"] = image_tag
+        return _network()
+
+    async def fake_generate_profile(tenant_id, browser_lang, chrome_version=None):
+        captured["chrome_version"] = chrome_version
+        return _profile(browser_lang)
+
+    monkeypatch.setattr(sessions, "_resolve_session_network", fake_network)
+    monkeypatch.setattr(sessions, "generate_profile", fake_generate_profile)
+
+    result = asyncio.run(
+        sessions.create_session(
+            sessions.CreateSessionBody(
+                name="test",
+                browserLang="zh-CN",
+                chromeVersion="147.0.7727.60",
+            ),
+            _user(),
+        )
+    )
+
+    assert result["chromeVersion"] == "147.0.7727.60"
+    assert captured == {
+        "image_tag": "browser-pilot:147-60",
+        "chrome_version": "147.0.7727.60",
+    }
+
+
+def test_create_session_keeps_major_version_fallback(monkeypatch):
+    pool = FakePool([
+        {"chrome_version": "147.0.7727.55", "image_tag": "browser-pilot:147"},
+    ])
+    captured = {}
+    monkeypatch.setattr(sessions, "get_pool", lambda: pool)
+    monkeypatch.setattr(sessions.uuid, "uuid4", lambda: "session-1")
+
+    async def fake_network(proxy_url, image_tag):
+        captured["image_tag"] = image_tag
+        return _network()
+
+    async def fake_generate_profile(tenant_id, browser_lang, chrome_version=None):
+        captured["chrome_version"] = chrome_version
+        return _profile(browser_lang)
+
+    monkeypatch.setattr(sessions, "_resolve_session_network", fake_network)
+    monkeypatch.setattr(sessions, "generate_profile", fake_generate_profile)
+
+    result = asyncio.run(
+        sessions.create_session(
+            sessions.CreateSessionBody(name="test", chromeVersion="147"),
+            _user(),
+        )
+    )
+
+    assert result["chromeVersion"] == "147.0.7727.55"
+    assert captured == {
+        "image_tag": "browser-pilot:147",
+        "chrome_version": "147.0.7727.55",
+    }
+
+
 def test_change_proxy_refreshes_network_and_keeps_language(monkeypatch):
     profile = _profile("ja-JP")
     pool = FakePool([
@@ -225,6 +295,7 @@ def test_create_container_passes_profile_dns_to_docker(monkeypatch):
 
     monkeypatch.setattr(container, "_run", fake_run)
     monkeypatch.setattr(container, "_find_free_port", lambda: next(ports))
+    monkeypatch.setattr(container, "ensure_docker_network", lambda: asyncio.sleep(0))
 
     asyncio.run(
         container.create_container(
@@ -234,6 +305,7 @@ def test_create_container_passes_profile_dns_to_docker(monkeypatch):
         )
     )
 
+    assert "--network browser-pilot-net" in commands[0]
     assert "--dns 223.5.5.5" in commands[0]
     assert "--dns 119.29.29.29" in commands[0]
     assert "-p 55100:4444" in commands[0]

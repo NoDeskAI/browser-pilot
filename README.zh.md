@@ -88,7 +88,7 @@ graph TB
 - noVNC（端口 7900）实时查看
 - CDP 事件日志用于调试
 - **设备预设**：在桌面分辨率（1920×1080 到 1280×720）和移动设备模拟（iPhone、iPad、Galaxy、Pixel）之间切换，自动适配 UA 和视口
-- **独立会话代理**：每个会话可单独配置 HTTP/HTTPS/SOCKS4/SOCKS5 代理，随时通过 UI 或 CLI 修改
+- **网络出口配置**：为每个会话复用部署侧的外部代理、Clash 或 OpenVPN 出口，可在 UI 中随时切换
 
 ## 本地开发
 
@@ -116,7 +116,23 @@ cp .env.example .env
 | `DOCKER_HOST_ADDR`    | `localhost`                                                    | 后端访问浏览器容器的地址。Docker 部署时设为 `host.docker.internal`（docker-compose 自动配置） |
 | `OPENAI_API_KEY`      | —                                                              | 可选。设置后会用 LLM 在首次导航时自动命名会话，未设置则以页面标题命名                                 |
 | `LOG_LEVEL`           | `INFO`                                                         | 后端日志级别。排查问题时可设为 `DEBUG`                                               |
+| `NETWORK_EGRESS_DOCKER_NETWORK` | `browser-pilot-net` | 浏览器容器和托管网络出口容器共用的 Docker bridge 网络。 |
+| `NETWORK_EGRESS_CONFIG_DIR` | `data/network-egress` | 托管 Clash/OpenVPN 出口配置的私有存储目录。 |
+| `NETWORK_EGRESS_CLASH_IMAGE` | `ghcr.io/metacubex/mihomo:latest` | 托管 Clash 出口使用的容器镜像。 |
+| `NETWORK_EGRESS_CLASH_PROXY_PORT` | `7890` | 托管 Clash 容器在内部 Docker 网络暴露的代理端口。 |
+| `NETWORK_EGRESS_OPENVPN_IMAGE` | `browser-pilot-openvpn-egress:latest` | 托管 OpenVPN 出口使用的容器镜像。默认镜像会在首次使用时从 `services/network-egress-openvpn` 构建。 |
+| `NETWORK_EGRESS_OPENVPN_PROXY_PORT` | `8888` | 托管 OpenVPN 容器在内部 Docker 网络暴露的 HTTP 代理端口。 |
 
+### 网络出口
+
+Browser Pilot 可以在 **设置 > 网络出口** 中配置部署侧出口，并让会话通过指定出口访问内网：
+
+- `直连`：不设置浏览器代理，保持当前默认行为。
+- `外部代理`：使用已有的 HTTP/HTTPS/SOCKS 代理地址。
+- `Clash`：运行托管的 Clash 兼容容器，并让浏览器会话连接其内部代理端口。
+- `OpenVPN`：运行托管 OpenVPN 容器和 HTTP 代理封装。该模式要求 Docker 宿主机允许 `/dev/net/tun` 和 `NET_ADMIN`。
+
+网络出口属于部署侧能力。它不会自动复用用户笔记本上已经连接的 VPN，除非该 VPN 配置也能放到当前部署环境中。
 
 ## 安全说明
 
