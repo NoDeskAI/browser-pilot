@@ -20,30 +20,47 @@ rm -f /home/seluser/chrome-data/manual/SingletonLock \
       /home/seluser/chrome-data/manual/SingletonCookie \
       /home/seluser/chrome-data/manual/SingletonSocket 2>/dev/null
 PREF_PATH="/home/seluser/chrome-data/manual/Default/Preferences"
+LOCAL_STATE_PATH="/home/seluser/chrome-data/manual/Local State"
 mkdir -p "$(dirname "$PREF_PATH")"
-PREF_PATH="$PREF_PATH" /usr/bin/python3 - <<'PY'
+PREF_PATH="$PREF_PATH" LOCAL_STATE_PATH="$LOCAL_STATE_PATH" /usr/bin/python3 - <<'PY'
 import json
 import os
 
+def load_json(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+def write_json(path, data):
+    tmp_path = f"{path}.tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, separators=(",", ":"))
+    os.replace(tmp_path, path)
+
+def mark_clean_exit(data):
+    profile = data.get("profile")
+    if not isinstance(profile, dict):
+        profile = {}
+        data["profile"] = profile
+    profile["exit_type"] = "Normal"
+    profile["exited_cleanly"] = True
+    return profile
+
 path = os.environ["PREF_PATH"]
-prefs = {}
-try:
-    with open(path, encoding="utf-8") as f:
-        prefs = json.load(f)
-except (FileNotFoundError, json.JSONDecodeError):
-    prefs = {}
+prefs = load_json(path)
 
 prefs["credentials_enable_service"] = False
-profile = prefs.get("profile")
-if not isinstance(profile, dict):
-    profile = {}
-    prefs["profile"] = profile
+profile = mark_clean_exit(prefs)
 profile["password_manager_enabled"] = False
+write_json(path, prefs)
 
-tmp_path = f"{path}.tmp"
-with open(tmp_path, "w", encoding="utf-8") as f:
-    json.dump(prefs, f, separators=(",", ":"))
-os.replace(tmp_path, path)
+local_state_path = os.environ["LOCAL_STATE_PATH"]
+if os.path.exists(local_state_path):
+    local_state = load_json(local_state_path)
+    mark_clean_exit(local_state)
+    write_json(local_state_path, local_state)
 PY
 W=${SE_SCREEN_WIDTH:-1280}
 H=${SE_SCREEN_HEIGHT:-800}

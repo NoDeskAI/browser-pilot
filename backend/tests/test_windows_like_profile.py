@@ -184,6 +184,9 @@ def test_browser_fontconfig_and_stealth_use_windows_allowlist():
 
     assert "FONTCONFIG_FILE=/opt/browser-fontconfig/fonts.conf" in start
     assert "/tmp/fingerprint-profile.json" in start
+    assert 'LOCAL_STATE_PATH="/home/seluser/chrome-data/manual/Local State"' in start
+    assert 'profile["exit_type"] = "Normal"' in start
+    assert 'profile["exited_cleanly"] = True' in start
     assert "cdp-fingerprint-agent.py" in dockerfile
     assert "cdp-fingerprint-agent.conf" in dockerfile
     assert "<dir>/usr/share/fonts/truetype/croscore</dir>" in fontconfig
