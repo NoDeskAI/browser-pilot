@@ -16,11 +16,17 @@ if [ -z "$CHROME_BIN" ]; then
     exit 127
   fi
 fi
-rm -f /home/seluser/chrome-data/manual/SingletonLock \
-      /home/seluser/chrome-data/manual/SingletonCookie \
-      /home/seluser/chrome-data/manual/SingletonSocket 2>/dev/null
-PREF_PATH="/home/seluser/chrome-data/manual/Default/Preferences"
-LOCAL_STATE_PATH="/home/seluser/chrome-data/manual/Local State"
+PROFILE_DIR="/home/seluser/chrome-data/manual"
+rm -f "$PROFILE_DIR"/SingletonLock \
+      "$PROFILE_DIR"/SingletonCookie \
+      "$PROFILE_DIR"/SingletonSocket \
+      "$PROFILE_DIR"/Default/Current\ Session \
+      "$PROFILE_DIR"/Default/Current\ Tabs \
+      "$PROFILE_DIR"/Default/Last\ Session \
+      "$PROFILE_DIR"/Default/Last\ Tabs 2>/dev/null
+rm -rf "$PROFILE_DIR/Default/Sessions" 2>/dev/null
+PREF_PATH="$PROFILE_DIR/Default/Preferences"
+LOCAL_STATE_PATH="$PROFILE_DIR/Local State"
 mkdir -p "$(dirname "$PREF_PATH")"
 PREF_PATH="$PREF_PATH" LOCAL_STATE_PATH="$LOCAL_STATE_PATH" /usr/bin/python3 - <<'PY'
 import json
@@ -40,12 +46,18 @@ def write_json(path, data):
     os.replace(tmp_path, path)
 
 def mark_clean_exit(data):
+    data["exited_cleanly"] = True
     profile = data.get("profile")
     if not isinstance(profile, dict):
         profile = {}
         data["profile"] = profile
     profile["exit_type"] = "Normal"
     profile["exited_cleanly"] = True
+    metrics = data.get("user_experience_metrics")
+    if isinstance(metrics, dict):
+        stability = metrics.get("stability")
+        if isinstance(stability, dict):
+            stability["exited_cleanly"] = True
     return profile
 
 path = os.environ["PREF_PATH"]
@@ -164,6 +176,7 @@ exec "$CHROME_BIN" \
   --disable-background-networking \
   --disable-sync \
   --disable-session-crashed-bubble \
+  --hide-crash-restore-bubble \
   --metrics-recording-only \
   --lang=${LANG_CODE} \
   --window-size=${W},${H} \
