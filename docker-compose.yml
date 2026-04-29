@@ -16,7 +16,7 @@ services:
         required: false
     environment:
       PROJECT_ROOT: /app
-      DATABASE_URL: postgresql://${POSTGRES_USER:-bpilot}:${POSTGRES_PASSWORD:-bpilot}@postgres:5432/${POSTGRES_DB:-bpilot}
+      DATABASE_URL: postgresql://${POSTGRES_USER:?copy .env.example to .env and set POSTGRES_USER}:${POSTGRES_PASSWORD:?copy .env.example to .env and set POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:?copy .env.example to .env and set POSTGRES_DB}
       DOCKER_HOST_ADDR: host.docker.internal
       NETWORK_EGRESS_DOCKER_NETWORK: ${NETWORK_EGRESS_DOCKER_NETWORK:-browser-pilot-net}
       NETWORK_EGRESS_CONFIG_DIR: ${NETWORK_EGRESS_CONFIG_DIR:-/app/data/network-egress}
@@ -32,15 +32,15 @@ services:
     image: postgres:16-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-bpilot}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-bpilot}
-      POSTGRES_DB: ${POSTGRES_DB:-bpilot}
+      POSTGRES_USER: ${POSTGRES_USER:?copy .env.example to .env and set POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?copy .env.example to .env and set POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:?copy .env.example to .env and set POSTGRES_DB}
     ports:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-bpilot}"]
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\""]
       interval: 3s
       timeout: 3s
       retries: 5

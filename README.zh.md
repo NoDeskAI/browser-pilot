@@ -96,7 +96,8 @@ graph TB
 
 ```bash
 cp .env.example .env
-# 按需编辑 .env（ARM 用户：取消 SELENIUM_BASE_IMAGE 注释）
+# 生产/公网部署前必须修改数据库密码。
+# ARM 用户：取消 SELENIUM_BASE_IMAGE 注释。
 
 ./start.sh          # 前台模式（Ctrl+C 停止）
 ./start.sh -d       # 后台守护进程模式
@@ -111,7 +112,10 @@ cp .env.example .env
 
 | Variable              | Default                                                        | Description                                                           |
 | --------------------- | -------------------------------------------------------------- | --------------------------------------------------------------------- |
-| `DATABASE_URL`        | `postgresql://bpilot:bpilot@localhost:5432/bpilot` | PostgreSQL 连接字符串                                                      |
+| `DATABASE_URL`        | 必须在 `.env` 中设置；见 `.env.example`                         | 本地后端开发使用的 PostgreSQL 连接字符串，需和 `POSTGRES_*` 保持一致。                  |
+| `POSTGRES_USER`       | 必须在 `.env` 中设置；见 `.env.example`                         | Docker Compose 和本地开发使用的 PostgreSQL 用户名。                              |
+| `POSTGRES_PASSWORD`   | 必须在 `.env` 中设置；见 `.env.example`                         | PostgreSQL 密码，生产/公网部署前必须修改。                                      |
+| `POSTGRES_DB`         | 必须在 `.env` 中设置；见 `.env.example`                         | PostgreSQL 数据库名。                                                       |
 | `SELENIUM_BASE_IMAGE` | `selenium/standalone-chrome:latest`                            | 浏览器容器基础镜像。ARM 用户使用 `seleniarm/standalone-chromium:latest`             |
 | `DOCKER_HOST_ADDR`    | `localhost`                                                    | 后端访问浏览器容器的地址。Docker 部署时设为 `host.docker.internal`（docker-compose 自动配置） |
 | `OPENAI_API_KEY`      | —                                                              | 可选。设置后会用 LLM 在首次导航时自动命名会话，未设置则以页面标题命名                                 |

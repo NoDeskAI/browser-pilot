@@ -7,7 +7,7 @@ from alembic import context
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.pool import NullPool
 
-from app.config import DATABASE_URL
+from app.config import require_database_url
 from app.models import Base
 
 config = context.config
@@ -20,7 +20,7 @@ target_metadata = Base.metadata
 
 
 def _async_url() -> str:
-    url = DATABASE_URL
+    url = require_database_url()
     if url.startswith("postgresql://"):
         url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
     return url

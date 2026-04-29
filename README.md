@@ -98,7 +98,8 @@ For local development without Docker for the backend:
 
 ```bash
 cp .env.example .env
-# Edit .env as needed (ARM users: uncomment SELENIUM_BASE_IMAGE)
+# Edit database credentials before production/public deployment.
+# ARM users: uncomment SELENIUM_BASE_IMAGE.
 
 ./start.sh          # foreground mode (Ctrl+C to stop)
 ./start.sh -d       # background daemon mode
@@ -113,7 +114,10 @@ This starts PostgreSQL in Docker, builds the Selenium image, and runs the backen
 
 | Variable              | Default                                                        | Description                                                                                                                        |
 | --------------------- | -------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `DATABASE_URL`        | `postgresql://bpilot:bpilot@localhost:5432/bpilot` | PostgreSQL connection string                                                                                                       |
+| `DATABASE_URL`        | Required in `.env`; see `.env.example`                         | PostgreSQL connection string for local backend development. Keep it aligned with `POSTGRES_*`.                                     |
+| `POSTGRES_USER`       | Required in `.env`; see `.env.example`                         | PostgreSQL user used by Docker Compose and local development.                                                                      |
+| `POSTGRES_PASSWORD`   | Required in `.env`; see `.env.example`                         | PostgreSQL password. Change it before production/public deployment.                                                                |
+| `POSTGRES_DB`         | Required in `.env`; see `.env.example`                         | PostgreSQL database name.                                                                                                         |
 | `SELENIUM_BASE_IMAGE` | `selenium/standalone-chrome:latest`                            | Base image for browser containers. ARM users: `seleniarm/standalone-chromium:latest`                                               |
 | `DOCKER_HOST_ADDR`    | `localhost`                                                    | How the backend reaches browser containers. Set to `host.docker.internal` in Docker deployment (auto-configured by docker-compose) |
 | `OPENAI_API_KEY`      | —                                                              | Optional. When set, uses LLM to auto-name sessions on first navigation. Without it, sessions are named by page title.              |

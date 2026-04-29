@@ -77,7 +77,7 @@ _ensure_postgres() {
     echo "[postgres] 确保 PostgreSQL 运行中..."
     docker compose up -d postgres
     local tries=0
-    until docker compose exec -T postgres pg_isready -U ${POSTGRES_USER:-bpilot} >/dev/null 2>&1; do
+    until docker compose exec -T postgres pg_isready -U "$POSTGRES_USER" >/dev/null 2>&1; do
         tries=$((tries + 1))
         if [[ $tries -ge 30 ]]; then
             echo "[postgres] 等待超时，继续启动（backend 会自行重试连接）"
@@ -88,7 +88,25 @@ _ensure_postgres() {
     echo "[postgres] ready"
 }
 
+_require_database_env() {
+    local missing=()
+    local key
+    for key in POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB DATABASE_URL; do
+        if [[ -z "${!key:-}" ]]; then
+            missing+=("$key")
+        fi
+    done
+
+    if (( ${#missing[@]} > 0 )); then
+        echo "缺少数据库配置: ${missing[*]}" >&2
+        echo "请先执行: cp .env.example .env" >&2
+        echo "然后按需修改 .env 中的 DATABASE_URL、POSTGRES_USER、POSTGRES_PASSWORD、POSTGRES_DB。" >&2
+        exit 1
+    fi
+}
+
 _start_processes() {
+    _require_database_env
     _ensure_postgres
 
     : > "$BACKEND_LOG"

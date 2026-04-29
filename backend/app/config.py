@@ -26,7 +26,18 @@ def _env(key: str, default: str) -> str:
     return os.getenv(key, default)
 
 
-DATABASE_URL = _env("DATABASE_URL", "postgresql://bpilot:bpilot@localhost:5432/bpilot")
+DATABASE_URL = _env("DATABASE_URL", "")
+
+
+def require_database_url() -> str:
+    if DATABASE_URL:
+        return DATABASE_URL
+    raise RuntimeError(
+        "DATABASE_URL is not set. Copy .env.example to .env and set "
+        "DATABASE_URL, POSTGRES_USER, POSTGRES_PASSWORD, and POSTGRES_DB before starting Browser Pilot."
+    )
+
+
 DOCKER_HOST_ADDR = _env("DOCKER_HOST_ADDR", "localhost")
 API_BASE_URL = _env("API_BASE_URL", "http://localhost:8000")
 
