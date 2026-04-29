@@ -156,6 +156,18 @@ export default {
     cliManualAccess: 'Manual CLI Access',
     cliAgentAccess: 'Agent CLI Access',
   },
+  bootstrap: {
+    migratingTitle: 'Updating database',
+    migratingDescription: 'Applying database schema changes. Browser Pilot will continue automatically when this finishes.',
+    waitingDatabaseTitle: 'Waiting for database',
+    waitingDatabaseDescription: 'The backend is waiting for PostgreSQL to become available.',
+    migrationFailedTitle: 'Database update failed',
+    migrationFailedDescription: 'Browser Pilot stopped startup to avoid running against an incomplete database schema.',
+    incompatibleTitle: 'Database version is newer',
+    incompatibleDescription: 'This database was used by a newer Browser Pilot version. Upgrade the app or restore a matching backup.',
+    revisionLabel: 'Current: {current} · Target: {target}',
+    logsHint: 'Check the backend logs for the full migration error.',
+  },
   cliDoc: {
     title: 'CLI Access',
     copyBtn: 'Copy CLI Documentation',

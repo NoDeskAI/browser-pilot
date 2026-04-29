@@ -26,22 +26,28 @@ const router = createRouter({
   ],
 })
 
-let _siteInfoCache: { setupComplete: boolean } | null = null
+let _siteInfoCache: { setupComplete: boolean; bootstrapBlocked?: boolean } | null = null
 
-async function getSiteInfo(): Promise<{ setupComplete: boolean }> {
+async function getSiteInfo(): Promise<{ setupComplete: boolean; bootstrapBlocked?: boolean }> {
   if (_siteInfoCache) return _siteInfoCache
   try {
     const res = await fetch('/api/site-info')
     const data = await res.json()
+    if (!res.ok) {
+      return { setupComplete: false, bootstrapBlocked: true }
+    }
     _siteInfoCache = { setupComplete: !!data.setupComplete }
     return _siteInfoCache
   } catch {
-    return { setupComplete: true }
+    return { setupComplete: false, bootstrapBlocked: true }
   }
 }
 
 router.beforeEach(async (to) => {
   const info = await getSiteInfo()
+  if (info.bootstrapBlocked) {
+    return true
+  }
 
   if (!info.setupComplete && to.path !== '/setup') {
     return '/setup'

@@ -129,6 +129,12 @@ This starts PostgreSQL in Docker, builds the Selenium image, and runs the backen
 | `NETWORK_EGRESS_OPENVPN_IMAGE` | `browser-pilot-openvpn-egress:latest` | Container image used for managed OpenVPN egress profiles. The default image is built from `services/network-egress-openvpn` on first use. |
 | `NETWORK_EGRESS_OPENVPN_PROXY_PORT` | `8888` | HTTP proxy port exposed by managed OpenVPN containers on the internal Docker network. |
 
+### Database migrations
+
+Browser Pilot runs Alembic migrations automatically when the backend starts. Normal upgrades only require restarting the new version; users do not need to run migration commands manually.
+
+If migration fails, the backend keeps `/healthz` alive but reports `/readyz` as unavailable and the frontend shows the database update error. Downgrades do not automatically roll back schema changes; use an app version compatible with the current database or restore a matching backup.
+
 ### Network Egress
 
 Browser Pilot can route a session through a deployment-side egress profile from **Settings > Network Egress**:

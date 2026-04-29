@@ -156,6 +156,18 @@ export default {
     cliManualAccess: 'CLI 手动接入',
     cliAgentAccess: 'Agent 自动接入',
   },
+  bootstrap: {
+    migratingTitle: '数据库更新中',
+    migratingDescription: '正在应用数据库结构更新，完成后会自动进入 Browser Pilot。',
+    waitingDatabaseTitle: '等待数据库',
+    waitingDatabaseDescription: '后端正在等待 PostgreSQL 可用。',
+    migrationFailedTitle: '数据库更新失败',
+    migrationFailedDescription: 'Browser Pilot 已停止启动，避免在不完整的数据库结构上运行。',
+    incompatibleTitle: '数据库版本较新',
+    incompatibleDescription: '该数据库曾被更新版本的 Browser Pilot 使用，请升级应用或恢复匹配版本的备份。',
+    revisionLabel: '当前：{current} · 目标：{target}',
+    logsHint: '请查看 backend 日志获取完整迁移错误。',
+  },
   cliDoc: {
     title: 'CLI 接入',
     copyBtn: '复制接入文档',

@@ -127,6 +127,12 @@ cp .env.example .env
 | `NETWORK_EGRESS_OPENVPN_IMAGE` | `browser-pilot-openvpn-egress:latest` | 托管 OpenVPN 出口使用的容器镜像。默认镜像会在首次使用时从 `services/network-egress-openvpn` 构建。 |
 | `NETWORK_EGRESS_OPENVPN_PROXY_PORT` | `8888` | 托管 OpenVPN 容器在内部 Docker 网络暴露的 HTTP 代理端口。 |
 
+### 数据库迁移
+
+Browser Pilot 后端启动时会自动执行 Alembic 迁移。正常升级只需要重启新版本，用户不需要手动执行数据库迁移命令。
+
+如果迁移失败，后端会保持 `/healthz` 存活，但 `/readyz` 会返回不可用，前端会显示数据库更新错误。降级不会自动回滚数据库结构；请使用兼容当前数据库的应用版本，或恢复匹配版本的备份。
+
 ### 网络出口
 
 Browser Pilot 可以在 **设置 > 网络出口** 中配置部署侧出口，并让会话通过指定出口访问内网：

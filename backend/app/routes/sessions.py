@@ -7,8 +7,10 @@ import uuid
 import asyncio
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from app import db
 from app.auth.dependencies import CurrentUser, get_current_user, get_session_aware_user, require_role, verify_session_access
 from app.container import (
     ensure_container_running,
@@ -848,6 +850,10 @@ async def get_session_logs(session_id: str, tail: int = 200, log_type: str | Non
 async def get_site_info(request: Request):
     from ..config import APP_TITLE, CLI_COMMAND_NAME, EDITION
     from .cli import get_cli_install_info
+
+    if not db.is_ready():
+        state = db.get_bootstrap_state()
+        return JSONResponse({"status": state["status"], "database": state}, status_code=503)
 
     pool = get_pool()
     user_count = await pool.fetchval("SELECT COUNT(*) FROM users")

@@ -52,7 +52,22 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-SKIP_LOG_PATHS = {"/api/docker/status", "/healthz", "/readyz"}
+SKIP_LOG_PATHS = {"/api/docker/status", "/api/site-info", "/healthz", "/readyz"}
+DB_BOOTSTRAP_EXEMPT_PATHS = {"/api/site-info", "/healthz", "/readyz"}
+
+
+def _bootstrap_response(status_code: int = 503) -> JSONResponse:
+    state = db.get_bootstrap_state()
+    status = "ok" if state["status"] == "ready" else state["status"]
+    return JSONResponse({"status": status, "database": state}, status_code=status_code)
+
+
+@app.middleware("http")
+async def database_readiness_gate(request: Request, call_next):
+    path = request.url.path
+    if path.startswith("/api/") and path not in DB_BOOTSTRAP_EXEMPT_PATHS and not db.is_ready():
+        return _bootstrap_response(503)
+    return await call_next(request)
 
 
 @app.middleware("http")
@@ -82,8 +97,8 @@ async def _liveness():
 @app.get("/readyz")
 async def _readiness():
     if db.is_ready():
-        return JSONResponse({"status": "ok"})
-    return JSONResponse({"status": "waiting for database"}, status_code=503)
+        return _bootstrap_response(200)
+    return _bootstrap_response(503)
 
 
 app.include_router(auth_router)
