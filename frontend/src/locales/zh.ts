@@ -157,8 +157,8 @@ export default {
     cliAgentAccess: 'Agent 自动接入',
   },
   bootstrap: {
-    checkingTitle: '正在连接 Browser Pilot',
-    checkingDescription: '正在确认后端和数据库状态。',
+    checkingTitle: '正在加载 Browser Pilot',
+    checkingDescription: '请稍候。',
     migratingTitle: '数据库更新中',
     migratingDescription: '正在应用数据库结构更新，完成后会自动进入 Browser Pilot。',
     waitingDatabaseTitle: '等待数据库',

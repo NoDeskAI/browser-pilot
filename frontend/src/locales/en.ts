@@ -157,8 +157,8 @@ export default {
     cliAgentAccess: 'Agent CLI Access',
   },
   bootstrap: {
-    checkingTitle: 'Connecting to Browser Pilot',
-    checkingDescription: 'Checking backend and database status.',
+    checkingTitle: 'Loading Browser Pilot',
+    checkingDescription: 'Please wait.',
     migratingTitle: 'Updating database',
     migratingDescription: 'Applying database schema changes. Browser Pilot will continue automatically when this finishes.',
     waitingDatabaseTitle: 'Waiting for database',
