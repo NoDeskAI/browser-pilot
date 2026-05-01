@@ -27,16 +27,20 @@ const bootstrap = reactive({
 const bootstrapReady = computed(() => bootstrap.status === 'ready')
 const bootstrapFailed = computed(() => bootstrap.status === 'migration_failed' || bootstrap.status === 'incompatible_schema')
 const bootstrapTitle = computed(() => {
+  if (bootstrap.status === 'checking') return t('bootstrap.checkingTitle')
+  if (bootstrap.status === 'migrating') return t('bootstrap.migratingTitle')
   if (bootstrap.status === 'migration_failed') return t('bootstrap.migrationFailedTitle')
   if (bootstrap.status === 'incompatible_schema') return t('bootstrap.incompatibleTitle')
   if (bootstrap.status === 'waiting_database') return t('bootstrap.waitingDatabaseTitle')
-  return t('bootstrap.migratingTitle')
+  return t('bootstrap.checkingTitle')
 })
 const bootstrapDescription = computed(() => {
+  if (bootstrap.status === 'checking') return t('bootstrap.checkingDescription')
+  if (bootstrap.status === 'migrating') return t('bootstrap.migratingDescription')
   if (bootstrap.status === 'migration_failed') return t('bootstrap.migrationFailedDescription')
   if (bootstrap.status === 'incompatible_schema') return t('bootstrap.incompatibleDescription')
   if (bootstrap.status === 'waiting_database') return t('bootstrap.waitingDatabaseDescription')
-  return t('bootstrap.migratingDescription')
+  return t('bootstrap.checkingDescription')
 })
 
 function sleep(ms: number) {
@@ -49,7 +53,10 @@ async function waitForBootstrap() {
       const res = await fetch('/readyz')
       const data = await res.json().catch(() => ({}))
       const db = data.database || {}
-      bootstrap.status = res.ok ? 'ready' : (db.status || data.status || 'waiting_database')
+      const status = db.status || data.status || ''
+      bootstrap.status = res.ok && (status === 'ready' || status === 'ok')
+        ? 'ready'
+        : (status || 'waiting_database')
       bootstrap.error = db.error || ''
       bootstrap.currentRevision = db.currentRevision || ''
       bootstrap.targetRevision = db.targetRevision || ''

@@ -28,6 +28,8 @@ export default defineConfig({
     host: true,
     proxy: {
       '/api': 'http://localhost:8000',
+      '/readyz': 'http://localhost:8000',
+      '/healthz': 'http://localhost:8000',
     },
   },
 })
