@@ -4,17 +4,22 @@ import hashlib
 import logging
 import secrets
 import uuid
+from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 
 from app.auth.dependencies import CurrentUser, get_current_user, require_role
 from app.auth.jwt import create_access_token
 from app.auth.password import hash_password, verify_password
+from app.config import REMEMBER_ME_DAYS
 from app.db import get_pool
 
 logger = logging.getLogger("auth.routes")
 router = APIRouter(prefix="/api/auth", tags=["auth"])
+
+REMEMBER_COOKIE_NAME = "bp_remember_token"
+REMEMBER_COOKIE_PATH = "/api/auth"
 
 
 # --------------- Request models ---------------
@@ -22,6 +27,7 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 class LoginBody(BaseModel):
     email: str
     password: str
+    rememberMe: bool = False
 
 
 class SetupBody(BaseModel):
@@ -36,10 +42,71 @@ class CreateTokenBody(BaseModel):
     sessionId: str | None = None
 
 
+def _hash_remember_token(raw_token: str) -> str:
+    return hashlib.sha256(raw_token.encode()).hexdigest()
+
+
+def _set_remember_cookie(response: Response, raw_token: str, expires_at: datetime) -> None:
+    now = datetime.now(timezone.utc)
+    max_age = max(0, int((expires_at - now).total_seconds()))
+    response.set_cookie(
+        REMEMBER_COOKIE_NAME,
+        raw_token,
+        max_age=max_age,
+        httponly=True,
+        samesite="lax",
+        path=REMEMBER_COOKIE_PATH,
+    )
+
+
+def _clear_remember_cookie(response: Response) -> None:
+    response.delete_cookie(
+        REMEMBER_COOKIE_NAME,
+        path=REMEMBER_COOKIE_PATH,
+        samesite="lax",
+    )
+
+
+async def _create_remember_token(
+    response: Response,
+    user_id: str,
+    tenant_id: str,
+    expires_at: datetime | None = None,
+) -> None:
+    raw_token = secrets.token_urlsafe(48)
+    token_hash = _hash_remember_token(raw_token)
+    token_id = str(uuid.uuid4())
+    expires = expires_at or (datetime.now(timezone.utc) + timedelta(days=REMEMBER_ME_DAYS))
+
+    pool = get_pool()
+    await pool.execute(
+        """
+        INSERT INTO remember_tokens (id, user_id, tenant_id, token_hash, expires_at)
+        VALUES ($1, $2, $3, $4, $5)
+        """,
+        token_id,
+        user_id,
+        tenant_id,
+        token_hash,
+        expires,
+    )
+    _set_remember_cookie(response, raw_token, expires)
+
+
+def _user_payload(row, email: str | None = None) -> dict:
+    return {
+        "id": row["id"],
+        "email": email if email is not None else row["email"],
+        "name": row["name"],
+        "role": row["role"],
+        "tenantId": row["tenant_id"],
+    }
+
+
 # --------------- Login ---------------
 
 @router.post("/login")
-async def login(body: LoginBody):
+async def login(body: LoginBody, response: Response):
     pool = get_pool()
     row = await pool.fetchrow(
         "SELECT id, tenant_id, password_hash, name, role, is_active FROM users WHERE email = $1",
@@ -53,16 +120,65 @@ async def login(body: LoginBody):
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
     token = create_access_token(row["id"], row["tenant_id"], row["role"])
+    if body.rememberMe:
+        await _create_remember_token(response, row["id"], row["tenant_id"])
     return {
         "access_token": token,
-        "user": {
-            "id": row["id"],
-            "email": body.email,
-            "name": row["name"],
-            "role": row["role"],
-            "tenantId": row["tenant_id"],
-        },
+        "user": _user_payload(row, body.email),
     }
+
+
+@router.post("/refresh")
+async def refresh(request: Request, response: Response):
+    raw_token = request.cookies.get(REMEMBER_COOKIE_NAME)
+    if not raw_token:
+        raise HTTPException(status_code=401, detail="Missing remember token")
+
+    token_hash = _hash_remember_token(raw_token)
+    pool = get_pool()
+    row = await pool.fetchrow(
+        """
+        SELECT rt.id AS remember_token_id, rt.expires_at,
+               u.id, u.tenant_id, u.email, u.name, u.role
+        FROM remember_tokens rt JOIN users u ON rt.user_id = u.id
+        WHERE rt.token_hash = $1
+          AND rt.revoked_at IS NULL
+          AND rt.expires_at > NOW()
+          AND u.is_active = TRUE
+        """,
+        token_hash,
+    )
+    if not row:
+        _clear_remember_cookie(response)
+        raise HTTPException(status_code=401, detail="Invalid or expired remember token")
+
+    await pool.execute(
+        "UPDATE remember_tokens SET revoked_at = NOW(), last_used_at = NOW() WHERE id = $1",
+        row["remember_token_id"],
+    )
+    await _create_remember_token(response, row["id"], row["tenant_id"], row["expires_at"])
+    token = create_access_token(row["id"], row["tenant_id"], row["role"])
+    return {
+        "access_token": token,
+        "user": _user_payload(row),
+    }
+
+
+@router.post("/logout")
+async def logout(request: Request, response: Response):
+    raw_token = request.cookies.get(REMEMBER_COOKIE_NAME)
+    if raw_token:
+        pool = get_pool()
+        await pool.execute(
+            """
+            UPDATE remember_tokens
+            SET revoked_at = COALESCE(revoked_at, NOW()), last_used_at = NOW()
+            WHERE token_hash = $1
+            """,
+            _hash_remember_token(raw_token),
+        )
+    _clear_remember_cookie(response)
+    return {"ok": True}
 
 
 # --------------- Me ---------------

@@ -1,12 +1,20 @@
-import { token, clearAuthStorage } from '../composables/useAuth'
+import { token, clearAuthStorage, refreshAuth } from '../composables/useAuth'
 import router from '../router'
 
 export async function api(path: string, options: RequestInit = {}): Promise<Response> {
-  const headers = new Headers(options.headers)
-  if (token.value) {
-    headers.set('Authorization', `Bearer ${token.value}`)
+  const fetchWithAuth = () => {
+    const headers = new Headers(options.headers)
+    if (token.value) {
+      headers.set('Authorization', `Bearer ${token.value}`)
+    }
+    return fetch(path, { ...options, headers })
   }
-  const res = await fetch(path, { ...options, headers })
+
+  let res = await fetchWithAuth()
+  if (res.status === 401 && await refreshAuth()) {
+    res = await fetchWithAuth()
+  }
+
   if (res.status === 401) {
     clearAuthStorage()
     router.push('/login')

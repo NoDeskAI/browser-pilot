@@ -22,11 +22,9 @@ const { brand, fetchBrand } = useSessions()
 
 onMounted(() => fetchBrand())
 
-const _SAVED_EMAIL_KEY = 'saved_email'
-const savedEmail = localStorage.getItem(_SAVED_EMAIL_KEY) ?? ''
-const email = ref(savedEmail)
+const email = ref('')
 const password = ref('')
-const rememberMe = ref(!!savedEmail || true)
+const rememberMe = ref(false)
 const loading = ref(false)
 const error = ref('')
 
@@ -60,7 +58,7 @@ async function handleLogin() {
     const res = await fetch('/api/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: email.value, password: password.value }),
+      body: JSON.stringify({ email: email.value, password: password.value, rememberMe: rememberMe.value }),
     })
     if (!res.ok) {
       const detail = await readLoginErrorDetail(res)
@@ -68,12 +66,7 @@ async function handleLogin() {
       return
     }
     const data = await res.json()
-    if (rememberMe.value) {
-      localStorage.setItem(_SAVED_EMAIL_KEY, email.value)
-    } else {
-      localStorage.removeItem(_SAVED_EMAIL_KEY)
-    }
-    setAuth(data.access_token, data.user, rememberMe.value)
+    setAuth(data.access_token, data.user)
     router.push('/')
   } catch {
     error.value = t('auth.loginNetworkError')
@@ -118,7 +111,7 @@ function toggleLocale() {
             id="rememberMe" v-model="rememberMe" type="checkbox"
             class="size-4 rounded border-border accent-primary cursor-pointer"
           />
-          <span class="text-sm text-muted-foreground">{{ t('auth.rememberMe') }}</span>
+          <span class="text-sm text-muted-foreground">{{ t('auth.rememberMe', { days: brand.auth.rememberMeDays }) }}</span>
         </label>
 
         <div v-if="error" class="text-sm text-destructive">{{ error }}</div>

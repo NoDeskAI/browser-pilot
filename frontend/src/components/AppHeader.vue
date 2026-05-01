@@ -30,8 +30,8 @@ const showUsersLink = computed(() =>
   user.value && (user.value.role === 'superadmin' || user.value.role === 'admin'),
 )
 
-function handleLogout() {
-  logout()
+async function handleLogout() {
+  await logout()
   router.push('/login')
 }
 

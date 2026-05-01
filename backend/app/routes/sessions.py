@@ -848,7 +848,7 @@ async def get_session_logs(session_id: str, tail: int = 200, log_type: str | Non
 
 @router.get("/api/site-info")
 async def get_site_info(request: Request):
-    from ..config import APP_TITLE, CLI_COMMAND_NAME, EDITION
+    from ..config import APP_TITLE, CLI_COMMAND_NAME, EDITION, JWT_EXPIRE_MINUTES, REMEMBER_ME_DAYS
     from .cli import get_cli_install_info
 
     if not db.is_ready():
@@ -867,6 +867,10 @@ async def get_site_info(request: Request):
         "features": {
             "sso": EDITION == "ee",
             "multiTenantManagement": EDITION == "ee",
+        },
+        "auth": {
+            "accessTokenMinutes": JWT_EXPIRE_MINUTES,
+            "rememberMeDays": REMEMBER_ME_DAYS,
         },
         "cliCommandName": CLI_COMMAND_NAME,
         "cliInstallCommand": cli_info["shell"],

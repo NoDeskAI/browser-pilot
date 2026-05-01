@@ -9,6 +9,7 @@ interface SiteInfo {
   edition: string
   setupComplete: boolean
   features: { sso: boolean; multiTenantManagement: boolean }
+  auth?: { accessTokenMinutes: number; rememberMeDays: number }
   cliCommandName: string
   cliInstallCommand: string
 }
@@ -18,6 +19,7 @@ interface BrandConfig {
   edition: string
   setupComplete: boolean
   features: { sso: boolean; multiTenantManagement: boolean }
+  auth: { accessTokenMinutes: number; rememberMeDays: number }
   cliCommandName: string
   cliInstallCommand: string
 }
@@ -27,6 +29,7 @@ const brand = reactive<BrandConfig>({
   edition: 'ce',
   setupComplete: false,
   features: { sso: false, multiTenantManagement: false },
+  auth: { accessTokenMinutes: 30, rememberMeDays: 7 },
   cliCommandName: 'bpilot',
   cliInstallCommand: 'curl -fsSL http://localhost:8000/api/cli/install | bash',
 })
@@ -39,6 +42,7 @@ async function fetchBrand(): Promise<void> {
     if (data.edition) brand.edition = data.edition
     if (data.setupComplete !== undefined) brand.setupComplete = data.setupComplete
     if (data.features) brand.features = data.features
+    if (data.auth) brand.auth = data.auth
     if (data.cliCommandName) brand.cliCommandName = data.cliCommandName
     if (data.cliInstallCommand) brand.cliInstallCommand = data.cliInstallCommand
   } catch {

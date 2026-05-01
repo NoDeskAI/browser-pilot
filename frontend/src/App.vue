@@ -14,7 +14,7 @@ const router = useRouter()
 const { t } = useI18n()
 const { brand, init: initSessions, fetchBrand, createSession } = useSessions()
 
-const { isAuthenticated, fetchMe } = useAuth()
+const { isAuthenticated, fetchMe, refreshAuth } = useAuth()
 
 const isAuthPage = computed(() => route.path === '/login' || route.path === '/setup')
 const ready = ref(false)
@@ -99,6 +99,9 @@ onMounted(async () => {
   await waitForBootstrap()
   if (bootstrapFailed.value) return
   await fetchBrand()
+  if (!isAuthenticated.value) {
+    await refreshAuth()
+  }
   if (isAuthenticated.value) {
     await fetchMe()
   }

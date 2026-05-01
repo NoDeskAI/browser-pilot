@@ -65,7 +65,8 @@ NETWORK_EGRESS_OPENVPN_PROXY_PORT = int(_env("NETWORK_EGRESS_OPENVPN_PROXY_PORT"
 
 # --- Auth ---
 
-JWT_EXPIRE_MINUTES = int(_env("JWT_EXPIRE_MINUTES", "1440"))
+JWT_EXPIRE_MINUTES = int(_env("JWT_EXPIRE_MINUTES", "30"))
+REMEMBER_ME_DAYS = int(_env("REMEMBER_ME_DAYS", "7"))
 
 
 def _resolve_jwt_secret() -> str:

@@ -1,5 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import { token } from '../composables/useAuth'
+import { token, refreshAuth } from '../composables/useAuth'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -57,11 +57,11 @@ router.beforeEach(async (to) => {
     return '/login'
   }
 
-  if (to.meta.requiresAuth && !token.value) {
+  if (to.meta.requiresAuth && !token.value && !(await refreshAuth())) {
     return '/login'
   }
 
-  if (to.path === '/login' && token.value) {
+  if (to.path === '/login' && (!token.value ? await refreshAuth() : true)) {
     return '/'
   }
 })
