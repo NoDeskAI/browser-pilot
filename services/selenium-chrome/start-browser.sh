@@ -23,21 +23,13 @@ GL_MODE="$REQUESTED_GL_MODE"
 GL_ARGS=("--enable-webgl")
 case "$GL_MODE" in
   auto|"")
-    if [ "${CHROME_REAL_MAJOR:-0}" -ge 147 ] 2>/dev/null; then
-      GL_MODE="swiftshader"
-    else
-      GL_MODE="native"
-    fi
+    GL_MODE="swiftshader"
     ;;
   native|swiftshader)
     ;;
   *)
     echo "WARN: unsupported BROWSER_GL_MODE=$REQUESTED_GL_MODE, falling back to auto" >&2
-    if [ "${CHROME_REAL_MAJOR:-0}" -ge 147 ] 2>/dev/null; then
-      GL_MODE="swiftshader"
-    else
-      GL_MODE="native"
-    fi
+    GL_MODE="swiftshader"
     ;;
 esac
 if [ "$GL_MODE" = "swiftshader" ]; then

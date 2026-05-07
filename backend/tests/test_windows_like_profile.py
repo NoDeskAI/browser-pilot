@@ -193,6 +193,8 @@ def test_browser_fontconfig_and_stealth_use_windows_allowlist():
     assert "--hide-crash-restore-bubble" in start
     assert 'REQUESTED_GL_MODE="${BROWSER_GL_MODE:-auto}"' in start
     assert 'GL_ARGS=("--enable-webgl")' in start
+    assert 'auto|"")\n    GL_MODE="swiftshader"' in start
+    assert 'WARN: unsupported BROWSER_GL_MODE=$REQUESTED_GL_MODE, falling back to auto' in start
     assert '--use-gl=swiftshader' in start
     assert '--enable-unsafe-swiftshader' in start
     assert '--ignore-gpu-blocklist' in start
