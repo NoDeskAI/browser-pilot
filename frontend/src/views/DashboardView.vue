@@ -49,6 +49,10 @@ const shortcutLabel = isMac ? '⌘N' : 'Ctrl+N'
 const autoRefresh = ref(localStorage.getItem('bp_auto_refresh') === 'true')
 let refreshTimer: ReturnType<typeof setInterval> | null = null
 
+function setAutoRefresh(on: boolean) {
+  autoRefresh.value = on
+}
+
 function startTimer() {
   stopTimer()
   refreshTimer = setInterval(fetchSessions, 3000)
@@ -242,10 +246,12 @@ async function onPauseContainer(id: string) {
           <Button variant="outline" size="sm" :disabled="autoRefresh" @click="fetchSessions" :title="t('dashboard.refresh')">
             <RefreshCw class="size-4" />
           </Button>
-          <label class="flex items-center gap-1.5 text-sm text-muted-foreground cursor-pointer select-none">
-            <Switch :checked="autoRefresh" @update:checked="autoRefresh = $event" />
-            {{ t('dashboard.autoRefresh') }}
-          </label>
+          <div class="flex items-center gap-1.5 text-sm text-muted-foreground select-none">
+            <Switch id="dashboard-auto-refresh" :model-value="autoRefresh" @update:model-value="setAutoRefresh" />
+            <label for="dashboard-auto-refresh" class="cursor-pointer">
+              {{ t('dashboard.autoRefresh') }}
+            </label>
+          </div>
           <Button v-if="hasReadyImages" :disabled="creating" class="gap-2" @click="openCreateDialog">
             <Loader2 v-if="creating" class="size-4 animate-spin" />
             <Plus v-else class="size-4" />
