@@ -191,8 +191,23 @@ def test_browser_fontconfig_and_stealth_use_windows_allowlist():
     assert 'profile["exited_cleanly"] = True' in start
     assert 'data["exited_cleanly"] = True' in start
     assert "--hide-crash-restore-bubble" in start
+    assert 'REQUESTED_GL_MODE="${BROWSER_GL_MODE:-auto}"' in start
+    assert 'GL_ARGS=("--enable-webgl")' in start
+    assert '--use-gl=swiftshader' in start
+    assert '--enable-unsafe-swiftshader' in start
+    assert '--ignore-gpu-blocklist' in start
+    assert "/tmp/browser-gl-mode.json" in start
+    assert "--use-gl=angle" not in start
+    assert "--use-angle=gl-egl" not in start
+    assert "--disable-gpu-driver-bug-workarounds" not in start
+    agent = (root / "services/selenium-chrome/cdp-fingerprint-agent.py").read_text()
+    assert "webgl.contextAvailable" in agent
+    assert "webgl.rendererSpoofMatched" in agent
+    assert "webgl_runtime_unavailable" in agent
+    assert "webgl_spoof_mismatch" in agent
     assert "cdp-fingerprint-agent.py" in dockerfile
     assert "cdp-fingerprint-agent.conf" in dockerfile
+    assert "localhost-bridge.py" in dockerfile
     assert "<dir>/usr/share/fonts/truetype/croscore</dir>" in fontconfig
     assert "<dir>/usr/share/fonts/opentype/noto</dir>" in fontconfig
     assert "<family>Arial</family><prefer><family>Arimo</family>" in fontconfig

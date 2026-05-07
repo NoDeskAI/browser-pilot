@@ -16,6 +16,46 @@ if [ -z "$CHROME_BIN" ]; then
     exit 127
   fi
 fi
+CHROME_REAL_VERSION=$("$CHROME_BIN" --version 2>/dev/null | grep -oP '[\d.]+' | head -1)
+CHROME_REAL_MAJOR=${CHROME_REAL_VERSION%%.*}
+REQUESTED_GL_MODE="${BROWSER_GL_MODE:-auto}"
+GL_MODE="$REQUESTED_GL_MODE"
+GL_ARGS=("--enable-webgl")
+case "$GL_MODE" in
+  auto|"")
+    if [ "${CHROME_REAL_MAJOR:-0}" -ge 147 ] 2>/dev/null; then
+      GL_MODE="swiftshader"
+    else
+      GL_MODE="native"
+    fi
+    ;;
+  native|swiftshader)
+    ;;
+  *)
+    echo "WARN: unsupported BROWSER_GL_MODE=$REQUESTED_GL_MODE, falling back to auto" >&2
+    if [ "${CHROME_REAL_MAJOR:-0}" -ge 147 ] 2>/dev/null; then
+      GL_MODE="swiftshader"
+    else
+      GL_MODE="native"
+    fi
+    ;;
+esac
+if [ "$GL_MODE" = "swiftshader" ]; then
+  GL_ARGS+=("--ignore-gpu-blocklist" "--use-gl=swiftshader" "--enable-unsafe-swiftshader")
+fi
+/usr/bin/python3 - <<PY 2>/dev/null || true
+import json
+from pathlib import Path
+Path("/tmp/browser-gl-mode.json").write_text(json.dumps({
+    "requested": "$REQUESTED_GL_MODE",
+    "resolved": "$GL_MODE",
+    "chromeMajor": "$CHROME_REAL_MAJOR",
+    "chromeVersion": "$CHROME_REAL_VERSION",
+    "args": $(
+      printf '%s\n' "${GL_ARGS[@]}" | /usr/bin/python3 -c 'import json,sys; print(json.dumps([line.strip() for line in sys.stdin if line.strip()]))'
+    ),
+}, separators=(",", ":")), encoding="utf-8")
+PY
 PROFILE_DIR="/home/seluser/chrome-data/manual"
 rm -f "$PROFILE_DIR"/SingletonLock \
       "$PROFILE_DIR"/SingletonCookie \
@@ -28,7 +68,7 @@ rm -rf "$PROFILE_DIR/Default/Sessions" 2>/dev/null
 PREF_PATH="$PROFILE_DIR/Default/Preferences"
 LOCAL_STATE_PATH="$PROFILE_DIR/Local State"
 mkdir -p "$(dirname "$PREF_PATH")"
-PREF_PATH="$PREF_PATH" LOCAL_STATE_PATH="$LOCAL_STATE_PATH" /usr/bin/python3 - <<'PY'
+PREF_PATH="$PREF_PATH" LOCAL_STATE_PATH="$LOCAL_STATE_PATH" CHROME_REAL_MAJOR="$CHROME_REAL_MAJOR" /usr/bin/python3 - <<'PY'
 import json
 import os
 
@@ -66,6 +106,17 @@ prefs = load_json(path)
 prefs["credentials_enable_service"] = False
 profile = mark_clean_exit(prefs)
 profile["password_manager_enabled"] = False
+try:
+    chrome_major = int(os.environ.get("CHROME_REAL_MAJOR") or "0")
+except ValueError:
+    chrome_major = 0
+if chrome_major and chrome_major < 147:
+    content_settings = profile.setdefault("default_content_setting_values", {})
+    content_settings["geolocation"] = 2
+else:
+    content_settings = profile.get("default_content_setting_values")
+    if isinstance(content_settings, dict):
+        content_settings.pop("geolocation", None)
 write_json(path, prefs)
 
 local_state_path = os.environ["LOCAL_STATE_PATH"]
@@ -91,7 +142,7 @@ fi
 
 if [ -n "${FINGERPRINT_PROFILE:-}" ]; then
   FP_JSON=$(printf '%s' "$FINGERPRINT_PROFILE" | base64 -d)
-  REAL_VER=$("$CHROME_BIN" --version 2>/dev/null | grep -oP '[\d.]+' | head -1)
+  REAL_VER="$CHROME_REAL_VERSION"
   PATCHED=$(printf '%s' "$FP_JSON" | REAL_VER="$REAL_VER" LANG_CODE="$LANG_CODE" /usr/bin/python3 -c '
 import json
 import os
@@ -165,6 +216,7 @@ exec "$CHROME_BIN" \
   --test-type \
   --no-default-browser-check \
   --disable-dev-shm-usage \
+  "${GL_ARGS[@]}" \
   --disable-blink-features=AutomationControlled \
   --disable-component-update \
   --disable-features=AutomationControlled,TranslateUI,AsyncDns,DnsOverHttpsTemplates,UseDnsHttpsSvcb,UseDnsHttpsSvcbAlpn \
@@ -183,10 +235,6 @@ exec "$CHROME_BIN" \
   --start-maximized \
   --user-data-dir=/home/seluser/chrome-data/manual \
   --no-first-run \
-  --use-gl=angle --use-angle=gl-egl \
-  --ignore-gpu-blocklist \
-  --disable-gpu-driver-bug-workarounds \
-  --enable-unsafe-swiftshader \
   --ignore-certificate-errors \
   --load-extension=/opt/stealth-ext \
   --remote-debugging-port=9222 \

@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 from app.auth.dependencies import CurrentUser, get_session_aware_user, verify_session_access
 from app.auto_name import maybe_auto_name
+from app.container import ensure_localhost_bridge_for_url
 from app.db import get_pool
 from app.tools.browser.scripts import CLICK_ELEMENT_SCRIPT, OBSERVE_SCRIPT
 from app.tools.browser.session import (
@@ -87,6 +88,7 @@ class SwitchTabBody(BaseModel):
 async def api_navigate(body: NavigateBody, user: CurrentUser = Depends(get_session_aware_user)):
     await verify_session_access(body.sessionId, user)
     try:
+        localhost_bridge = await ensure_localhost_bridge_for_url(body.sessionId, body.url)
         async with browser_session(body.sessionId) as (sid, base):
             await wd_fetch(
                 f"/session/{sid}/url", "POST",
@@ -96,7 +98,7 @@ async def api_navigate(body: NavigateBody, user: CurrentUser = Depends(get_sessi
             page = await quick_observe(sid, base_url=base)
         asyncio.create_task(_update_session_page(body.sessionId, page.get("url"), page.get("title")))
         asyncio.create_task(maybe_auto_name(body.sessionId, page.get("url", ""), page.get("title", "")))
-        return {"ok": True, "navigatedTo": body.url, "currentPage": page}
+        return {"ok": True, "navigatedTo": body.url, "currentPage": page, "localhostBridge": localhost_bridge}
     except Exception as exc:
         logger.error("navigate failed: %s", exc)
         return {"ok": False, "error": str(exc)}

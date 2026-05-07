@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 
 from app.auth.dependencies import CurrentUser, get_session_aware_user, verify_session_access
-from app.container import container_name
+from app.container import container_name, ensure_localhost_bridge_for_url
 from app.db import get_pool
 from app.i18n import t
 
@@ -58,6 +58,7 @@ async def docker_navigate(body: NavigateRequest, request: Request, user: Current
     await verify_session_access(body.sessionId, user)
     cname = container_name(body.sessionId)
     logger.info("navigate [%s] -> %s", cname, body.url)
+    localhost_bridge = await ensure_localhost_bridge_for_url(body.sessionId, body.url)
 
     safe_url = body.url.replace("\\", "\\\\").replace('"', '\\"').replace("$", "\\$").replace("`", "\\`")
 
@@ -85,7 +86,7 @@ async def docker_navigate(body: NavigateRequest, request: Request, user: Current
             return {"ok": False, "error": t("browser_window_not_found", _locale_from_request(request))}
         return {"ok": False, "error": (stderr or stdout)[:300]}
 
-    return {"ok": True, "url": body.url}
+    return {"ok": True, "url": body.url, "localhostBridge": localhost_bridge}
 
 
 class ClipboardRequest(BaseModel):

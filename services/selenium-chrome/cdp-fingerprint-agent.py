@@ -26,6 +26,7 @@ import websocket
 
 PROFILE_FILE = Path("/tmp/fingerprint-profile.json")
 HEALTH_FILE = Path("/tmp/fingerprint-health.json")
+GL_MODE_FILE = Path("/tmp/browser-gl-mode.json")
 STEALTH_FILE = Path("/opt/stealth-ext/stealth.js")
 EXT_PROFILE_FILE = Path("/opt/stealth-ext/fp-profile.js")
 CDP_VERSION_URL = "http://localhost:9222/json/version"
@@ -58,6 +59,17 @@ def _read_health() -> dict[str, Any]:
     try:
         if HEALTH_FILE.exists():
             return json.loads(HEALTH_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return {}
+
+
+def _read_gl_mode() -> dict[str, Any]:
+    try:
+        if GL_MODE_FILE.exists():
+            data = json.loads(GL_MODE_FILE.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return data
     except Exception:
         pass
     return {}
@@ -419,6 +431,7 @@ class CDPAgent:
             "navigatorPlatform": self.nav.get("platform", ""),
             "uaCHPlatform": self.hints.get("platform", ""),
             "webglRenderer": (self.profile.get("webgl") or {}).get("renderer", ""),
+            "webglRuntime": _read_gl_mode(),
             "timezone": self.profile.get("timezone", "UTC"),
             "hiddenFontFamilies": (self.profile.get("fontPolicy") or {}).get("hiddenFamilies", []),
             "network": {
@@ -442,11 +455,12 @@ class CDPAgent:
       }});
     }}
   }}catch(e){{}}
-  var glVendor='',glRenderer='';
+  var glVendor='',glRenderer='',glContextAvailable=false;
   try{{
     var canvas=document.createElement('canvas');
     var gl=canvas.getContext('webgl')||canvas.getContext('experimental-webgl')||canvas.getContext('webgl2');
     if(gl){{
+      glContextAvailable=true;
       var dbg=gl.getExtension('WEBGL_debug_renderer_info');
       glVendor=dbg?gl.getParameter(dbg.UNMASKED_VENDOR_WEBGL):gl.getParameter(gl.VENDOR);
       glRenderer=dbg?gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL):gl.getParameter(gl.RENDERER);
@@ -471,6 +485,7 @@ class CDPAgent:
     languages:Array.prototype.slice.call(navigator.languages||[]),
     uaDataPlatform:uadPlatform,
     highEntropy:high,
+    webglContextAvailable:glContextAvailable,
     webglVendor:glVendor,
     webglRenderer:glRenderer,
     timezone:tz,
@@ -526,7 +541,12 @@ class CDPAgent:
             checks["window.__FP__"] = bool(observed.get("hasFP"))
             checks["navigator.platform"] = observed.get("platform") == expected["navigatorPlatform"]
             checks["navigator.userAgentData.platform"] = observed.get("uaDataPlatform") == expected["uaCHPlatform"]
-            checks["webgl.renderer"] = observed.get("webglRenderer") == expected["webglRenderer"]
+            checks["webgl.contextAvailable"] = bool(observed.get("webglContextAvailable"))
+            checks["webgl.rendererSpoofMatched"] = (
+                bool(observed.get("webglContextAvailable"))
+                and observed.get("webglRenderer") == expected["webglRenderer"]
+            )
+            checks["webgl.renderer"] = checks["webgl.rendererSpoofMatched"]
             checks["timezone"] = observed.get("timezone") == expected["timezone"]
 
             hidden_checks = observed.get("hiddenFontChecks") if isinstance(observed.get("hiddenFontChecks"), dict) else {}
@@ -542,7 +562,15 @@ class CDPAgent:
 
         for key, ok in checks.items():
             if not ok:
-                warnings.append(f"{key} mismatch during {reason}")
+                if key == "webgl.contextAvailable":
+                    warnings.append(f"webgl_runtime_unavailable during {reason}")
+                elif key == "webgl.rendererSpoofMatched":
+                    if checks.get("webgl.contextAvailable"):
+                        warnings.append(f"webgl_spoof_mismatch during {reason}")
+                elif key == "webgl.renderer":
+                    continue
+                else:
+                    warnings.append(f"{key} mismatch during {reason}")
 
         warnings = _unique(warnings)
         _write_health({

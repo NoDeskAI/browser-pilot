@@ -63,4 +63,6 @@ COPY cdp-logger.py /opt/bin/cdp-logger.py
 COPY cdp-logger.conf /etc/supervisor/conf.d/cdp-logger.conf
 COPY cdp-fingerprint-agent.py /opt/bin/cdp-fingerprint-agent.py
 COPY cdp-fingerprint-agent.conf /etc/supervisor/conf.d/cdp-fingerprint-agent.conf
+COPY localhost-bridge.py /opt/bin/localhost-bridge.py
+RUN chmod +x /opt/bin/localhost-bridge.py
 USER seluser

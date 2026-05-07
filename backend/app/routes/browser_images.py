@@ -68,6 +68,48 @@ def _image_tag_for(ver_tag: str, image_id: str) -> str:
     return f"browser-pilot-selenium:chrome-{slug}-{image_id[:8]}"
 
 
+def _row_value(row, key: str, default=None):
+    try:
+        return row[key]
+    except Exception:
+        return default
+
+
+def _version_tuple(version: str) -> tuple[int, ...]:
+    values: list[int] = []
+    for part in re.findall(r"\d+", str(version or "")):
+        try:
+            values.append(int(part))
+        except ValueError:
+            values.append(0)
+    return tuple(values or [0])
+
+
+def _display_rank(row) -> tuple:
+    status = _row_value(row, "status", "")
+    status_rank = 3 if status in {"building", "pending"} else 2 if status == "ready" else 1
+    image_tag = str(_row_value(row, "image_tag", "") or "")
+    fpagent_rank = 0 if image_tag.endswith("-fpagent") else 1
+    created_at = _row_value(row, "created_at")
+    created_ts = created_at.timestamp() if hasattr(created_at, "timestamp") else 0
+    return (
+        status_rank,
+        _version_tuple(str(_row_value(row, "chrome_version", "") or "")),
+        fpagent_rank,
+        created_ts,
+    )
+
+
+def _canonical_image_rows(rows) -> list:
+    by_major: dict[int, object] = {}
+    for row in rows:
+        major = int(_row_value(row, "chrome_major", 0) or 0)
+        current = by_major.get(major)
+        if current is None or _display_rank(row) > _display_rank(current):
+            by_major[major] = row
+    return sorted(by_major.values(), key=lambda r: int(_row_value(r, "chrome_major", 0) or 0), reverse=True)
+
+
 async def _check_tag_exists(repo: str, tag: str) -> bool:
     url = f"https://hub.docker.com/v2/repositories/{repo}/tags/{tag}"
     try:
@@ -310,6 +352,7 @@ async def list_images(user: CurrentUser = Depends(get_current_user)):
         "ORDER BY bi.chrome_major DESC",
         user.tenant_id,
     )
+    canonical_rows = _canonical_image_rows(rows)
     return {
         "images": [
             {
@@ -323,7 +366,7 @@ async def list_images(user: CurrentUser = Depends(get_current_user)):
                 "createdAt": r["created_at"].isoformat() if r["created_at"] else None,
                 "sessionCount": int(r["session_count"]),
             }
-            for r in rows
+            for r in canonical_rows
         ]
     }
 
