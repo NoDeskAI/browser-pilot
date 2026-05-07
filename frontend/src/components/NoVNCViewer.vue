@@ -425,6 +425,42 @@ function fpRuntimeHealthLabel(profile: Record<string, any>): string {
   return health.ok ? 'OK' : (health.status || 'warning')
 }
 
+function fpReadiness(profile: Record<string, any>): Record<string, any> {
+  const readiness = profile?.readiness
+  if (readiness && typeof readiness === 'object') return readiness
+  const warnings = [
+    ...(Array.isArray(profile?.network?.warnings) ? profile.network.warnings : []),
+    ...(Array.isArray(profile?.runtimeWarnings) ? profile.runtimeWarnings : []),
+  ].map(String)
+  if (warnings.includes('network_profile_unverified')) {
+    return { ready: false, status: 'unverified_network', reason: 'direct_network_profile_unverified' }
+  }
+  if (profile?.fingerprintReady === false) {
+    return { ready: false, status: 'not_ready', reason: '' }
+  }
+  return { ready: true, status: 'ready', reason: '' }
+}
+
+function fpReadinessOk(profile: Record<string, any>): boolean {
+  return fpReadiness(profile).ready !== false
+}
+
+function fpReadinessLabel(profile: Record<string, any>): string {
+  const readiness = fpReadiness(profile)
+  if (readiness.ready !== false) return t('vnc.fpReady')
+  if (readiness.reason === 'direct_network_profile_unverified') return t('vnc.fpNotReadyDirectUnverified')
+  if (readiness.status === 'unverified_network') return t('vnc.fpNotReadyNetworkUnverified')
+  return t('vnc.fpNotReady')
+}
+
+function fpReadinessHint(profile: Record<string, any>): string {
+  const readiness = fpReadiness(profile)
+  if (readiness.ready !== false) return ''
+  if (readiness.reason === 'direct_network_profile_unverified') return t('vnc.fpDirectUnverifiedHint')
+  if (readiness.status === 'unverified_network') return t('vnc.fpNetworkUnverifiedHint')
+  return ''
+}
+
 function fpWebglRuntimeLabel(profile: Record<string, any>): string {
   const health = profile?.runtimeHealth
   const checks = health?.checks || {}
@@ -719,7 +755,7 @@ watch(inputBarOpen, (open) => {
               variant="ghost" size="sm"
               :disabled="sessState.containerRestarting"
               class="h-5 px-1.5 text-[10px] gap-1"
-              :class="fpProfile ? 'text-violet-400' : ''"
+              :class="fpProfile ? (fpReadinessOk(fpProfile) ? 'text-violet-400' : 'text-amber-400') : ''"
               :title="t('vnc.fingerprintTitle')"
             >
               <Fingerprint class="size-3.5" />
@@ -745,6 +781,17 @@ watch(inputBarOpen, (open) => {
                     :title="JSON.stringify(fpProfile.runtimeHealth)"
                   >{{ fpRuntimeHealthLabel(fpProfile) }}</span>
                 </div>
+                <div class="flex justify-between">
+                  <span class="text-muted-foreground">{{ t('vnc.fpReadiness') }}</span>
+                  <span
+                    class="font-mono truncate max-w-[160px]"
+                    :class="fpReadinessOk(fpProfile) ? 'text-emerald-400' : 'text-amber-500'"
+                    :title="JSON.stringify(fpProfile.readiness || {})"
+                  >{{ fpReadinessLabel(fpProfile) }}</span>
+                </div>
+                <p v-if="fpReadinessHint(fpProfile)" class="text-[10px] leading-tight text-amber-500">
+                  {{ fpReadinessHint(fpProfile) }}
+                </p>
                 <div class="flex justify-between">
                   <span class="text-muted-foreground">{{ t('vnc.fpGpu') }}</span>
                   <span class="font-mono truncate max-w-[160px]" :title="fpProfile.webgl?.renderer">{{ fpProfile.webgl?.renderer?.split(',')[0] || '-' }}</span>

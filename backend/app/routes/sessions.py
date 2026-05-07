@@ -232,8 +232,65 @@ def _add_profile_warning(profile: dict | None, warning: str) -> None:
     profile["runtimeWarnings"] = _unique_strings(warnings)
 
 
+def _network_profile_is_unverified(profile: dict | None) -> bool:
+    if not isinstance(profile, dict):
+        return False
+    network = profile.get("network") if isinstance(profile.get("network"), dict) else {}
+    warning_values = [
+        *(network.get("warnings") if isinstance(network.get("warnings"), list) else []),
+        *(profile.get("runtimeWarnings") if isinstance(profile.get("runtimeWarnings"), list) else []),
+    ]
+    warnings = {str(w) for w in warning_values if str(w or "").strip()}
+    return (
+        "network_profile_unverified" in warnings
+        or network.get("source") == "declared:unverified"
+    )
+
+
+def _apply_fingerprint_readiness(
+    profile: dict | None,
+    *,
+    egress_type: str | None,
+    egress_name: str | None = None,
+) -> None:
+    if not isinstance(profile, dict):
+        return
+    normalized_type = egress_type or "direct"
+    unverified_network = _network_profile_is_unverified(profile)
+    not_ready = unverified_network
+    warnings: list[str] = []
+    reason = ""
+    if not_ready:
+        reason = "direct_network_profile_unverified" if normalized_type == "direct" else "network_profile_unverified"
+        warnings.append("fingerprint_not_ready_unverified_network")
+        _add_profile_warning(profile, "fingerprint_not_ready_unverified_network")
+
+    profile["fingerprintReady"] = not not_ready
+    profile["readiness"] = {
+        "ready": not not_ready,
+        "status": "unverified_network" if not_ready else "ready",
+        "reason": reason,
+        "egressType": normalized_type,
+        "egressName": egress_name or ("Direct" if normalized_type == "direct" else ""),
+        "warnings": warnings,
+    }
+
+
 def _apply_egress_runtime_warnings(profile: dict | None, effective: EffectiveEgress) -> None:
-    return
+    _apply_fingerprint_readiness(
+        profile,
+        egress_type=effective.type,
+        egress_name=effective.name,
+    )
+
+
+def _apply_row_fingerprint_readiness(profile: dict | None, row) -> None:
+    egress_id = _row_get(row, "network_egress_id")
+    _apply_fingerprint_readiness(
+        profile,
+        egress_type=(_row_get(row, "network_egress_type") if egress_id else "direct"),
+        egress_name=(_row_get(row, "network_egress_name") if egress_id else "Direct"),
+    )
 
 
 def _network_dns(network: dict | None) -> list[str]:
@@ -393,7 +450,13 @@ async def list_sessions(user: CurrentUser = Depends(get_current_user)):
             except PoolEmptyError:
                 pass
 
+        egress_payload = _egress_payload_from_row(r)
         fp_response = await _with_runtime_health(sid, fp, container_status=container_status)
+        _apply_fingerprint_readiness(
+            fp_response,
+            egress_type=egress_payload["networkEgressType"],
+            egress_name=egress_payload["networkEgressName"],
+        )
 
         entry: dict = {
             "id": sid,
@@ -407,7 +470,7 @@ async def list_sessions(user: CurrentUser = Depends(get_current_user)):
             "proxyUrl": _session_proxy_url(r),
             "fingerprintProfile": fp_response,
             "browserLang": r["browser_lang"] or "zh-CN",
-            **_egress_payload_from_row(r),
+            **egress_payload,
         }
 
         if container_status == "running":
@@ -524,7 +587,13 @@ async def get_session(session_id: str, user: CurrentUser = Depends(get_session_a
             )
         except PoolEmptyError:
             pass
+    egress_payload = _egress_payload_from_row(row)
     fp_response = await _with_runtime_health(session_id, fp)
+    _apply_fingerprint_readiness(
+        fp_response,
+        egress_type=egress_payload["networkEgressType"],
+        egress_name=egress_payload["networkEgressName"],
+    )
     return {
         "id": row["id"],
         "name": row["name"],
@@ -536,7 +605,7 @@ async def get_session(session_id: str, user: CurrentUser = Depends(get_session_a
         "proxyUrl": _session_proxy_url(row),
         "fingerprintProfile": fp_response,
         "browserLang": row["browser_lang"] or "zh-CN",
-        **_egress_payload_from_row(row),
+        **egress_payload,
     }
 
 
@@ -571,12 +640,24 @@ async def start_session_container(session_id: str, user: CurrentUser = Depends(g
     try:
         ports = await ensure_container_running(session_id)
         pool = get_pool()
-        row = await pool.fetchrow("SELECT fingerprint_profile FROM sessions WHERE id = $1", session_id)
+        row = await pool.fetchrow(
+            """
+            SELECT s.fingerprint_profile, s.network_egress_id,
+                   e.name AS network_egress_name,
+                   e.type AS network_egress_type
+            FROM sessions s
+            LEFT JOIN network_egress_profiles e ON e.id = s.network_egress_id
+            WHERE s.id = $1
+            """,
+            session_id,
+        )
         fp = await _with_runtime_health_wait(
             session_id,
             row["fingerprint_profile"] if row else None,
             container_status="running",
         )
+        if row:
+            _apply_row_fingerprint_readiness(fp, row)
         return {"ok": True, "ports": ports, "fingerprintProfile": fp}
     except Exception as exc:
         logger.error("Container start failed for %s: %s", session_id, exc)
@@ -611,12 +692,24 @@ async def unpause_session_container(session_id: str, user: CurrentUser = Depends
     try:
         ports = await ensure_container_running(session_id)
         pool = get_pool()
-        row = await pool.fetchrow("SELECT fingerprint_profile FROM sessions WHERE id = $1", session_id)
+        row = await pool.fetchrow(
+            """
+            SELECT s.fingerprint_profile, s.network_egress_id,
+                   e.name AS network_egress_name,
+                   e.type AS network_egress_type
+            FROM sessions s
+            LEFT JOIN network_egress_profiles e ON e.id = s.network_egress_id
+            WHERE s.id = $1
+            """,
+            session_id,
+        )
         fp = await _with_runtime_health(
             session_id,
             row["fingerprint_profile"] if row else None,
             container_status="running",
         )
+        if row:
+            _apply_row_fingerprint_readiness(fp, row)
         return {"ok": True, "ports": ports, "fingerprintProfile": fp}
     except Exception as exc:
         logger.error("Container unpause failed for %s: %s", session_id, exc)
@@ -845,7 +938,17 @@ async def refresh_network_profile(session_id: str, user: CurrentUser = Depends(g
     observed_payload["observedAt"] = datetime.now(timezone.utc).isoformat()
 
     pool = get_pool()
-    row = await pool.fetchrow("SELECT fingerprint_profile FROM sessions WHERE id = $1", session_id)
+    row = await pool.fetchrow(
+        """
+        SELECT s.fingerprint_profile, s.network_egress_id,
+               e.name AS network_egress_name,
+               e.type AS network_egress_type
+        FROM sessions s
+        LEFT JOIN network_egress_profiles e ON e.id = s.network_egress_id
+        WHERE s.id = $1
+        """,
+        session_id,
+    )
     if not row or not isinstance(row["fingerprint_profile"], dict):
         raise HTTPException(status_code=404, detail="Session not found")
 
@@ -859,8 +962,10 @@ async def refresh_network_profile(session_id: str, user: CurrentUser = Depends(g
             fp_profile,
             "network_profile_observation_failed: explicit network observation did not return a trusted profile.",
         )
+    _apply_row_fingerprint_readiness(fp_profile, row)
     await _save_fingerprint_profile(session_id, fp_profile)
     fp_response = await _with_runtime_health(session_id, fp_profile)
+    _apply_row_fingerprint_readiness(fp_response, row)
     return {
         "ok": True,
         "ports": ports,
@@ -873,7 +978,17 @@ async def refresh_network_profile(session_id: str, user: CurrentUser = Depends(g
 async def sync_observed_network_profile(session_id: str, user: CurrentUser = Depends(get_session_aware_user)):
     await verify_session_access(session_id, user)
     pool = get_pool()
-    row = await pool.fetchrow("SELECT fingerprint_profile FROM sessions WHERE id = $1", session_id)
+    row = await pool.fetchrow(
+        """
+        SELECT s.fingerprint_profile, s.network_egress_id,
+               e.name AS network_egress_name,
+               e.type AS network_egress_type
+        FROM sessions s
+        LEFT JOIN network_egress_profiles e ON e.id = s.network_egress_id
+        WHERE s.id = $1
+        """,
+        session_id,
+    )
     if not row or not isinstance(row["fingerprint_profile"], dict):
         raise HTTPException(status_code=404, detail="Session not found")
 
@@ -897,8 +1012,10 @@ async def sync_observed_network_profile(session_id: str, user: CurrentUser = Dep
             fp_profile,
             "dns_recreate_required: observed network DNS differs from the running container DNS; restart this session to apply it.",
         )
+    _apply_row_fingerprint_readiness(fp_profile, row)
     await _save_fingerprint_profile(session_id, fp_profile)
     fp_response = await _with_runtime_health(session_id, fp_profile)
+    _apply_row_fingerprint_readiness(fp_response, row)
     return {
         "ok": True,
         "restartRequired": restart_required,
@@ -914,7 +1031,17 @@ async def override_network_profile(
 ):
     await verify_session_access(session_id, user)
     pool = get_pool()
-    row = await pool.fetchrow("SELECT fingerprint_profile FROM sessions WHERE id = $1", session_id)
+    row = await pool.fetchrow(
+        """
+        SELECT s.fingerprint_profile, s.network_egress_id,
+               e.name AS network_egress_name,
+               e.type AS network_egress_type
+        FROM sessions s
+        LEFT JOIN network_egress_profiles e ON e.id = s.network_egress_id
+        WHERE s.id = $1
+        """,
+        session_id,
+    )
     if not row or not isinstance(row["fingerprint_profile"], dict):
         raise HTTPException(status_code=404, detail="Session not found")
 
@@ -946,8 +1073,10 @@ async def override_network_profile(
             "dns_recreate_required: manual network DNS differs from the running container DNS; restart this session to apply it.",
         )
 
+    _apply_row_fingerprint_readiness(fp_profile, row)
     await _save_fingerprint_profile(session_id, fp_profile)
     fp_response = await _with_runtime_health(session_id, fp_profile)
+    _apply_row_fingerprint_readiness(fp_response, row)
     return {
         "ok": True,
         "restartRequired": restart_required,

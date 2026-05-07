@@ -132,6 +132,36 @@ def test_create_session_uses_declared_network_without_container_probe(monkeypatc
     assert result["fingerprintProfile"]["timezone"] == "Asia/Shanghai"
 
 
+def test_unverified_network_profile_is_not_fingerprint_ready():
+    profile = _profile("zh-CN")
+    profile["network"] = {
+        "source": "declared:unverified",
+        "observedVia": "declared",
+        "ip": "",
+        "warnings": ["network_profile_unverified"],
+    }
+    profile["runtimeWarnings"] = ["network_profile_unverified"]
+
+    sessions._apply_fingerprint_readiness(profile, egress_type="direct", egress_name="Direct")
+
+    assert profile["fingerprintReady"] is False
+    assert profile["readiness"]["ready"] is False
+    assert profile["readiness"]["status"] == "unverified_network"
+    assert profile["readiness"]["reason"] == "direct_network_profile_unverified"
+    assert "fingerprint_not_ready_unverified_network" in profile["runtimeWarnings"]
+
+
+def test_verified_network_profile_is_fingerprint_ready():
+    profile = _profile("zh-CN")
+    profile["network"] = _network("Asia/Shanghai", "CN")
+
+    sessions._apply_fingerprint_readiness(profile, egress_type="direct", egress_name="Direct")
+
+    assert profile["fingerprintReady"] is True
+    assert profile["readiness"]["ready"] is True
+    assert profile["readiness"]["status"] == "ready"
+
+
 def test_create_session_prefers_exact_chrome_version(monkeypatch):
     pool = FakePool([
         {"chrome_version": "147.0.7727.60", "image_tag": "browser-pilot:147-60"},
