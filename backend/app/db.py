@@ -124,6 +124,10 @@ def _pending_revisions(script: ScriptDirectory, current_revision: str, target_re
     return [rev.revision for rev in reversed(list(script.iterate_revisions(target_revision, lower)))]
 
 
+def _revision_label(revision: str) -> str:
+    return revision or "base"
+
+
 def _collect_migration_info(connection) -> MigrationInfo:
     cfg = _alembic_config()
     script = _script_directory(cfg)
@@ -158,14 +162,36 @@ def _upgrade_with_connection(connection) -> MigrationInfo:
         target_revision=info.target_revision,
         pending_revisions=info.pending_revisions,
     )
-    if info.pending_revisions:
-        cfg = _alembic_config()
-        cfg.attributes["connection"] = connection
-        try:
-            command.upgrade(cfg, "head")
-        except Exception as exc:
-            raise MigrationExecutionError(str(exc), info) from exc
-        info.current_revision_after = MigrationContext.configure(connection).get_current_revision() or ""
+    if not info.pending_revisions:
+        logger.info("Database schema is current (revision=%s)", _revision_label(info.current_revision))
+        return info
+
+    logger.info(
+        "Database migration starting current=%s target=%s pending=%s",
+        _revision_label(info.current_revision),
+        _revision_label(info.target_revision),
+        info.pending_revisions,
+    )
+    cfg = _alembic_config()
+    cfg.attributes["connection"] = connection
+    try:
+        command.upgrade(cfg, "head")
+    except Exception as exc:
+        logger.error(
+            "Database migration failed current=%s target=%s pending=%s: %s",
+            _revision_label(info.current_revision),
+            _revision_label(info.target_revision),
+            info.pending_revisions,
+            exc,
+        )
+        raise MigrationExecutionError(str(exc), info) from exc
+    info.current_revision_after = MigrationContext.configure(connection).get_current_revision() or ""
+    logger.info(
+        "Database migration completed from=%s to=%s applied=%s",
+        _revision_label(info.current_revision),
+        _revision_label(info.current_revision_after),
+        info.pending_revisions,
+    )
     return info
 
 
@@ -258,7 +284,13 @@ async def _attempt_init(database_url: str, attempt: int) -> str:
             error=str(exc),
             attempt=attempt,
         )
-        logger.error("Database migration failed: %s", exc)
+        logger.error(
+            "Database migration failed current=%s target=%s pending=%s: %s",
+            _revision_label(exc.info.current_revision),
+            _revision_label(exc.info.target_revision or target),
+            exc.info.pending_revisions,
+            exc,
+        )
         return "blocked"
     except Exception as exc:
         _set_bootstrap_state("waiting_database", target_revision=target, error=str(exc), attempt=attempt)

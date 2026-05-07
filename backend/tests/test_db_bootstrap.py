@@ -30,7 +30,7 @@ def test_pending_revisions_are_ordered_from_current_to_head():
     assert db._pending_revisions(script, "0009", "0009") == []
 
 
-def test_upgrade_skips_alembic_when_revision_is_current(monkeypatch):
+def test_upgrade_skips_alembic_when_revision_is_current(monkeypatch, caplog):
     reset_db_state()
     monkeypatch.setattr(
         db,
@@ -48,12 +48,44 @@ def test_upgrade_skips_alembic_when_revision_is_current(monkeypatch):
 
     monkeypatch.setattr(db.command, "upgrade", fail_upgrade)
 
+    caplog.set_level("INFO", logger="db")
     info = db._upgrade_with_connection(object())
 
     assert info.current_revision_after == "0009"
+    assert "Database schema is current (revision=0009)" in caplog.text
 
 
-def test_upgrade_failure_preserves_revision_context(monkeypatch):
+def test_upgrade_logs_pending_migration_context(monkeypatch, caplog):
+    reset_db_state()
+    monkeypatch.setattr(
+        db,
+        "_collect_migration_info",
+        lambda _connection: db.MigrationInfo(
+            current_revision="0008",
+            target_revision="0010",
+            pending_revisions=["0009", "0010"],
+        ),
+    )
+
+    def fake_upgrade(*_args, **_kwargs):
+        return None
+
+    class FakeMigrationContext:
+        def get_current_revision(self):
+            return "0010"
+
+    monkeypatch.setattr(db.command, "upgrade", fake_upgrade)
+    monkeypatch.setattr(db.MigrationContext, "configure", lambda _connection: FakeMigrationContext())
+
+    caplog.set_level("INFO", logger="db")
+    info = db._upgrade_with_connection(object())
+
+    assert info.current_revision_after == "0010"
+    assert "Database migration starting current=0008 target=0010 pending=['0009', '0010']" in caplog.text
+    assert "Database migration completed from=0008 to=0010 applied=['0009', '0010']" in caplog.text
+
+
+def test_upgrade_failure_preserves_revision_context(monkeypatch, caplog):
     reset_db_state()
     monkeypatch.setattr(
         db,
@@ -69,6 +101,7 @@ def test_upgrade_failure_preserves_revision_context(monkeypatch):
         raise RuntimeError("boom")
 
     monkeypatch.setattr(db.command, "upgrade", fail_upgrade)
+    caplog.set_level("INFO", logger="db")
 
     try:
         db._upgrade_with_connection(object())
@@ -77,6 +110,7 @@ def test_upgrade_failure_preserves_revision_context(monkeypatch):
         assert exc.info.current_revision == "0008"
         assert exc.info.target_revision == "0009"
         assert exc.info.pending_revisions == ["0009"]
+        assert "Database migration failed current=0008 target=0009 pending=['0009']: boom" in caplog.text
     else:
         raise AssertionError("expected MigrationExecutionError")
 
@@ -131,7 +165,7 @@ def test_attempt_init_blocks_on_incompatible_schema(monkeypatch):
     assert state["error"] == "future schema"
 
 
-def test_attempt_init_blocks_on_migration_failure(monkeypatch):
+def test_attempt_init_blocks_on_migration_failure(monkeypatch, caplog):
     reset_db_state()
 
     async def fake_run_migrations(_database_url):
@@ -140,6 +174,7 @@ def test_attempt_init_blocks_on_migration_failure(monkeypatch):
 
     monkeypatch.setattr(db, "_run_migrations", fake_run_migrations)
 
+    caplog.set_level("ERROR", logger="db")
     result = asyncio.run(db._attempt_init("postgresql://user:pass@localhost/db", 1))
     state = db.get_bootstrap_state()
 
@@ -148,6 +183,7 @@ def test_attempt_init_blocks_on_migration_failure(monkeypatch):
     assert state["status"] == "migration_failed"
     assert state["pendingRevisions"] == ["0009"]
     assert state["error"] == "migration failed"
+    assert "Database migration failed current=0008 target=0009 pending=['0009']: migration failed" in caplog.text
 
 
 def test_attempt_init_retries_when_database_is_unavailable(monkeypatch):
