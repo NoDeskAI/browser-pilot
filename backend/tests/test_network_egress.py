@@ -1,4 +1,5 @@
 import asyncio
+import yaml
 
 import pytest
 
@@ -130,3 +131,119 @@ def test_resolve_config_url_oversize_response(monkeypatch):
         asyncio.run(network_egress.resolve_config_text(None, "https://example.com/oversize"))
 
     assert "size limit" in str(exc.value)
+
+
+def test_clash_runtime_config_forces_global_without_mutating_original(tmp_path, monkeypatch):
+    source = tmp_path / "config.yaml"
+    source.write_text(
+        """
+mode: rule
+mixed-port: 7899
+proxies:
+  - name: proxy-a
+    type: socks5
+    server: 127.0.0.1
+    port: 1080
+proxy-groups:
+  - name: GLOBAL
+    type: select
+    proxies: [proxy-a]
+rules:
+  - MATCH,proxy-a
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(network_egress, "_config_root", lambda: tmp_path / "runtime")
+
+    runtime = network_egress._write_clash_global_runtime_config("session-1", str(source))
+
+    original = yaml.safe_load(source.read_text(encoding="utf-8"))
+    generated = yaml.safe_load(runtime.read_text(encoding="utf-8"))
+    assert original["mode"] == "rule"
+    assert original["mixed-port"] == 7899
+    assert generated["mode"] == "global"
+    assert generated["mixed-port"] == network_egress.NETWORK_EGRESS_CLASH_PROXY_PORT
+    assert generated["tun"]["enable"] is True
+    assert generated["tun"]["auto-route"] is True
+    assert generated["dns"]["enable"] is True
+    assert generated["proxies"][0]["name"] == "proxy-a"
+
+
+def test_prepare_session_clash_gateway_uses_runtime_namespace_and_global_config(tmp_path, monkeypatch):
+    source = tmp_path / "config.yaml"
+    source.write_text("mode: rule\nproxies: []\n", encoding="utf-8")
+    calls = []
+
+    async def fake_run(cmd, timeout=60):
+        calls.append(cmd)
+        return "container-id", "", 0
+
+    async def noop_update(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(network_egress, "_config_root", lambda: tmp_path / "runtime")
+    monkeypatch.setattr(network_egress, "ensure_docker_network", lambda: asyncio.sleep(0))
+    monkeypatch.setattr(network_egress, "update_egress_status", noop_update)
+    monkeypatch.setattr(network_egress, "_run", fake_run)
+
+    row = Row({
+        "id": "egress-123456",
+        "name": "Clash",
+        "type": "clash",
+        "status": "unchecked",
+        "config_ref": str(source),
+    })
+    gateway = asyncio.run(
+        network_egress.prepare_session_egress_gateway(
+            row,
+            session_id="session-1",
+            selenium_port=55100,
+            vnc_port=55101,
+        )
+    )
+
+    docker_run = next(cmd for cmd in calls if "docker run -d" in cmd)
+    assert gateway.enabled is True
+    assert gateway.full_tunnel is True
+    assert gateway.browser_proxy == f"http://127.0.0.1:{network_egress.NETWORK_EGRESS_CLASH_PROXY_PORT}"
+    assert gateway.warnings == []
+    assert "--cap-add=NET_ADMIN --device /dev/net/tun" in docker_run
+    assert "-p 55100:4444 -p 55101:7900" in docker_run
+    assert "bp-egress-session-session-1" in docker_run
+    runtime = tmp_path / "runtime" / "sessions" / "session-1" / "clash" / "config.yaml"
+    assert yaml.safe_load(runtime.read_text(encoding="utf-8"))["mode"] == "global"
+
+
+def test_prepare_session_clash_gateway_reports_global_mode_warning(tmp_path, monkeypatch):
+    source = tmp_path / "config.yaml"
+    source.write_text("mode: rule\nproxies: []\n", encoding="utf-8")
+
+    async def fake_run(*_args, **_kwargs):
+        return "container-id", "", 0
+
+    async def noop_update(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(network_egress, "_config_root", lambda: tmp_path / "runtime")
+    monkeypatch.setattr(network_egress, "ensure_docker_network", lambda: asyncio.sleep(0))
+    monkeypatch.setattr(network_egress, "update_egress_status", noop_update)
+    monkeypatch.setattr(network_egress, "_run", fake_run)
+    monkeypatch.setattr(network_egress, "_clash_runtime_is_global", lambda _path: False)
+
+    row = Row({
+        "id": "egress-123456",
+        "name": "Clash",
+        "type": "clash",
+        "status": "unchecked",
+        "config_ref": str(source),
+    })
+    gateway = asyncio.run(
+        network_egress.prepare_session_egress_gateway(
+            row,
+            session_id="session-1",
+            selenium_port=55100,
+            vnc_port=55101,
+        )
+    )
+
+    assert gateway.warnings == ["clash_global_mode_failed"]

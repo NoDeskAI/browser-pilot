@@ -5,6 +5,8 @@ import logging
 import re
 import uuid
 import asyncio
+from datetime import datetime, timezone
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -21,6 +23,8 @@ from app.container import (
     pause_container,
     recreate_container,
     remove_container,
+    resolve_network_via_browser,
+    sync_fingerprint_profile_to_container,
     stop_container,
 )
 from app.db import get_pool
@@ -79,6 +83,10 @@ class SessionNetworkEgressBody(BaseModel):
     networkEgressId: str | None = None
 
 
+class NetworkProfileOverrideBody(BaseModel):
+    network: dict[str, Any]
+
+
 class FingerprintActionBody(BaseModel):
     action: str = "regenerate"
 
@@ -114,7 +122,7 @@ async def _resolve_browser_image(pool, tenant_id: str, requested: str | None):
             row = await pool.fetchrow(
                 "SELECT chrome_version, image_tag FROM browser_images "
                 "WHERE tenant_id = $1 AND chrome_version = $2 AND status = 'ready' "
-                "ORDER BY created_at DESC LIMIT 1",
+                "ORDER BY CASE WHEN image_tag LIKE '%-fpagent' THEN 1 ELSE 0 END, created_at DESC LIMIT 1",
                 tenant_id,
                 raw,
             )
@@ -123,7 +131,7 @@ async def _resolve_browser_image(pool, tenant_id: str, requested: str | None):
         row = await pool.fetchrow(
             "SELECT chrome_version, image_tag FROM browser_images "
             "WHERE tenant_id = $1 AND chrome_major = $2 AND status = 'ready' "
-            "ORDER BY created_at DESC LIMIT 1",
+            "ORDER BY CASE WHEN image_tag LIKE '%-fpagent' THEN 1 ELSE 0 END, created_at DESC LIMIT 1",
             tenant_id,
             _chrome_major(raw),
         )
@@ -133,7 +141,8 @@ async def _resolve_browser_image(pool, tenant_id: str, requested: str | None):
 
     row = await pool.fetchrow(
         "SELECT chrome_version, image_tag FROM browser_images "
-        "WHERE tenant_id = $1 AND status = 'ready' ORDER BY chrome_major DESC, created_at DESC LIMIT 1",
+        "WHERE tenant_id = $1 AND status = 'ready' "
+        "ORDER BY chrome_major DESC, CASE WHEN image_tag LIKE '%-fpagent' THEN 1 ELSE 0 END, created_at DESC LIMIT 1",
         tenant_id,
     )
     if row:
@@ -199,7 +208,7 @@ async def _resolve_session_image(session_id: str) -> str | None:
         img_row = await pool.fetchrow(
             "SELECT image_tag FROM browser_images "
             "WHERE tenant_id = $1 AND chrome_version = $2 AND status = 'ready' "
-            "ORDER BY created_at DESC LIMIT 1",
+            "ORDER BY CASE WHEN image_tag LIKE '%-fpagent' THEN 1 ELSE 0 END, created_at DESC LIMIT 1",
             row["tenant_id"], row["chrome_version"],
         )
         if img_row:
@@ -207,7 +216,8 @@ async def _resolve_session_image(session_id: str) -> str | None:
     if row["tenant_id"]:
         img_row = await pool.fetchrow(
             "SELECT image_tag FROM browser_images "
-            "WHERE tenant_id = $1 AND status = 'ready' ORDER BY chrome_major DESC, created_at DESC LIMIT 1",
+            "WHERE tenant_id = $1 AND status = 'ready' "
+            "ORDER BY chrome_major DESC, CASE WHEN image_tag LIKE '%-fpagent' THEN 1 ELSE 0 END, created_at DESC LIMIT 1",
             row["tenant_id"],
         )
         if img_row:
@@ -224,6 +234,67 @@ def _unique_strings(values: list[object]) -> list[str]:
             seen.add(text)
             out.append(text)
     return out
+
+
+def _add_profile_warning(profile: dict | None, warning: str) -> None:
+    if not isinstance(profile, dict):
+        return
+    warnings = list(profile.get("runtimeWarnings") or [])
+    warnings.append(warning)
+    profile["runtimeWarnings"] = _unique_strings(warnings)
+
+
+def _apply_egress_runtime_warnings(profile: dict | None, effective: EffectiveEgress) -> None:
+    if not isinstance(profile, dict):
+        return
+    if effective.type == "external_proxy" and effective.proxy_url:
+        _add_profile_warning(
+            profile,
+            "egress_full_tunnel_unavailable: manual proxy mode only applies the browser proxy setting; container processes and DNS are not guaranteed to share that proxy exit.",
+        )
+
+
+def _network_dns(network: dict | None) -> list[str]:
+    if not isinstance(network, dict):
+        return []
+    servers = network.get("dnsServers")
+    if not isinstance(servers, list):
+        return []
+    return [str(s) for s in servers if str(s or "").strip()]
+
+
+def _stable_float(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _stable_network_payload(network: dict[str, Any]) -> dict[str, Any]:
+    payload = dict(network or {})
+    payload["lat"] = _stable_float(payload.get("lat"))
+    payload["lon"] = _stable_float(payload.get("lon"))
+    if not isinstance(payload.get("dnsServers"), list):
+        payload["dnsServers"] = []
+    payload["dnsServers"] = [str(s) for s in payload.get("dnsServers") if str(s or "").strip()]
+    if not isinstance(payload.get("warnings"), list):
+        payload["warnings"] = []
+    payload["observedAt"] = payload.get("observedAt") or datetime.now(timezone.utc).isoformat()
+    return payload
+
+
+async def _save_fingerprint_profile(session_id: str, profile: dict) -> None:
+    await get_pool().execute(
+        "UPDATE sessions SET fingerprint_profile = $1::jsonb, updated_at = NOW() WHERE id = $2",
+        profile,
+        session_id,
+    )
+    try:
+        await sync_fingerprint_profile_to_container(session_id, profile)
+    except Exception as exc:
+        logger.warning("Profile sync failed for %s: %s", session_id, exc)
 
 
 async def _read_fingerprint_health(session_id: str) -> dict | None:
@@ -401,6 +472,7 @@ async def create_session(body: CreateSessionBody, user: CurrentUser = Depends(ge
     except PoolEmptyError as exc:
         raise HTTPException(422, f"Fingerprint pool group '{exc.group}' has no enabled entries") from exc
     attach_network_profile(fp_profile, network_profile)
+    _apply_egress_runtime_warnings(fp_profile, effective_egress)
 
     preset_data = get_preset(preset_id)
     fp_profile["screen"]["width"] = preset_data["width"]
@@ -605,7 +677,7 @@ async def change_device_preset(session_id: str, body: DevicePresetBody, user: Cu
             _row_get(row, "tenant_id") or user.tenant_id,
             _row_get(row, "network_egress_id"),
             row["proxy_url"] or "",
-            ensure=True,
+            ensure=False,
         )
     except EgressError as exc:
         return {"ok": False, "error": str(exc)}
@@ -614,6 +686,8 @@ async def change_device_preset(session_id: str, body: DevicePresetBody, user: Cu
     image_name = await _resolve_session_image(session_id)
     if isinstance(fp_profile, dict) and not fp_profile.get("network"):
         attach_network_profile(fp_profile, await _resolve_session_network(proxy, image_name))
+    _apply_egress_runtime_warnings(fp_profile, effective_egress)
+    if isinstance(fp_profile, dict):
         await pool.execute(
             "UPDATE sessions SET fingerprint_profile = $1::jsonb, updated_at = NOW() WHERE id = $2",
             fp_profile, session_id,
@@ -651,6 +725,16 @@ async def change_proxy(session_id: str, body: ProxyBody, user: CurrentUser = Dep
     attach_network_profile(
         fp_profile,
         await _resolve_session_network(proxy_url or None, image_name),
+    )
+    _apply_egress_runtime_warnings(
+        fp_profile,
+        EffectiveEgress(
+            id=None,
+            name="Manual proxy" if proxy_url else "Direct",
+            type="external_proxy" if proxy_url else "direct",
+            status="unchecked" if proxy_url else "healthy",
+            proxy_url=proxy_url,
+        ),
     )
     await pool.execute(
         "UPDATE sessions SET proxy_url = $1, network_egress_id = NULL, fingerprint_profile = $2::jsonb, updated_at = NOW() WHERE id = $3",
@@ -706,7 +790,7 @@ async def change_network_egress(
             _row_get(row, "tenant_id") or user.tenant_id,
             body.networkEgressId,
             "",
-            ensure=True,
+            ensure=False,
         )
     except EgressError as exc:
         return {"ok": False, "error": str(exc)}
@@ -717,6 +801,7 @@ async def change_network_egress(
         fp_profile,
         await _resolve_session_network(effective_egress.proxy_url or None, image_name),
     )
+    _apply_egress_runtime_warnings(fp_profile, effective_egress)
     await pool.execute(
         """
         UPDATE sessions
@@ -767,7 +852,7 @@ async def regenerate_fingerprint(session_id: str, body: FingerprintActionBody, u
             _row_get(row, "tenant_id") or user.tenant_id,
             _row_get(row, "network_egress_id"),
             row["proxy_url"] or "",
-            ensure=True,
+            ensure=False,
         )
     except EgressError as exc:
         return {"ok": False, "error": str(exc)}
@@ -785,6 +870,7 @@ async def regenerate_fingerprint(session_id: str, body: FingerprintActionBody, u
         fp_profile,
         await _resolve_session_network(proxy, image_name),
     )
+    _apply_egress_runtime_warnings(fp_profile, effective_egress)
     preset_data = get_preset(row["device_preset"] or DEFAULT_PRESET)
     fp_profile["screen"]["width"] = preset_data["width"]
     fp_profile["screen"]["height"] = preset_data["height"]
@@ -814,6 +900,129 @@ async def regenerate_fingerprint(session_id: str, body: FingerprintActionBody, u
         "fingerprintProfile": fp_response,
         "proxyUrl": effective_egress.proxy_url,
         **_egress_payload(effective_egress),
+    }
+
+
+# -----------------------------------------------------------------------
+# Explicit network profile observation and sync
+# -----------------------------------------------------------------------
+
+@router.post("/api/sessions/{session_id}/network-profile/refresh")
+async def refresh_network_profile(session_id: str, user: CurrentUser = Depends(get_session_aware_user)):
+    await verify_session_access(session_id, user)
+    ports = await ensure_container_running(session_id)
+    observed = await resolve_network_via_browser(ports, session_id=session_id, mode="deep")
+    observed_payload = _stable_network_payload(observed)
+    observed_payload["observedAt"] = datetime.now(timezone.utc).isoformat()
+
+    pool = get_pool()
+    row = await pool.fetchrow("SELECT fingerprint_profile FROM sessions WHERE id = $1", session_id)
+    if not row or not isinstance(row["fingerprint_profile"], dict):
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    fp_profile = row["fingerprint_profile"]
+    network = fp_profile.get("network") if isinstance(fp_profile.get("network"), dict) else {}
+    network = dict(network)
+    network["observed"] = observed_payload
+    fp_profile["network"] = network
+    if observed_payload.get("source") == "unresolved":
+        _add_profile_warning(
+            fp_profile,
+            "network_profile_observation_failed: explicit network observation did not return a trusted profile.",
+        )
+    await _save_fingerprint_profile(session_id, fp_profile)
+    fp_response = await _with_runtime_health(session_id, fp_profile)
+    return {
+        "ok": True,
+        "ports": ports,
+        "observedNetworkProfile": observed_payload,
+        "fingerprintProfile": fp_response,
+    }
+
+
+@router.post("/api/sessions/{session_id}/network-profile/sync")
+async def sync_observed_network_profile(session_id: str, user: CurrentUser = Depends(get_session_aware_user)):
+    await verify_session_access(session_id, user)
+    pool = get_pool()
+    row = await pool.fetchrow("SELECT fingerprint_profile FROM sessions WHERE id = $1", session_id)
+    if not row or not isinstance(row["fingerprint_profile"], dict):
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    fp_profile = row["fingerprint_profile"]
+    current_network = fp_profile.get("network") if isinstance(fp_profile.get("network"), dict) else {}
+    observed = current_network.get("observed") if isinstance(current_network.get("observed"), dict) else None
+    if not observed:
+        return {"ok": False, "error": "No observed network profile is available. Refresh first."}
+    if observed.get("source") == "unresolved":
+        return {"ok": False, "error": "Observed network profile is unresolved. Refresh again before syncing."}
+
+    old_dns = _network_dns(current_network)
+    observed_payload = _stable_network_payload(observed)
+    attach_network_profile(fp_profile, observed_payload)
+    fp_profile["network"]["observed"] = observed_payload
+    fp_profile["network"]["source"] = observed_payload.get("source") or "observed"
+    new_dns = _network_dns(fp_profile.get("network"))
+    restart_required = old_dns != new_dns
+    if restart_required:
+        _add_profile_warning(
+            fp_profile,
+            "dns_recreate_required: observed network DNS differs from the running container DNS; restart this session to apply it.",
+        )
+    await _save_fingerprint_profile(session_id, fp_profile)
+    fp_response = await _with_runtime_health(session_id, fp_profile)
+    return {
+        "ok": True,
+        "restartRequired": restart_required,
+        "fingerprintProfile": fp_response,
+    }
+
+
+@router.patch("/api/sessions/{session_id}/network-profile")
+async def override_network_profile(
+    session_id: str,
+    body: NetworkProfileOverrideBody,
+    user: CurrentUser = Depends(get_session_aware_user),
+):
+    await verify_session_access(session_id, user)
+    pool = get_pool()
+    row = await pool.fetchrow("SELECT fingerprint_profile FROM sessions WHERE id = $1", session_id)
+    if not row or not isinstance(row["fingerprint_profile"], dict):
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    fp_profile = row["fingerprint_profile"]
+    current_network = fp_profile.get("network") if isinstance(fp_profile.get("network"), dict) else {}
+    old_dns = _network_dns(current_network)
+    observed = current_network.get("observed") if isinstance(current_network.get("observed"), dict) else None
+    manual_network = _stable_network_payload({**current_network, **body.network})
+    manual_network["source"] = "user_override"
+    manual_network["observedVia"] = "user_override"
+    if observed:
+        manual_network["observed"] = observed
+    warnings = list(manual_network.get("warnings") or [])
+    warnings.append("network_profile_user_override")
+    manual_network["warnings"] = _unique_strings(warnings)
+
+    attach_network_profile(fp_profile, manual_network)
+    if observed:
+        fp_profile["network"]["observed"] = observed
+    _add_profile_warning(
+        fp_profile,
+        "network_profile_user_override: manual network fingerprint fields do not change the real egress observed by target sites.",
+    )
+    new_dns = _network_dns(fp_profile.get("network"))
+    restart_required = old_dns != new_dns
+    if restart_required:
+        _add_profile_warning(
+            fp_profile,
+            "dns_recreate_required: manual network DNS differs from the running container DNS; restart this session to apply it.",
+        )
+
+    await _save_fingerprint_profile(session_id, fp_profile)
+    fp_response = await _with_runtime_health(session_id, fp_profile)
+    return {
+        "ok": True,
+        "restartRequired": restart_required,
+        "fingerprintProfile": fp_response,
     }
 
 

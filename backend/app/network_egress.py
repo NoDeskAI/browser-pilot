@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 import shlex
@@ -10,6 +10,8 @@ import urllib.error
 import urllib.request
 from typing import Any
 from urllib.parse import urlparse
+
+import yaml
 
 from app.config import (
     CONTAINER_PREFIX,
@@ -53,6 +55,16 @@ class EffectiveEgress:
     health_error: str = ""
 
 
+@dataclass
+class SessionEgressGateway:
+    enabled: bool = False
+    type: str = "direct"
+    container_name: str = ""
+    browser_proxy: str = ""
+    full_tunnel: bool = False
+    warnings: list[str] = field(default_factory=list)
+
+
 async def _run(cmd: str, timeout: float = 60) -> tuple[str, str, int]:
     proc = await asyncio.create_subprocess_shell(
         cmd,
@@ -90,6 +102,15 @@ def egress_container_name(egress_id: str) -> str:
 
 def egress_network_alias(egress_id: str) -> str:
     return f"{CONTAINER_PREFIX}-egress-{egress_id[:12]}"
+
+
+def session_egress_gateway_name(session_id: str) -> str:
+    return f"{CONTAINER_PREFIX}-egress-session-{session_id[:12]}"
+
+
+def _session_egress_dir(session_id: str) -> Path:
+    safe_session = "".join(ch for ch in session_id if ch.isalnum() or ch in ("-", "_"))[:80]
+    return _config_root() / "sessions" / safe_session
 
 
 def managed_proxy_url(egress_id: str, egress_type: str) -> str:
@@ -325,6 +346,31 @@ async def _remove_egress_container(egress_id: str) -> None:
     await _run(f"docker rm -f {shlex.quote(egress_container_name(egress_id))}", timeout=20)
 
 
+async def remove_session_egress_gateway(session_id: str) -> None:
+    await _run(f"docker rm -f {shlex.quote(session_egress_gateway_name(session_id))}", timeout=20)
+
+
+async def stop_session_egress_gateway(session_id: str) -> None:
+    name = session_egress_gateway_name(session_id)
+    if await _inspect_container_running(name):
+        await _run(f"docker stop {shlex.quote(name)}", timeout=20)
+
+
+async def start_session_egress_gateway(session_id: str) -> None:
+    name = session_egress_gateway_name(session_id)
+    stdout, _, rc = await _run(
+        f"docker inspect --format '{{{{.State.Status}}}}' {shlex.quote(name)}",
+        timeout=10,
+    )
+    if rc != 0:
+        return
+    if stdout.strip().lower() == "running":
+        return
+    _, stderr, rc = await _run(f"docker start {shlex.quote(name)}", timeout=30)
+    if rc != 0:
+        raise EgressError(f"failed to start session egress gateway: {stderr[:300]}")
+
+
 async def _ensure_openvpn_image() -> None:
     image = NETWORK_EGRESS_OPENVPN_IMAGE
     _, _, rc = await _run(f"docker image inspect {shlex.quote(image)}", timeout=10)
@@ -339,6 +385,149 @@ async def _ensure_openvpn_image() -> None:
     )
     if rc != 0:
         raise EgressError(f"OpenVPN egress image build failed: {(stderr or stdout)[:500]}")
+
+
+def _load_yaml_mapping(path: Path) -> dict[str, Any]:
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise EgressError(f"Clash config is not readable: {exc}") from exc
+    data = yaml.safe_load(raw) or {}
+    if not isinstance(data, dict):
+        raise EgressError("Clash config must be a YAML mapping")
+    return data
+
+
+def _write_clash_global_runtime_config(session_id: str, config_ref: str) -> Path:
+    source = Path(config_ref)
+    if not source.is_file():
+        raise EgressError("Clash config is missing")
+
+    data = _load_yaml_mapping(source)
+    data["mode"] = "global"
+    data["mixed-port"] = NETWORK_EGRESS_CLASH_PROXY_PORT
+    data["allow-lan"] = True
+    data.setdefault("bind-address", "*")
+    data["external-controller"] = "127.0.0.1:9090"
+
+    tun = data.get("tun") if isinstance(data.get("tun"), dict) else {}
+    tun.update(
+        {
+            "enable": True,
+            "stack": tun.get("stack") or "system",
+            "auto-route": True,
+            "auto-detect-interface": True,
+            "strict-route": True,
+        }
+    )
+    data["tun"] = tun
+
+    dns = data.get("dns") if isinstance(data.get("dns"), dict) else {}
+    dns.setdefault("enable", True)
+    dns.setdefault("listen", "127.0.0.1:1053")
+    dns.setdefault("enhanced-mode", "fake-ip")
+    data["dns"] = dns
+
+    runtime_dir = _session_egress_dir(session_id) / "clash"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    runtime_path = runtime_dir / "config.yaml"
+    runtime_path.write_text(
+        yaml.safe_dump(data, allow_unicode=False, sort_keys=False),
+        encoding="utf-8",
+    )
+    return runtime_path
+
+
+def _clash_runtime_is_global(config_path: Path) -> bool:
+    try:
+        data = _load_yaml_mapping(config_path)
+    except EgressError:
+        return False
+    return str(data.get("mode") or "").strip().lower() == "global"
+
+
+async def prepare_session_egress_gateway(
+    row: Any | None,
+    *,
+    session_id: str,
+    selenium_port: int,
+    vnc_port: int,
+) -> SessionEgressGateway:
+    """Create a session-scoped egress namespace for managed full-tunnel exits.
+
+    The browser container joins this container's network namespace. Host port
+    publishing must therefore live on the gateway, not on the browser container.
+    """
+    if not row or row["type"] not in MANAGED_EGRESS_TYPES:
+        return SessionEgressGateway()
+    if row["status"] == "disabled":
+        raise EgressError("Network egress profile is disabled")
+
+    egress_type = row["type"]
+    await ensure_docker_network()
+    await remove_session_egress_gateway(session_id)
+
+    name = session_egress_gateway_name(session_id)
+    network = shlex.quote(NETWORK_EGRESS_DOCKER_NETWORK)
+    session_label = f"{CONTAINER_PREFIX}.session_id={session_id}"
+    gateway_label = f"{CONTAINER_PREFIX}.egress_gateway=true"
+    egress_label = f"{CONTAINER_PREFIX}.egress_id={row['id']}"
+    publish_args = f"-p {selenium_port}:4444 -p {vnc_port}:7900"
+    common = (
+        f"docker run -d --name {shlex.quote(name)} "
+        f"--label {shlex.quote(session_label)} "
+        f"--label {shlex.quote(gateway_label)} "
+        f"--label {shlex.quote(egress_label)} "
+        f"--network {network} --add-host host.docker.internal:host-gateway "
+        f"{publish_args} "
+    )
+    warnings: list[str] = []
+
+    if egress_type == "clash":
+        config_ref = str(row["config_ref"] or "")
+        if not config_ref:
+            raise EgressError("Clash config is missing")
+        runtime_config = _write_clash_global_runtime_config(session_id, config_ref)
+        if not _clash_runtime_is_global(runtime_config):
+            warnings.append("clash_global_mode_failed")
+        cmd = (
+            f"{common}"
+            f"--cap-add=NET_ADMIN --device /dev/net/tun "
+            f"-v {shlex.quote(str(runtime_config.parent))}:/root/.config/mihomo:ro "
+            f"{shlex.quote(NETWORK_EGRESS_CLASH_IMAGE)} -d /root/.config/mihomo"
+        )
+        browser_proxy = f"http://127.0.0.1:{NETWORK_EGRESS_CLASH_PROXY_PORT}"
+    else:
+        config_ref = str(row["config_ref"] or "")
+        if not config_ref:
+            raise EgressError("OpenVPN config is missing")
+        await _ensure_openvpn_image()
+        cmd = (
+            f"{common}"
+            f"--cap-add=NET_ADMIN --device /dev/net/tun "
+            f"-v {shlex.quote(config_ref)}:/config:ro "
+            f"{shlex.quote(NETWORK_EGRESS_OPENVPN_IMAGE)}"
+        )
+        browser_proxy = f"http://127.0.0.1:{NETWORK_EGRESS_OPENVPN_PROXY_PORT}"
+
+    stdout, stderr, rc = await _run(cmd, timeout=60)
+    if rc != 0:
+        message = (stderr or stdout)[:500]
+        status = "unsupported" if egress_type == "openvpn" and ("/dev/net/tun" in message or "operation not permitted" in message.lower()) else "unhealthy"
+        await update_egress_status(row["id"], status, message)
+        if status == "unsupported":
+            raise UnsupportedEgressError(message)
+        raise EgressError(message)
+
+    await update_egress_status(row["id"], "healthy", "")
+    return SessionEgressGateway(
+        enabled=True,
+        type=egress_type,
+        container_name=name,
+        browser_proxy=browser_proxy,
+        full_tunnel=True,
+        warnings=warnings,
+    )
 
 
 async def ensure_managed_egress(row: Any) -> None:

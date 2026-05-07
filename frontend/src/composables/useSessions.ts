@@ -56,6 +56,7 @@ interface SessionsState {
   activePorts: { seleniumPort: number; vncPort: number } | null
   containerLoading: boolean
   containerRestarting: boolean
+  networkProfileRefreshing: boolean
   loading: boolean
   devicePresets: DevicePreset[]
 }
@@ -66,6 +67,7 @@ const state = reactive<SessionsState>({
   activePorts: null,
   containerLoading: false,
   containerRestarting: false,
+  networkProfileRefreshing: false,
   loading: false,
   devicePresets: [],
 })
@@ -474,6 +476,64 @@ async function regenerateFingerprint(id: string): Promise<void> {
   }
 }
 
+async function refreshNetworkProfile(id: string): Promise<void> {
+  state.networkProfileRefreshing = true
+  try {
+    const res = await api(`/api/sessions/${id}/network-profile/refresh`, { method: 'POST' })
+    const data = await res.json()
+    if (data.ok) {
+      const s = state.sessions.find(s => s.id === id)
+      if (s) {
+        if (data.fingerprintProfile) s.fingerprintProfile = data.fingerprintProfile
+        if (data.ports) {
+          s.ports = data.ports
+          s.containerStatus = 'running'
+        }
+      }
+    } else if (data?.error) {
+      throw new Error(data.error)
+    }
+  } finally {
+    state.networkProfileRefreshing = false
+  }
+}
+
+async function syncObservedNetworkProfile(id: string): Promise<{ restartRequired: boolean }> {
+  state.networkProfileRefreshing = true
+  try {
+    const res = await api(`/api/sessions/${id}/network-profile/sync`, { method: 'POST' })
+    const data = await res.json()
+    if (data.ok) {
+      const s = state.sessions.find(s => s.id === id)
+      if (s && data.fingerprintProfile) s.fingerprintProfile = data.fingerprintProfile
+      return { restartRequired: Boolean(data.restartRequired) }
+    }
+    throw new Error(data?.error || 'Network profile sync failed')
+  } finally {
+    state.networkProfileRefreshing = false
+  }
+}
+
+async function overrideNetworkProfile(id: string, network: Record<string, any>): Promise<{ restartRequired: boolean }> {
+  state.networkProfileRefreshing = true
+  try {
+    const res = await api(`/api/sessions/${id}/network-profile`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ network }),
+    })
+    const data = await res.json()
+    if (data.ok) {
+      const s = state.sessions.find(s => s.id === id)
+      if (s && data.fingerprintProfile) s.fingerprintProfile = data.fingerprintProfile
+      return { restartRequired: Boolean(data.restartRequired) }
+    }
+    throw new Error(data?.error || 'Network profile override failed')
+  } finally {
+    state.networkProfileRefreshing = false
+  }
+}
+
 async function deleteSession(id: string): Promise<void> {
   await api(`/api/sessions/${id}`, { method: 'DELETE' })
   startingSessionIds.delete(id)
@@ -542,6 +602,9 @@ export function useSessions() {
     changeProxy,
     changeNetworkEgress,
     regenerateFingerprint,
+    refreshNetworkProfile,
+    syncObservedNetworkProfile,
+    overrideNetworkProfile,
     fetchBrowserImages,
   }
 }

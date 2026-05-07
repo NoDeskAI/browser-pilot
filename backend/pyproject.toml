@@ -15,6 +15,7 @@ dependencies = [
     "sqlalchemy[asyncio]>=2.0.0",
     "alembic>=1.15.0",
     "socksio>=1.0.0",
+    "PyYAML>=6.0.0",
 ]
 
 [project.optional-dependencies]

@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app import container
+from app import container, network_egress
 from app.routes import sessions
 
 
@@ -312,6 +312,74 @@ def test_create_container_passes_profile_dns_to_docker(monkeypatch):
     assert "-p 55101:7900" in commands[0]
     assert "-p 0:" not in commands[0]
     assert "bad" not in commands[0]
+
+
+def test_create_container_with_managed_egress_uses_gateway_namespace(monkeypatch):
+    commands = []
+    ports = iter([55100, 55101])
+
+    async def fake_run(cmd, timeout=30):
+        commands.append(cmd)
+        return "container-id", "", 0
+
+    async def fake_session_egress_row(session_id):
+        assert session_id == "session-1"
+        return {"id": "egress-1", "type": "clash"}
+
+    async def fake_prepare(row, *, session_id, selenium_port, vnc_port):
+        assert row["type"] == "clash"
+        assert selenium_port == 55100
+        assert vnc_port == 55101
+        return network_egress.SessionEgressGateway(
+            enabled=True,
+            type="clash",
+            container_name="bp-egress-session-session-1",
+            browser_proxy="http://127.0.0.1:7890",
+            full_tunnel=True,
+            warnings=[],
+        )
+
+    monkeypatch.setattr(container, "_run", fake_run)
+    monkeypatch.setattr(container, "_find_free_port", lambda: next(ports))
+    monkeypatch.setattr(container, "ensure_docker_network", lambda: asyncio.sleep(0))
+    monkeypatch.setattr(container, "_session_egress_row", fake_session_egress_row)
+    monkeypatch.setattr(container, "prepare_session_egress_gateway", fake_prepare)
+
+    asyncio.run(
+        container.create_container(
+            "session-1",
+            proxy="http://bp-egress-old:7890",
+            fingerprint_profile={"network": {"dnsServers": ["223.5.5.5", "119.29.29.29"]}},
+            image_name="browser-pilot:test",
+        )
+    )
+
+    assert "--network container:bp-egress-session-session-1" in commands[0]
+    assert "-p 55100:4444" not in commands[0]
+    assert "--dns 223.5.5.5" not in commands[0]
+    assert "-e BROWSER_PROXY=http://127.0.0.1:7890" in commands[0]
+
+
+def test_get_container_ports_falls_back_to_session_gateway(monkeypatch):
+    calls = []
+
+    async def fake_run(cmd, timeout=5):
+        calls.append(cmd)
+        if "docker port bp-session-1" in cmd:
+            return "", "", 0
+        if "docker port bp-egress-session-session-1" in cmd:
+            return "4444/tcp -> 0.0.0.0:55100\n7900/tcp -> 0.0.0.0:55101", "", 0
+        return "", "unexpected", 1
+
+    monkeypatch.setattr(container, "_run", fake_run)
+
+    ports = asyncio.run(container.get_container_ports("session-1"))
+
+    assert ports == {"selenium_port": 55100, "vnc_port": 55101}
+    assert calls == [
+        "docker port bp-session-1",
+        "docker port bp-egress-session-session-1",
+    ]
 
 
 def test_session_params_attach_declared_network_without_container_probe(monkeypatch):
@@ -824,3 +892,132 @@ def test_background_dns_change_sets_restart_warning_without_recreate(monkeypatch
     assert any("network_probe_background_reconciled" in w for w in saved_profile["runtimeWarnings"])
     assert any("dns_recreate_required" in w for w in saved_profile["runtimeWarnings"])
     assert synced["session_id"] == "session-1"
+
+
+def test_explicit_refresh_stores_observed_network_without_syncing_timezone(monkeypatch):
+    profile = _profile("zh-CN")
+    profile["network"] = _network("Asia/Singapore", "SG")
+    profile["timezone"] = "Asia/Singapore"
+    pool = FakePool([{"fingerprint_profile": profile}])
+    calls = {}
+
+    async def fake_verify(*_args, **_kwargs):
+        return None
+
+    async def fake_ensure(session_id):
+        calls["ensure"] = session_id
+        return {"selenium_port": 4444, "vnc_port": 7900}
+
+    async def fake_resolve(ports, *, session_id, mode):
+        calls["resolve"] = {"ports": ports, "session_id": session_id, "mode": mode}
+        observed = _network("Asia/Shanghai", "CN")
+        observed["source"] = "browser:api.ipify.org+ipwho.is"
+        observed["observedVia"] = "browser-hidden-cdp"
+        return observed
+
+    async def fake_runtime(session_id, fp, **_kwargs):
+        return fp
+
+    async def fake_sync(session_id, fp, restart_agent=True):
+        calls["sync"] = {"session_id": session_id, "fp": fp}
+
+    monkeypatch.setattr(sessions, "verify_session_access", fake_verify)
+    monkeypatch.setattr(sessions, "ensure_container_running", fake_ensure)
+    monkeypatch.setattr(sessions, "resolve_network_via_browser", fake_resolve)
+    monkeypatch.setattr(sessions, "get_pool", lambda: pool)
+    monkeypatch.setattr(sessions, "_with_runtime_health", fake_runtime)
+    monkeypatch.setattr(sessions, "sync_fingerprint_profile_to_container", fake_sync)
+
+    result = asyncio.run(sessions.refresh_network_profile("session-1", _user()))
+
+    saved = pool.executed[-1][1]
+    assert result["ok"] is True
+    assert calls["resolve"]["mode"] == "deep"
+    assert saved["timezone"] == "Asia/Singapore"
+    assert saved["network"]["timezone"] == "Asia/Singapore"
+    assert saved["network"]["observed"]["timezone"] == "Asia/Shanghai"
+    assert saved["network"]["observed"]["countryCode"] == "CN"
+    assert saved["network"]["observed"]["lat"] == 52.52
+    assert saved["network"]["observed"]["lon"] == 13.405
+
+
+def test_sync_observed_network_updates_profile_and_marks_dns_restart(monkeypatch):
+    profile = _profile("zh-CN")
+    profile["network"] = _network("Asia/Singapore", "SG")
+    profile["timezone"] = "Asia/Singapore"
+    observed = _network("Asia/Shanghai", "CN")
+    observed["source"] = "browser:api.ipify.org+ipwho.is"
+    profile["network"]["observed"] = observed
+    pool = FakePool([{"fingerprint_profile": profile}])
+
+    async def fake_verify(*_args, **_kwargs):
+        return None
+
+    async def fake_runtime(session_id, fp, **_kwargs):
+        return fp
+
+    async def fake_sync(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(sessions, "verify_session_access", fake_verify)
+    monkeypatch.setattr(sessions, "get_pool", lambda: pool)
+    monkeypatch.setattr(sessions, "_with_runtime_health", fake_runtime)
+    monkeypatch.setattr(sessions, "sync_fingerprint_profile_to_container", fake_sync)
+
+    result = asyncio.run(sessions.sync_observed_network_profile("session-1", _user()))
+
+    saved = pool.executed[-1][1]
+    assert result["ok"] is True
+    assert result["restartRequired"] is True
+    assert saved["timezone"] == "Asia/Shanghai"
+    assert saved["network"]["countryCode"] == "CN"
+    assert saved["network"]["observed"]["countryCode"] == "CN"
+    assert any("dns_recreate_required" in w for w in saved["runtimeWarnings"])
+
+
+def test_manual_network_override_marks_warning_and_keeps_numeric_coordinates(monkeypatch):
+    profile = _profile("zh-CN")
+    profile["network"] = _network("Asia/Singapore", "SG")
+    profile["timezone"] = "Asia/Singapore"
+    pool = FakePool([{"fingerprint_profile": profile}])
+
+    async def fake_verify(*_args, **_kwargs):
+        return None
+
+    async def fake_runtime(session_id, fp, **_kwargs):
+        return fp
+
+    async def fake_sync(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(sessions, "verify_session_access", fake_verify)
+    monkeypatch.setattr(sessions, "get_pool", lambda: pool)
+    monkeypatch.setattr(sessions, "_with_runtime_health", fake_runtime)
+    monkeypatch.setattr(sessions, "sync_fingerprint_profile_to_container", fake_sync)
+
+    result = asyncio.run(
+        sessions.override_network_profile(
+            "session-1",
+            sessions.NetworkProfileOverrideBody(
+                network={
+                    "countryCode": "US",
+                    "country": "United States",
+                    "region": "Indiana",
+                    "city": "Indianapolis",
+                    "timezone": "America/Indiana/Indianapolis",
+                    "lat": "39.7684",
+                    "lon": "-86.1581",
+                    "dnsServers": ["1.1.1.1", "8.8.8.8"],
+                }
+            ),
+            _user(),
+        )
+    )
+
+    saved = pool.executed[-1][1]
+    assert result["ok"] is True
+    assert saved["timezone"] == "America/Indiana/Indianapolis"
+    assert saved["network"]["lat"] == 39.7684
+    assert saved["network"]["lon"] == -86.1581
+    assert "network_profile_user_override" in saved["network"]["warnings"]
+    assert any("network_profile_user_override" in w for w in saved["runtimeWarnings"])

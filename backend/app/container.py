@@ -10,6 +10,7 @@ import shlex
 import socket
 import time
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 
@@ -29,7 +30,13 @@ from app.fingerprint import (
 )
 from app.network_egress import (
     ensure_docker_network,
+    fetch_egress_for_tenant,
+    prepare_session_egress_gateway,
     resolve_egress,
+    remove_session_egress_gateway,
+    session_egress_gateway_name,
+    start_session_egress_gateway,
+    stop_session_egress_gateway,
 )
 
 logger = logging.getLogger("container")
@@ -51,6 +58,8 @@ BROWSER_NETWORK_PROBE_TIMEOUT = 10
 FAST_NETWORK_PROBE_TIMEOUT = 3.0
 DEEP_NETWORK_PROBE_TIMEOUT = 30.0
 NETWORK_PROFILE_CACHE_TTL = 600.0
+LOCALHOST_BRIDGE_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0", "::1"}
+LOCALHOST_BRIDGE_SCHEMES = {"http", "https", "ws", "wss"}
 
 _BROWSER_NETWORK_APIS = [
     ("ipwho.is", "https://ipwho.is/"),
@@ -114,6 +123,35 @@ def _row_get(row, key: str, default=None):
         return row[key]
     except (KeyError, IndexError, TypeError):
         return default
+
+
+async def _session_egress_row(session_id: str):
+    try:
+        pool = get_pool()
+    except RuntimeError:
+        return None
+    row = await pool.fetchrow(
+        "SELECT tenant_id, network_egress_id FROM sessions WHERE id = $1",
+        session_id,
+    )
+    if not row or not row["tenant_id"] or not row["network_egress_id"]:
+        return None
+    return await fetch_egress_for_tenant(row["tenant_id"], row["network_egress_id"])
+
+
+async def _persist_profile_warnings(session_id: str, fingerprint_profile: dict | None, warnings: list[str]) -> None:
+    if not isinstance(fingerprint_profile, dict) or not warnings:
+        return
+    for warning in warnings:
+        _add_runtime_warning(fingerprint_profile, warning)
+    try:
+        await get_pool().execute(
+            "UPDATE sessions SET fingerprint_profile = $1::jsonb, updated_at = NOW() WHERE id = $2",
+            fingerprint_profile,
+            session_id,
+        )
+    except Exception as exc:
+        logger.warning("Failed to persist runtime warnings for %s: %s", session_id, exc)
 
 
 def _dns_servers_from_profile(fingerprint_profile: dict | None) -> list[str]:
@@ -325,6 +363,68 @@ async def exec_in_container(session_id: str, cmd: str, timeout: float = 10) -> s
     if rc != 0:
         raise RuntimeError(f"docker exec failed (rc={rc}): {stderr[:300]}")
     return stdout
+
+
+def _localhost_bridge_port(url: str) -> int | None:
+    try:
+        parsed = urlparse(str(url or "").strip())
+    except Exception:
+        return None
+    if parsed.scheme not in LOCALHOST_BRIDGE_SCHEMES:
+        return None
+    host = (parsed.hostname or "").strip().lower()
+    if host not in LOCALHOST_BRIDGE_HOSTS:
+        return None
+    port = parsed.port
+    if port is None:
+        port = 443 if parsed.scheme in {"https", "wss"} else 80
+    if port < 1 or port > 65535:
+        return None
+    return port
+
+
+async def ensure_localhost_bridge_for_url(session_id: str, url: str) -> dict[str, Any] | None:
+    """Start an in-container TCP bridge for explicit localhost navigations."""
+    port = _localhost_bridge_port(url)
+    if port is None:
+        return None
+    name = container_name(session_id)
+    pid_file = f"/tmp/localhost-bridge-{port}.pid"
+    log_file = f"/tmp/localhost-bridge-{port}.log"
+    cmd = (
+        f"docker exec {shlex.quote(name)} /usr/bin/python3 /opt/bin/localhost-bridge.py "
+        f"--listen-host 127.0.0.1 "
+        f"--listen-port {port} "
+        f"--target-host host.docker.internal "
+        f"--target-port {port} "
+        f"--pid-file {shlex.quote(pid_file)} "
+        f"--log-file {shlex.quote(log_file)} "
+        f"--daemon"
+    )
+    stdout, stderr, rc = await _run(cmd, timeout=5)
+    payload: dict[str, Any] = {}
+    if stdout:
+        try:
+            payload = json.loads(stdout.splitlines()[-1])
+        except Exception:
+            payload = {}
+    if rc != 0:
+        warning = (stderr or stdout or "localhost bridge failed")[:300]
+        logger.warning("localhost bridge failed for %s port %s: %s", session_id, port, warning)
+        return {
+            "enabled": False,
+            "port": port,
+            "target": f"host.docker.internal:{port}",
+            "status": "failed",
+            "warning": warning,
+        }
+    status = str(payload.get("status") or "started")
+    return {
+        "enabled": status in {"started", "already_running"},
+        "port": port,
+        "target": f"host.docker.internal:{port}",
+        "status": status,
+    }
 
 
 async def sync_fingerprint_profile_to_container(
@@ -1022,24 +1122,41 @@ async def create_container(
         env["FINGERPRINT_PROFILE"] = base64.b64encode(
             json.dumps(fingerprint_profile, separators=(",", ":")).encode()
         ).decode()
-    env_args = " ".join(f"-e {k}='{v}'" for k, v in env.items())
-    dns_args = " ".join(f"--dns {shlex.quote(server)}" for server in _dns_servers_from_profile(fingerprint_profile))
     if not image_name:
         raise RuntimeError(
             "No browser image available. Build one in Settings > Browser Images."
         )
     await ensure_docker_network()
+    egress_row = await _session_egress_row(session_id)
     logger.info("Creating container: %s (%dx%d)", name, width, height)
     last_error = ""
     for _attempt in range(5):
         selenium_port = _find_free_port()
         vnc_port = _find_free_port()
+        gateway = await prepare_session_egress_gateway(
+            egress_row,
+            session_id=session_id,
+            selenium_port=selenium_port,
+            vnc_port=vnc_port,
+        )
+        runtime_env = dict(env)
+        if gateway.enabled and gateway.browser_proxy:
+            runtime_env["BROWSER_PROXY"] = gateway.browser_proxy
+        env_args = " ".join(f"-e {k}={shlex.quote(str(v))}" for k, v in runtime_env.items())
+        dns_args = ""
+        network_args = (
+            f"--network container:{shlex.quote(gateway.container_name)} "
+            if gateway.enabled
+            else f"--network {shlex.quote(_egress_network_name())} "
+            f"--add-host host.docker.internal:host-gateway "
+            f"-p {selenium_port}:4444 -p {vnc_port}:7900 "
+        )
+        if not gateway.enabled:
+            dns_args = " ".join(f"--dns {shlex.quote(server)}" for server in _dns_servers_from_profile(fingerprint_profile))
         cmd = (
             f"docker run -d --name {name} "
             f"--label {_PREFIX}.session_id={session_id} "
-            f"--network {shlex.quote(_egress_network_name())} "
-            f"--add-host host.docker.internal:host-gateway "
-            f"-p {selenium_port}:4444 -p {vnc_port}:7900 "
+            f"{network_args}"
             f"--shm-size={SHM_SIZE} "
             f"{dns_args + ' ' if dns_args else ''}"
             f"-v {vol_name}:/home/seluser/chrome-data "
@@ -1048,6 +1165,7 @@ async def create_container(
         )
         stdout, stderr, rc = await _run(cmd, timeout=30)
         if rc == 0:
+            await _persist_profile_warnings(session_id, fingerprint_profile, gateway.warnings)
             logger.info(
                 "Container created: %s -> %s (selenium=%s vnc=%s)",
                 name,
@@ -1057,6 +1175,8 @@ async def create_container(
             )
             return stdout
         last_error = stderr or stdout
+        if gateway.enabled:
+            await remove_session_egress_gateway(session_id)
         if "port is already allocated" not in last_error.lower():
             break
     raise RuntimeError(f"docker run failed: {last_error[:300]}")
@@ -1065,6 +1185,7 @@ async def create_container(
 async def start_container(session_id: str) -> None:
     name = container_name(session_id)
     logger.info("Starting container: %s", name)
+    await start_session_egress_gateway(session_id)
     _, stderr, rc = await _run(f"docker start {name}", timeout=15)
     if rc != 0:
         raise RuntimeError(f"docker start failed: {stderr[:300]}")
@@ -1076,6 +1197,7 @@ async def stop_container(session_id: str) -> None:
     _, stderr, rc = await _run(f"docker stop {name}", timeout=30)
     if rc != 0:
         raise RuntimeError(f"docker stop failed: {stderr[:300]}")
+    await stop_session_egress_gateway(session_id)
 
 
 async def pause_container(session_id: str) -> None:
@@ -1101,6 +1223,7 @@ async def remove_container(session_id: str, *, keep_volume: bool = False) -> Non
     _, stderr, rc = await _run(f"docker rm -f {name}", timeout=15)
     if rc != 0:
         logger.warning("docker rm -f %s failed (rc=%d): %s — ignoring", name, rc, stderr[:200])
+    await remove_session_egress_gateway(session_id)
     if not keep_volume:
         await _run(f"docker volume rm -f {vol_name}", timeout=10)
 
@@ -1110,18 +1233,29 @@ async def get_container_ports(session_id: str) -> dict[str, int]:
     stdout, stderr, rc = await _run(f"docker port {name}", timeout=5)
     if rc != 0:
         raise RuntimeError(f"docker port failed: {stderr[:300]}")
-    ports: dict[str, int] = {}
-    for line in stdout.splitlines():
-        if not line.strip():
-            continue
-        # Format: "4444/tcp -> 0.0.0.0:49152"  or  "7900/tcp -> 0.0.0.0:49153"
-        left, _, right = line.partition("->")
-        container_port = left.strip().split("/")[0]
-        host_port = right.strip().rsplit(":", 1)[-1]
-        if container_port == "4444":
-            ports["selenium_port"] = int(host_port)
-        elif container_port == "7900":
-            ports["vnc_port"] = int(host_port)
+
+    def _parse_ports(raw: str) -> dict[str, int]:
+        parsed: dict[str, int] = {}
+        for raw_line in raw.splitlines():
+            if not raw_line.strip():
+                continue
+            # Format: "4444/tcp -> 0.0.0.0:49152"  or  "7900/tcp -> 0.0.0.0:49153"
+            left, _, right = raw_line.partition("->")
+            container_port = left.strip().split("/")[0]
+            host_port = right.strip().rsplit(":", 1)[-1]
+            if container_port == "4444":
+                parsed["selenium_port"] = int(host_port)
+            elif container_port == "7900":
+                parsed["vnc_port"] = int(host_port)
+        return parsed
+
+    ports = _parse_ports(stdout)
+    if "selenium_port" not in ports or "vnc_port" not in ports:
+        gateway_name = session_egress_gateway_name(session_id)
+        stdout, stderr, rc = await _run(f"docker port {gateway_name}", timeout=5)
+        if rc != 0:
+            raise RuntimeError(f"docker port failed: {stderr[:300]}")
+        ports = _parse_ports(stdout)
     if "selenium_port" not in ports or "vnc_port" not in ports:
         raise RuntimeError(f"Could not parse ports from: {stdout}")
     return ports
@@ -1330,7 +1464,7 @@ async def _session_container_params(session_id: str) -> tuple[int, int, str | No
                 row["tenant_id"],
                 _row_get(row, "network_egress_id"),
                 row["proxy_url"] or "",
-                ensure=True,
+                ensure=False,
             )
         ).proxy_url or None
     browser_lang = row["browser_lang"] or "zh-CN"
@@ -1351,7 +1485,7 @@ async def _session_container_params(session_id: str) -> tuple[int, int, str | No
         img_row = await pool.fetchrow(
             "SELECT image_tag FROM browser_images "
             "WHERE tenant_id = $1 AND chrome_version = $2 AND status = 'ready' "
-            "ORDER BY created_at DESC LIMIT 1",
+            "ORDER BY CASE WHEN image_tag LIKE '%-fpagent' THEN 1 ELSE 0 END, created_at DESC LIMIT 1",
             tenant_id, chrome_version,
         )
         if img_row:
@@ -1360,7 +1494,8 @@ async def _session_container_params(session_id: str) -> tuple[int, int, str | No
     if not image_name and tenant_id:
         img_row = await pool.fetchrow(
             "SELECT image_tag FROM browser_images "
-            "WHERE tenant_id = $1 AND status = 'ready' ORDER BY chrome_major DESC, created_at DESC LIMIT 1",
+            "WHERE tenant_id = $1 AND status = 'ready' "
+            "ORDER BY chrome_major DESC, CASE WHEN image_tag LIKE '%-fpagent' THEN 1 ELSE 0 END, created_at DESC LIMIT 1",
             row["tenant_id"],
         )
         if img_row:

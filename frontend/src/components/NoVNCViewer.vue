@@ -8,7 +8,7 @@ import { api } from '../lib/api'
 import {
   Keyboard, Maximize, Minimize, Eye, MousePointer,
   Globe, Network, Loader2, Fingerprint,
-  CornerDownLeft, ClipboardPaste, Check,
+  CornerDownLeft, ClipboardPaste, Check, RefreshCw, Save, Pencil,
 } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
@@ -25,7 +25,15 @@ import {
 import { Toggle } from '@/components/ui/toggle'
 
 const { t } = useI18n()
-const { state: sessState, changeDevicePreset, changeNetworkEgress, regenerateFingerprint } = useSessions()
+const {
+  state: sessState,
+  changeDevicePreset,
+  changeNetworkEgress,
+  regenerateFingerprint,
+  refreshNetworkProfile,
+  syncObservedNetworkProfile,
+  overrideNetworkProfile,
+} = useSessions()
 const { state: egressState, fetchNetworkEgress } = useNetworkEgress()
 
 const props = defineProps<{
@@ -67,6 +75,10 @@ const networkOpen = ref(false)
 const selectedNetworkEgressId = ref('__direct__')
 const fpOpen = ref(false)
 const fpConfirmRegenerate = ref(false)
+const fpNetworkEditOpen = ref(false)
+const fpNetworkJson = ref('')
+const fpNetworkError = ref('')
+const localhostBridgeNotice = ref('')
 const DIRECT_EGRESS_VALUE = '__direct__'
 
 const currentSession = computed(() => sessState.sessions.find(s => s.id === props.sessionId))
@@ -210,7 +222,15 @@ async function navigate(url: string) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sessionId: props.sessionId, url }),
     })
-    await resp.json()
+    const data = await resp.json().catch(() => null)
+    const bridge = data?.localhostBridge
+    if (bridge?.enabled) {
+      localhostBridgeNotice.value = t('vnc.localhostBridgeActive', { port: bridge.port })
+      window.setTimeout(() => { localhostBridgeNotice.value = '' }, 8000)
+    } else if (bridge?.warning) {
+      localhostBridgeNotice.value = t('vnc.localhostBridgeFailed')
+      window.setTimeout(() => { localhostBridgeNotice.value = '' }, 8000)
+    }
   } catch { /* ignore */ }
 }
 
@@ -382,6 +402,12 @@ function fpExitLocation(profile: Record<string, any>): string {
   return [n.city, n.region, n.countryCode || n.country].filter(Boolean).join(' / ') || '-'
 }
 
+function fpObservedLocation(profile: Record<string, any>): string {
+  const n = profile?.network?.observed
+  if (!n) return '-'
+  return [n.city, n.region, n.countryCode || n.country].filter(Boolean).join(' / ') || '-'
+}
+
 function fpDnsLabel(profile: Record<string, any>): string {
   const servers = profile?.network?.dnsServers
   return Array.isArray(servers) && servers.length ? servers.join(', ') : '-'
@@ -399,6 +425,21 @@ function fpRuntimeHealthLabel(profile: Record<string, any>): string {
   return health.ok ? 'OK' : (health.status || 'warning')
 }
 
+function fpWebglRuntimeLabel(profile: Record<string, any>): string {
+  const health = profile?.runtimeHealth
+  const checks = health?.checks || {}
+  if (checks['webgl.contextAvailable'] === false) return 'unavailable'
+  if (checks['webgl.contextAvailable'] === true) {
+    const mode = health?.expected?.webglRuntime?.resolved
+    return mode === 'swiftshader' ? 'fallback-swiftshader' : 'available'
+  }
+  return '-'
+}
+
+function fpWebglRuntimeOk(profile: Record<string, any>): boolean {
+  return profile?.runtimeHealth?.checks?.['webgl.contextAvailable'] === true
+}
+
 function fpWarnings(profile: Record<string, any>): string[] {
   const warnings = [
     ...(Array.isArray(profile?.warnings) ? profile.warnings : []),
@@ -406,6 +447,48 @@ function fpWarnings(profile: Record<string, any>): string[] {
     ...(Array.isArray(profile?.runtimeWarnings) ? profile.runtimeWarnings : []),
   ]
   return Array.from(new Set(warnings.filter(Boolean).map(String)))
+}
+
+async function refreshFpNetworkProfile() {
+  try {
+    await refreshNetworkProfile(props.sessionId)
+    const { toast } = await import('vue-sonner')
+    toast.success(t('vnc.fpNetworkRefreshDone'))
+  } catch (err: any) {
+    const { toast } = await import('vue-sonner')
+    toast.error(err?.message || t('vnc.fpNetworkRefreshFailed'))
+  }
+}
+
+async function syncFpObservedNetwork() {
+  try {
+    const result = await syncObservedNetworkProfile(props.sessionId)
+    const { toast } = await import('vue-sonner')
+    toast.success(result.restartRequired ? t('vnc.fpNetworkSyncedRestart') : t('vnc.fpNetworkSynced'))
+  } catch (err: any) {
+    const { toast } = await import('vue-sonner')
+    toast.error(err?.message || t('vnc.fpNetworkSyncFailed'))
+  }
+}
+
+function openFpNetworkEdit() {
+  const network = fpProfile.value?.network || {}
+  fpNetworkJson.value = JSON.stringify(network, null, 2)
+  fpNetworkError.value = ''
+  fpNetworkEditOpen.value = true
+}
+
+async function saveFpNetworkOverride() {
+  fpNetworkError.value = ''
+  try {
+    const parsed = JSON.parse(fpNetworkJson.value || '{}')
+    const result = await overrideNetworkProfile(props.sessionId, parsed)
+    fpNetworkEditOpen.value = false
+    const { toast } = await import('vue-sonner')
+    toast.success(result.restartRequired ? t('vnc.fpNetworkSavedRestart') : t('vnc.fpNetworkSaved'))
+  } catch (err: any) {
+    fpNetworkError.value = err?.message || t('vnc.fpNetworkInvalidJson')
+  }
 }
 
 defineExpose({ navigate })
@@ -467,6 +550,18 @@ watch(inputBarOpen, (open) => {
         >{{ t('vnc.reconnect') }}</Button>
 
         <Separator orientation="vertical" class="h-3.5" />
+
+        <Tooltip v-if="localhostBridgeNotice">
+          <TooltipTrigger as-child>
+            <span class="inline-flex items-center gap-1 text-[10px] text-muted-foreground shrink-0">
+              <Globe class="size-3" />
+              {{ t('vnc.localhostBridgeShort') }}
+            </span>
+          </TooltipTrigger>
+          <TooltipContent>{{ localhostBridgeNotice }}</TooltipContent>
+        </Tooltip>
+
+        <Separator v-if="localhostBridgeNotice" orientation="vertical" class="h-3.5" />
 
         <!-- Traffic stats -->
         <span class="flex items-center gap-1.5 text-[10px] text-muted-foreground shrink-0">
@@ -618,7 +713,7 @@ watch(inputBarOpen, (open) => {
         </Popover>
 
         <!-- Fingerprint popover -->
-        <Popover :open="fpOpen" @update:open="(o: boolean) => { fpOpen = o; if (!o) fpConfirmRegenerate = false }">
+        <Popover :open="fpOpen" @update:open="(o: boolean) => { fpOpen = o; if (!o) { fpConfirmRegenerate = false; fpNetworkEditOpen = false; fpNetworkError = '' } }">
           <PopoverTrigger as-child>
             <Button
               variant="ghost" size="sm"
@@ -653,6 +748,14 @@ watch(inputBarOpen, (open) => {
                 <div class="flex justify-between">
                   <span class="text-muted-foreground">{{ t('vnc.fpGpu') }}</span>
                   <span class="font-mono truncate max-w-[160px]" :title="fpProfile.webgl?.renderer">{{ fpProfile.webgl?.renderer?.split(',')[0] || '-' }}</span>
+                </div>
+                <div v-if="fpProfile.runtimeHealth" class="flex justify-between">
+                  <span class="text-muted-foreground">{{ t('vnc.fpWebglRuntime') }}</span>
+                  <span
+                    class="font-mono truncate max-w-[160px]"
+                    :class="fpWebglRuntimeOk(fpProfile) ? 'text-emerald-400' : 'text-amber-500'"
+                    :title="JSON.stringify(fpProfile.runtimeHealth?.checks || {})"
+                  >{{ fpWebglRuntimeLabel(fpProfile) }}</span>
                 </div>
                 <div class="flex justify-between">
                   <span class="text-muted-foreground">{{ t('vnc.fpCpu') }}</span>
@@ -721,6 +824,63 @@ watch(inputBarOpen, (open) => {
                   <div class="flex justify-between">
                     <span class="text-muted-foreground">{{ t('vnc.fpDns') }}</span>
                     <span class="font-mono truncate max-w-[160px]" :title="fpDnsLabel(fpProfile)">{{ fpDnsLabel(fpProfile) }}</span>
+                  </div>
+                  <div v-if="fpProfile.network.observed" class="flex justify-between">
+                    <span class="text-muted-foreground">{{ t('vnc.fpObserved') }}</span>
+                    <span class="font-mono truncate max-w-[160px]" :title="JSON.stringify(fpProfile.network.observed)">
+                      {{ fpProfile.network.observed.ip || '-' }} / {{ fpObservedLocation(fpProfile) }}
+                    </span>
+                  </div>
+                  <div class="grid grid-cols-3 gap-1 pt-1">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      class="h-6 text-[10px] gap-1 px-1.5"
+                      :disabled="sessState.networkProfileRefreshing"
+                      @click="refreshFpNetworkProfile"
+                    >
+                      <RefreshCw class="size-3" :class="sessState.networkProfileRefreshing ? 'animate-spin' : ''" />
+                      {{ t('vnc.fpNetworkRefresh') }}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      class="h-6 text-[10px] gap-1 px-1.5"
+                      :disabled="sessState.networkProfileRefreshing || !fpProfile.network.observed"
+                      @click="syncFpObservedNetwork"
+                    >
+                      <Save class="size-3" />
+                      {{ t('vnc.fpNetworkSync') }}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      class="h-6 text-[10px] gap-1 px-1.5"
+                      :disabled="sessState.networkProfileRefreshing"
+                      @click="openFpNetworkEdit"
+                    >
+                      <Pencil class="size-3" />
+                      {{ t('vnc.fpNetworkEdit') }}
+                    </Button>
+                  </div>
+                  <div v-if="fpNetworkEditOpen" class="space-y-1.5 pt-1">
+                    <textarea
+                      v-model="fpNetworkJson"
+                      class="w-full min-h-28 rounded-md border border-border bg-background px-2 py-1 font-mono text-[10px] outline-none focus:ring-1 focus:ring-violet-500"
+                      spellcheck="false"
+                    />
+                    <p class="text-[10px] leading-tight text-amber-500">{{ t('vnc.fpNetworkEditHint') }}</p>
+                    <p v-if="fpNetworkError" class="text-[10px] leading-tight text-destructive">{{ fpNetworkError }}</p>
+                    <div class="flex gap-1.5">
+                      <Button variant="outline" size="sm" class="flex-1 h-6 text-[10px]" @click="fpNetworkEditOpen = false">{{ t('session.cancel') }}</Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        class="flex-1 h-6 text-[10px] border-violet-600/30 text-violet-400 hover:bg-violet-600/10"
+                        :disabled="sessState.networkProfileRefreshing"
+                        @click="saveFpNetworkOverride"
+                      >{{ t('fingerprintPool.save') }}</Button>
+                    </div>
                   </div>
                 </div>
                 <div v-if="fpWarnings(fpProfile).length" class="text-[10px] text-amber-500 leading-snug">
