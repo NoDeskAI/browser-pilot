@@ -48,17 +48,43 @@ const shortcutLabel = isMac ? '⌘N' : 'Ctrl+N'
 
 const autoRefresh = ref(localStorage.getItem('bp_auto_refresh') === 'true')
 let refreshTimer: ReturnType<typeof setInterval> | null = null
+let autoRefreshFetchInFlight = false
 
 function setAutoRefresh(on: boolean) {
   autoRefresh.value = on
 }
 
+async function fetchSessionsForAutoRefresh() {
+  if (autoRefreshFetchInFlight) return
+  autoRefreshFetchInFlight = true
+  try {
+    await fetchSessions()
+  } finally {
+    autoRefreshFetchInFlight = false
+  }
+}
+
 function startTimer() {
   stopTimer()
-  refreshTimer = setInterval(fetchSessions, 3000)
+  void fetchSessionsForAutoRefresh()
+  refreshTimer = setInterval(() => {
+    void fetchSessionsForAutoRefresh()
+  }, 3000)
 }
 function stopTimer() {
   if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null }
+}
+
+function refreshWhenVisible() {
+  if (autoRefresh.value && document.visibilityState === 'visible') {
+    void fetchSessionsForAutoRefresh()
+  }
+}
+
+function refreshWhenFocused() {
+  if (autoRefresh.value) {
+    void fetchSessionsForAutoRefresh()
+  }
 }
 
 watch(autoRefresh, (on) => {
@@ -67,6 +93,8 @@ watch(autoRefresh, (on) => {
 })
 
 onMounted(async () => {
+  document.addEventListener('visibilitychange', refreshWhenVisible)
+  window.addEventListener('focus', refreshWhenFocused)
   if (autoRefresh.value) {
     startTimer()
   } else {
@@ -83,7 +111,11 @@ onMounted(async () => {
     // keep optimistic default
   }
 })
-onUnmounted(stopTimer)
+onUnmounted(() => {
+  stopTimer()
+  document.removeEventListener('visibilitychange', refreshWhenVisible)
+  window.removeEventListener('focus', refreshWhenFocused)
+})
 
 const editingId = ref<string | null>(null)
 const editName = ref('')
