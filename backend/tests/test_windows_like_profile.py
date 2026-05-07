@@ -207,6 +207,15 @@ def test_browser_fontconfig_and_stealth_use_windows_allowlist():
     assert "webgl.rendererSpoofMatched" in agent
     assert "webgl_runtime_unavailable" in agent
     assert "webgl_spoof_mismatch" in agent
+    assert "def _is_safe_active_health_url" in agent
+    assert 'value in {"about:blank", "about:srcdoc"}' in agent
+    assert 'value.startswith("chrome://newtab")' in agent
+    assert 'method in ("Page.frameNavigated", "Runtime.executionContextCreated")' not in agent
+    assert 'if frame.get("url") and not frame.get("parentId"):' in agent
+    assert "lastActiveHealthProbeSkipped" in agent
+    assert "def _detach_page_session" in agent
+    assert 'Target.detachFromTarget", {"sessionId": session_id}' in agent
+    assert 'if "No session with given id" in err:' in agent
     assert "cdp-fingerprint-agent.py" in dockerfile
     assert "cdp-fingerprint-agent.conf" in dockerfile
     assert "localhost-bridge.py" in dockerfile

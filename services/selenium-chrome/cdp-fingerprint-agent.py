@@ -75,6 +75,15 @@ def _read_gl_mode() -> dict[str, Any]:
     return {}
 
 
+def _is_safe_active_health_url(url: str | None) -> bool:
+    value = (url or "").strip()
+    if not value:
+        return True
+    if value in {"about:blank", "about:srcdoc"}:
+        return True
+    return value.startswith("chrome://newtab")
+
+
 def _load_runtime_profile() -> dict[str, Any]:
     if PROFILE_FILE.exists():
         return json.loads(PROFILE_FILE.read_text(encoding="utf-8"))
@@ -368,12 +377,11 @@ class CDPAgent:
         session_id = msg.get("sessionId")
         if session_id and method == "Page.frameNavigated":
             frame = params.get("frame") if isinstance(params.get("frame"), dict) else {}
-            if frame.get("url"):
+            if frame.get("url") and not frame.get("parentId"):
                 target = self.page_sessions.setdefault(session_id, {})
                 target["url"] = frame["url"]
-        if session_id and method in ("Page.frameNavigated", "Runtime.executionContextCreated"):
-            if session_id in self.initialized:
-                self._check_health(session_id, self.page_sessions.get(session_id, {}), reason=method)
+                if session_id in self.initialized:
+                    self._check_health_or_skip(session_id, target, reason=method)
 
     def _init_page(self, session_id: str, target: dict[str, Any]) -> None:
         if session_id in self.initialized or session_id in self.initializing:
@@ -399,17 +407,43 @@ class CDPAgent:
         if not ok and err:
             warnings.append(f"Runtime.runIfWaitingForDebugger failed: {err}")
 
-        ok, err = self.safe_call("Runtime.evaluate", {
-            "expression": self.stealth_source,
-            "silent": True,
-            "includeCommandLineAPI": False,
-        }, session_id=session_id, timeout=5)
-        if not ok and err:
-            warnings.append(f"current document preload failed: {err}")
+        if _is_safe_active_health_url(str(target.get("url") or "")):
+            ok, err = self.safe_call("Runtime.evaluate", {
+                "expression": self.stealth_source,
+                "silent": True,
+                "includeCommandLineAPI": False,
+            }, session_id=session_id, timeout=5)
+            if not ok and err:
+                warnings.append(f"current document preload failed: {err}")
 
         self.initializing.discard(session_id)
         self.initialized.add(session_id)
-        self._check_health(session_id, target, reason="attached", pre_warnings=warnings)
+        self._check_health_or_skip(session_id, target, reason="attached", pre_warnings=warnings)
+        self._detach_page_session(session_id)
+
+    def _detach_page_session(self, session_id: str) -> None:
+        ok, err = self.safe_call("Target.detachFromTarget", {"sessionId": session_id}, timeout=2)
+        self.initializing.discard(session_id)
+        self.initialized.discard(session_id)
+        self.page_sessions.pop(session_id, None)
+        if not ok and err:
+            if "No session with given id" in err:
+                return
+            previous = _read_health()
+            payload = previous if previous else {
+                "agent": "cdp-fingerprint-agent",
+                "ok": False,
+                "status": "warning",
+                "expected": self._expected(),
+                "observed": {},
+                "checks": {},
+                "warnings": [],
+            }
+            payload["warnings"] = _unique(
+                list(payload.get("warnings") or []) + [f"Target.detachFromTarget failed: {err}"]
+            )
+            payload["updatedAt"] = _now()
+            _write_health(payload)
 
     def _ua_override_params(self) -> dict[str, Any]:
         chrome_version = str(self.profile.get("chromeVersion") or "124.0.0.0")
@@ -586,6 +620,43 @@ class CDPAgent:
             "checks": checks,
             "warnings": warnings,
         })
+
+    def _check_health_or_skip(
+        self,
+        session_id: str,
+        target: dict[str, Any],
+        *,
+        reason: str,
+        pre_warnings: list[str] | None = None,
+    ) -> None:
+        target_url = str(target.get("url") or "")
+        if _is_safe_active_health_url(target_url):
+            self._check_health(session_id, target, reason=reason, pre_warnings=pre_warnings)
+            return
+
+        previous = _read_health()
+        payload = previous if previous else {
+            "agent": "cdp-fingerprint-agent",
+            "ok": True,
+            "status": "injection-applied",
+            "expected": self._expected(),
+            "observed": {},
+            "checks": {},
+            "warnings": [],
+        }
+        if pre_warnings:
+            payload["transientWarnings"] = _unique(
+                list(payload.get("transientWarnings") or []) + list(pre_warnings)
+            )
+        payload["updatedAt"] = _now()
+        payload["lastActiveHealthProbeSkipped"] = {
+            "reason": reason,
+            "targetId": target.get("targetId"),
+            "targetUrl": target_url,
+            "sessionId": session_id,
+            "updatedAt": _now(),
+        }
+        _write_health(payload)
 
 
 def main() -> int:
