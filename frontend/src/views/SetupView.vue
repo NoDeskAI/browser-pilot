@@ -65,9 +65,16 @@ function toggleLocale() {
 <template>
   <div class="min-h-screen flex items-center justify-center px-4">
     <div class="w-full max-w-[380px]">
-      <div class="mb-8">
-        <h1 class="text-2xl font-bold tracking-tight">{{ brand.appTitle }}</h1>
-        <p class="mt-2 text-sm text-muted-foreground">{{ t('auth.setupSubtitle') }}</p>
+      <div class="mb-8 flex items-start gap-3">
+        <img
+          src="/brand/browser-pilot.svg"
+          alt=""
+          class="mt-0.5 size-11 shrink-0 object-contain mix-blend-multiply dark:invert dark:mix-blend-screen"
+        />
+        <div class="min-w-0">
+          <h1 class="text-2xl font-bold tracking-tight">{{ brand.appTitle }}</h1>
+          <p class="mt-2 text-sm text-muted-foreground">{{ t('auth.setupSubtitle') }}</p>
+        </div>
       </div>
 
       <form @submit.prevent="handleSetup" class="space-y-4">

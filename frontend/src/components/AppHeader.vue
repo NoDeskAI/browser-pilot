@@ -45,6 +45,11 @@ function toggleLocale() {
     <!-- Left: Brand and Main Navigation -->
     <div class="flex items-center gap-2 sm:gap-4 md:gap-6 min-w-0">
       <div class="flex items-center gap-2 shrink-0">
+        <img
+          src="/brand/browser-pilot.svg"
+          alt=""
+          class="size-7 object-contain mix-blend-multiply dark:invert dark:mix-blend-screen"
+        />
         <span class="text-sm font-semibold truncate">{{ brand.appTitle }}</span>
         <Badge v-if="brand.edition === 'ee'" variant="outline" class="text-[10px] uppercase px-1 hidden sm:inline-flex">EE</Badge>
       </div>
