@@ -32,7 +32,7 @@ export interface DevicePreset {
 export interface NetworkEgressProfile {
   id: string | null
   name: string
-  type: 'direct' | 'external_proxy' | 'clash' | 'openvpn'
+  type: 'direct' | 'clash' | 'openvpn'
   status: 'healthy' | 'unhealthy' | 'disabled' | 'unsupported' | 'unchecked'
   proxyUrl: string
   healthError?: string

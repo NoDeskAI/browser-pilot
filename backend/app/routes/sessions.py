@@ -39,7 +39,6 @@ from app.network_egress import (
     EgressError,
     EffectiveEgress,
     resolve_egress,
-    validate_proxy_url,
 )
 
 logger = logging.getLogger("routes.sessions")
@@ -75,10 +74,6 @@ class DevicePresetBody(BaseModel):
     preset: str
 
 
-class ProxyBody(BaseModel):
-    proxyUrl: str = ""
-
-
 class SessionNetworkEgressBody(BaseModel):
     networkEgressId: str | None = None
 
@@ -93,9 +88,6 @@ class FingerprintActionBody(BaseModel):
 
 class AppStateBody(BaseModel):
     value: str
-
-_VALID_PROXY_SCHEMES = ("http://", "https://", "socks4://", "socks5://")
-
 
 def _row_get(row, key: str, default=None):
     try:
@@ -164,16 +156,6 @@ def _egress_payload(effective: EffectiveEgress) -> dict:
 def _egress_payload_from_row(row) -> dict:
     egress_id = _row_get(row, "network_egress_id")
     if not egress_id:
-        proxy_url = _row_get(row, "proxy_url", "") or ""
-        if proxy_url:
-            return {
-                "networkEgressId": None,
-                "networkEgressName": "Manual proxy",
-                "networkEgressType": "external_proxy",
-                "networkEgressStatus": "unchecked",
-                "networkEgressProxyUrl": proxy_url,
-                "networkEgressHealthError": "",
-            }
         return {
             "networkEgressId": None,
             "networkEgressName": "Direct",
@@ -190,6 +172,12 @@ def _egress_payload_from_row(row) -> dict:
         "networkEgressProxyUrl": _row_get(row, "proxy_url", "") or "",
         "networkEgressHealthError": _row_get(row, "network_egress_health_error", "") or "",
     }
+
+
+def _session_proxy_url(row) -> str:
+    if not _row_get(row, "network_egress_id"):
+        return ""
+    return _row_get(row, "proxy_url", "") or ""
 
 
 async def _resolve_session_network(proxy_url: str | None, image_tag: str | None) -> dict:
@@ -245,13 +233,7 @@ def _add_profile_warning(profile: dict | None, warning: str) -> None:
 
 
 def _apply_egress_runtime_warnings(profile: dict | None, effective: EffectiveEgress) -> None:
-    if not isinstance(profile, dict):
-        return
-    if effective.type == "external_proxy" and effective.proxy_url:
-        _add_profile_warning(
-            profile,
-            "egress_full_tunnel_unavailable: manual proxy mode only applies the browser proxy setting; container processes and DNS are not guaranteed to share that proxy exit.",
-        )
+    return
 
 
 def _network_dns(network: dict | None) -> list[str]:
@@ -422,7 +404,7 @@ async def list_sessions(user: CurrentUser = Depends(get_current_user)):
             "currentTitle": r["current_title"] or "",
             "containerStatus": container_status,
             "devicePreset": r["device_preset"] or DEFAULT_PRESET,
-            "proxyUrl": r["proxy_url"] or "",
+            "proxyUrl": _session_proxy_url(r),
             "fingerprintProfile": fp_response,
             "browserLang": r["browser_lang"] or "zh-CN",
             **_egress_payload_from_row(r),
@@ -443,6 +425,9 @@ async def list_sessions(user: CurrentUser = Depends(get_current_user)):
 
 @router.post("/api/sessions")
 async def create_session(body: CreateSessionBody, user: CurrentUser = Depends(get_current_user)):
+    if body.proxyUrl.strip():
+        raise HTTPException(422, "Manual HTTP/SOCKS proxy is no longer supported. Use a Clash or OpenVPN network egress profile.")
+
     pool = get_pool()
     session_id = str(uuid.uuid4())
     preset_id = body.devicePreset if body.devicePreset in DEVICE_PRESETS else DEFAULT_PRESET
@@ -456,7 +441,7 @@ async def create_session(body: CreateSessionBody, user: CurrentUser = Depends(ge
         effective_egress = await resolve_egress(
             user.tenant_id,
             body.networkEgressId,
-            body.proxyUrl,
+            "",
             ensure=False,
         )
     except EgressError as exc:
@@ -548,7 +533,7 @@ async def get_session(session_id: str, user: CurrentUser = Depends(get_session_a
         "currentUrl": row["current_url"] or "",
         "currentTitle": row["current_title"] or "",
         "devicePreset": row["device_preset"] or DEFAULT_PRESET,
-        "proxyUrl": row["proxy_url"] or "",
+        "proxyUrl": _session_proxy_url(row),
         "fingerprintProfile": fp_response,
         "browserLang": row["browser_lang"] or "zh-CN",
         **_egress_payload_from_row(row),
@@ -676,7 +661,7 @@ async def change_device_preset(session_id: str, body: DevicePresetBody, user: Cu
         effective_egress = await resolve_egress(
             _row_get(row, "tenant_id") or user.tenant_id,
             _row_get(row, "network_egress_id"),
-            row["proxy_url"] or "",
+            "",
             ensure=False,
         )
     except EgressError as exc:
@@ -710,65 +695,9 @@ async def change_device_preset(session_id: str, body: DevicePresetBody, user: Cu
 
 
 @router.post("/api/sessions/{session_id}/proxy")
-async def change_proxy(session_id: str, body: ProxyBody, user: CurrentUser = Depends(get_current_user)):
+async def change_proxy(session_id: str, user: CurrentUser = Depends(get_current_user)):
     await _verify_session_tenant(session_id, user)
-    try:
-        proxy_url = validate_proxy_url(body.proxyUrl)
-    except EgressError as exc:
-        return {"ok": False, "error": str(exc)}
-    pool = get_pool()
-    row = await pool.fetchrow("SELECT device_preset, fingerprint_profile, browser_lang FROM sessions WHERE id = $1", session_id)
-    if not row:
-        return {"ok": False, "error": "Session not found"}
-    fp_profile = row["fingerprint_profile"] or {}
-    image_name = await _resolve_session_image(session_id)
-    attach_network_profile(
-        fp_profile,
-        await _resolve_session_network(proxy_url or None, image_name),
-    )
-    _apply_egress_runtime_warnings(
-        fp_profile,
-        EffectiveEgress(
-            id=None,
-            name="Manual proxy" if proxy_url else "Direct",
-            type="external_proxy" if proxy_url else "direct",
-            status="unchecked" if proxy_url else "healthy",
-            proxy_url=proxy_url,
-        ),
-    )
-    await pool.execute(
-        "UPDATE sessions SET proxy_url = $1, network_egress_id = NULL, fingerprint_profile = $2::jsonb, updated_at = NOW() WHERE id = $3",
-        proxy_url, fp_profile, session_id,
-    )
-    preset_data = get_preset(row["device_preset"] or DEFAULT_PRESET)
-    fp_ua = fp_profile.get("navigator", {}).get("userAgent") if isinstance(fp_profile, dict) else None
-    from app.tools.browser.session import invalidate_session_cache
-    invalidate_session_cache(session_id)
-    ports = await recreate_container(
-        session_id,
-        width=preset_data["width"],
-        height=preset_data["height"],
-        user_agent=fp_ua,
-        proxy=proxy_url or None,
-        fingerprint_profile=fp_profile,
-        browser_lang=row["browser_lang"] or "zh-CN",
-        image_name=image_name,
-    )
-    fp_response = await _with_runtime_health(session_id, fp_profile)
-    effective_egress = EffectiveEgress(
-        id=None,
-        name="Manual proxy" if proxy_url else "Direct",
-        type="external_proxy" if proxy_url else "direct",
-        status="unchecked" if proxy_url else "healthy",
-        proxy_url=proxy_url,
-    )
-    return {
-        "ok": True,
-        "ports": ports,
-        "proxyUrl": proxy_url,
-        "fingerprintProfile": fp_response,
-        **_egress_payload(effective_egress),
-    }
+    raise HTTPException(410, "Manual HTTP/SOCKS proxy has been removed. Use Clash or OpenVPN network egress.")
 
 
 @router.post("/api/sessions/{session_id}/network-egress")
@@ -851,7 +780,7 @@ async def regenerate_fingerprint(session_id: str, body: FingerprintActionBody, u
         effective_egress = await resolve_egress(
             _row_get(row, "tenant_id") or user.tenant_id,
             _row_get(row, "network_egress_id"),
-            row["proxy_url"] or "",
+            "",
             ensure=False,
         )
     except EgressError as exc:

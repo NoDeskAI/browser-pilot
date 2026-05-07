@@ -90,10 +90,10 @@ function applyNetworkEgressFields(target: Session, data: any): void {
   }
   target.proxyUrl = data.proxyUrl || ''
   target.networkEgressId = data.networkEgressId ?? null
-  target.networkEgressName = data.networkEgressName || (data.proxyUrl ? 'Manual proxy' : 'Direct')
-  target.networkEgressType = data.networkEgressType || (data.proxyUrl ? 'external_proxy' : 'direct')
-  target.networkEgressStatus = data.networkEgressStatus || (data.proxyUrl ? 'unchecked' : 'healthy')
-  target.networkEgressProxyUrl = data.networkEgressProxyUrl || data.proxyUrl || ''
+  target.networkEgressName = data.networkEgressName || 'Direct'
+  target.networkEgressType = data.networkEgressType || 'direct'
+  target.networkEgressStatus = data.networkEgressStatus || 'healthy'
+  target.networkEgressProxyUrl = data.networkEgressProxyUrl || ''
   target.networkEgressHealthError = data.networkEgressHealthError || ''
 }
 
@@ -143,10 +143,10 @@ async function fetchSessions(): Promise<void> {
         devicePreset: s.devicePreset || '',
         proxyUrl: s.proxyUrl || '',
         networkEgressId: s.networkEgressId ?? null,
-        networkEgressName: s.networkEgressName || (s.proxyUrl ? 'Manual proxy' : 'Direct'),
-        networkEgressType: s.networkEgressType || (s.proxyUrl ? 'external_proxy' : 'direct'),
-        networkEgressStatus: s.networkEgressStatus || (s.proxyUrl ? 'unchecked' : 'healthy'),
-        networkEgressProxyUrl: s.networkEgressProxyUrl || s.proxyUrl || '',
+        networkEgressName: s.networkEgressName || 'Direct',
+        networkEgressType: s.networkEgressType || 'direct',
+        networkEgressStatus: s.networkEgressStatus || 'healthy',
+        networkEgressProxyUrl: s.networkEgressProxyUrl || '',
         networkEgressHealthError: s.networkEgressHealthError || '',
         fingerprintProfile: s.fingerprintProfile || local?.fingerprintProfile || null,
         browserLang: s.browserLang || 'zh-CN',
@@ -205,10 +205,10 @@ async function createSession(name?: string, chromeVersion?: string, networkEgres
     ports: null,
     proxyUrl: data.proxyUrl || '',
     networkEgressId: data.networkEgressId ?? null,
-    networkEgressName: data.networkEgressName || (data.proxyUrl ? 'Manual proxy' : 'Direct'),
-    networkEgressType: data.networkEgressType || (data.proxyUrl ? 'external_proxy' : 'direct'),
-    networkEgressStatus: data.networkEgressStatus || (data.proxyUrl ? 'unchecked' : 'healthy'),
-    networkEgressProxyUrl: data.networkEgressProxyUrl || data.proxyUrl || '',
+    networkEgressName: data.networkEgressName || 'Direct',
+    networkEgressType: data.networkEgressType || 'direct',
+    networkEgressStatus: data.networkEgressStatus || 'healthy',
+    networkEgressProxyUrl: data.networkEgressProxyUrl || '',
     networkEgressHealthError: data.networkEgressHealthError || '',
     fingerprintProfile: data.fingerprintProfile || null,
     browserLang: data.browserLang || browserLang,
@@ -367,36 +367,6 @@ async function changeDevicePreset(id: string, preset: string): Promise<void> {
       const s = state.sessions.find(s => s.id === id)
       if (s) {
         s.devicePreset = data.devicePreset || preset
-        s.ports = data.ports
-        s.containerStatus = 'running'
-        if (data.fingerprintProfile) s.fingerprintProfile = data.fingerprintProfile
-        applyNetworkEgressFields(s, data)
-      }
-      if (state.activeId === id) {
-        state.activePorts = {
-          seleniumPort: data.ports.selenium_port,
-          vncPort: data.ports.vnc_port,
-        }
-      }
-    }
-  } finally {
-    state.containerRestarting = false
-  }
-}
-
-async function changeProxy(id: string, proxyUrl: string): Promise<void> {
-  state.containerRestarting = true
-  try {
-    const res = await api(`/api/sessions/${id}/proxy`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ proxyUrl }),
-    })
-    const data = await res.json()
-    if (data.ok && data.ports) {
-      const s = state.sessions.find(s => s.id === id)
-      if (s) {
-        s.proxyUrl = data.proxyUrl ?? proxyUrl
         s.ports = data.ports
         s.containerStatus = 'running'
         if (data.fingerprintProfile) s.fingerprintProfile = data.fingerprintProfile
@@ -599,7 +569,6 @@ export function useSessions() {
     pauseContainer,
     stopContainer,
     changeDevicePreset,
-    changeProxy,
     changeNetworkEgress,
     regenerateFingerprint,
     refreshNetworkProfile,

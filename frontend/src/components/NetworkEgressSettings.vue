@@ -35,8 +35,7 @@ const draggingConfig = ref(false)
 const configInput = ref<HTMLInputElement | null>(null)
 const form = reactive({
   name: '',
-  type: 'external_proxy',
-  proxyUrl: '',
+  type: 'clash',
   configText: '',
   configUrl: '',
   username: '',
@@ -65,8 +64,7 @@ function statusLabel(status: string) {
 function resetForm() {
   Object.assign(form, {
     name: '',
-    type: 'external_proxy',
-    proxyUrl: '',
+    type: 'clash',
     configText: '',
     configUrl: '',
     username: '',
@@ -242,7 +240,6 @@ watch(
             <TableHead>{{ t('networkEgress.name') }}</TableHead>
             <TableHead>{{ t('networkEgress.typeLabel') }}</TableHead>
             <TableHead>{{ t('networkEgress.statusLabel') }}</TableHead>
-            <TableHead>{{ t('networkEgress.proxyUrl') }}</TableHead>
             <TableHead>{{ t('networkEgress.lastChecked') }}</TableHead>
             <TableHead class="text-right">{{ t('networkEgress.actions') }}</TableHead>
           </TableRow>
@@ -252,7 +249,6 @@ watch(
             <TableCell class="font-medium">{{ t('networkEgress.direct') }}</TableCell>
             <TableCell>{{ typeLabel('direct') }}</TableCell>
             <TableCell><Badge variant="default">{{ statusLabel('healthy') }}</Badge></TableCell>
-            <TableCell class="text-xs text-muted-foreground">-</TableCell>
             <TableCell class="text-xs text-muted-foreground">-</TableCell>
             <TableCell />
           </TableRow>
@@ -267,9 +263,6 @@ watch(
             <TableCell>{{ typeLabel(profile.type) }}</TableCell>
             <TableCell>
               <Badge :variant="statusVariant(profile.status) as any">{{ statusLabel(profile.status) }}</Badge>
-            </TableCell>
-            <TableCell class="text-xs font-mono text-muted-foreground max-w-[220px] truncate">
-              {{ profile.proxyUrl || '-' }}
             </TableCell>
             <TableCell class="text-xs text-muted-foreground">
               {{ profile.lastCheckedAt ? new Date(profile.lastCheckedAt).toLocaleString() : '-' }}
@@ -310,7 +303,6 @@ watch(
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="external_proxy">{{ typeLabel('external_proxy') }}</SelectItem>
                 <SelectItem value="clash">{{ typeLabel('clash') }}</SelectItem>
                 <SelectItem value="openvpn">{{ typeLabel('openvpn') }}</SelectItem>
               </SelectContent>
@@ -318,12 +310,7 @@ watch(
           </div>
         </div>
 
-        <div v-if="form.type === 'external_proxy'" class="space-y-2">
-          <Label for="egress-proxy">{{ t('networkEgress.proxyUrl') }}</Label>
-          <Input id="egress-proxy" v-model="form.proxyUrl" placeholder="socks5://proxy.internal:1080" />
-        </div>
-
-        <div v-else class="space-y-3">
+        <div class="space-y-3">
           <div class="space-y-2">
             <Label for="egress-config-url">{{ t('networkEgress.configUrl') }}</Label>
             <Input

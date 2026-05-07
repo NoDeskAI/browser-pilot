@@ -11,7 +11,7 @@ if [ -f /config/auth.txt ]; then
   auth_arg="--auth-user-pass /config/auth.txt"
 fi
 
-openvpn --config /config/client.ovpn $auth_arg &
+openvpn --config /config/client.ovpn $auth_arg --redirect-gateway def1 &
 openvpn_pid="$!"
 
 tinyproxy -d -c /etc/tinyproxy/tinyproxy.conf &
@@ -28,6 +28,9 @@ while true; do
     echo "openvpn exited" >&2
     cleanup
     exit 1
+  fi
+  if ! ip route | grep -E "dev tun[0-9]+" >/dev/null 2>&1; then
+    echo "waiting for openvpn full-tunnel route" >&2
   fi
   if ! kill -0 "$proxy_pid" 2>/dev/null; then
     echo "tinyproxy exited" >&2

@@ -1457,13 +1457,13 @@ async def _session_container_params(session_id: str) -> tuple[int, int, str | No
         preset_data = get_preset(DEFAULT_PRESET)
         return preset_data["width"], preset_data["height"], None, None, None, "zh-CN", None
     preset_data = get_preset(row["device_preset"] or DEFAULT_PRESET)
-    proxy = row["proxy_url"] or None
+    proxy = None
     if row["tenant_id"]:
         proxy = (
             await resolve_egress(
                 row["tenant_id"],
                 _row_get(row, "network_egress_id"),
-                row["proxy_url"] or "",
+                "",
                 ensure=False,
             )
         ).proxy_url or None

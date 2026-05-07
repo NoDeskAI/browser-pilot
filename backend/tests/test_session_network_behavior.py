@@ -202,43 +202,30 @@ def test_create_session_keeps_major_version_fallback(monkeypatch):
     }
 
 
-def test_change_proxy_refreshes_network_and_keeps_language(monkeypatch):
-    profile = _profile("ja-JP")
+def test_change_proxy_endpoint_is_removed(monkeypatch):
     pool = FakePool([
         {"tenant_id": "tenant-1"},
-        {"device_preset": "desktop", "fingerprint_profile": profile, "browser_lang": "ja-JP"},
     ])
-    captured = {}
     monkeypatch.setattr(sessions, "get_pool", lambda: pool)
-    monkeypatch.setattr(sessions, "_resolve_session_image", lambda session_id: asyncio.sleep(0, "browser-pilot:test"))
 
-    async def fake_network(proxy_url, image_tag):
-        assert proxy_url == "http://proxy.example:8080"
-        assert image_tag == "browser-pilot:test"
-        return _network("Europe/Paris", "FR")
+    with pytest.raises(sessions.HTTPException) as exc:
+        asyncio.run(sessions.change_proxy("session-1", _user()))
 
-    async def fake_recreate_container(session_id, **kwargs):
-        assert session_id == "session-1"
-        captured.update(kwargs)
-        return {"selenium_port": 4444, "vnc_port": 7900}
+    assert exc.value.status_code == 410
+    assert "Manual HTTP/SOCKS proxy has been removed" in exc.value.detail
 
-    monkeypatch.setattr(sessions, "_resolve_session_network", fake_network)
-    monkeypatch.setattr(sessions, "recreate_container", fake_recreate_container)
 
-    result = asyncio.run(
-        sessions.change_proxy(
-            "session-1",
-            sessions.ProxyBody(proxyUrl="http://proxy.example:8080"),
-            _user(),
+def test_create_session_rejects_manual_proxy(monkeypatch):
+    with pytest.raises(sessions.HTTPException) as exc:
+        asyncio.run(
+            sessions.create_session(
+                sessions.CreateSessionBody(proxyUrl="http://proxy.example:8080"),
+                _user(),
+            )
         )
-    )
 
-    assert result["ok"] is True
-    assert result["fingerprintProfile"]["timezone"] == "Europe/Paris"
-    assert result["fingerprintProfile"]["network"]["countryCode"] == "FR"
-    assert result["fingerprintProfile"]["navigator"]["languages"] == ["ja-JP", "ja", "en"]
-    assert captured["proxy"] == "http://proxy.example:8080"
-    assert captured["browser_lang"] == "ja-JP"
+    assert exc.value.status_code == 422
+    assert "Manual HTTP/SOCKS proxy is no longer supported" in exc.value.detail
 
 
 def test_regenerate_fingerprint_preserves_network_and_does_not_fallback_to_utc(monkeypatch):
@@ -246,7 +233,8 @@ def test_regenerate_fingerprint_preserves_network_and_does_not_fallback_to_utc(m
         {"tenant_id": "tenant-1"},
         {
             "device_preset": "desktop",
-            "proxy_url": "socks5://proxy.example:1080",
+            "proxy_url": "",
+            "network_egress_id": None,
             "browser_lang": "es-ES",
             "chrome_version": "147.0.0.0",
         },
@@ -259,7 +247,7 @@ def test_regenerate_fingerprint_preserves_network_and_does_not_fallback_to_utc(m
         return _profile(browser_lang)
 
     async def fake_network(proxy_url, image_tag):
-        assert proxy_url == "socks5://proxy.example:1080"
+        assert proxy_url is None
         return _network("Asia/Tokyo", "JP")
 
     async def fake_recreate_container(session_id, **kwargs):

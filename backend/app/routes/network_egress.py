@@ -16,7 +16,6 @@ from app.network_egress import (
     public_egress_summary,
     remove_managed_egress,
     resolve_config_text,
-    validate_proxy_url,
     write_config_ref,
 )
 
@@ -71,7 +70,7 @@ async def list_network_egress(user: CurrentUser = Depends(get_current_user)):
         SELECT id, tenant_id, name, type, status, proxy_url, config_ref, health_error,
                last_checked_at, created_at, updated_at
         FROM network_egress_profiles
-        WHERE tenant_id = $1
+        WHERE tenant_id = $1 AND type IN ('clash', 'openvpn')
         ORDER BY created_at DESC
         """,
         user.tenant_id,
@@ -91,21 +90,18 @@ async def create_network_egress(
     egress_type = body.type.strip()
     if egress_type not in VALID_EGRESS_TYPES or egress_type == "direct":
         raise HTTPException(422, "Unsupported egress type")
+    if body.proxyUrl.strip():
+        raise HTTPException(422, "Manual HTTP/SOCKS proxy is no longer supported. Use Clash or OpenVPN.")
 
     proxy_url = ""
     config_ref = ""
     egress_id = str(uuid.uuid4())
     try:
-        if egress_type == "external_proxy":
-            proxy_url = validate_proxy_url(body.proxyUrl)
-            if not proxy_url:
-                raise HTTPException(422, "Proxy URL is required")
-        elif egress_type in ("clash", "openvpn"):
-            config_text = await resolve_config_text(body.configText, body.configUrl)
-            config_ref = await write_config_ref(
-                user.tenant_id, egress_id, egress_type, config_text, body.username, body.password
-            )
-            proxy_url = managed_proxy_url(egress_id, egress_type)
+        config_text = await resolve_config_text(body.configText, body.configUrl)
+        config_ref = await write_config_ref(
+            user.tenant_id, egress_id, egress_type, config_text, body.username, body.password
+        )
+        proxy_url = managed_proxy_url(egress_id, egress_type)
     except EgressError as exc:
         raise HTTPException(422, str(exc)) from exc
 
@@ -142,15 +138,7 @@ async def update_network_egress(
     status = row["status"] or "unchecked"
 
     if body.proxyUrl is not None:
-        if egress_type != "external_proxy":
-            raise HTTPException(422, "Only external proxy profiles accept proxyUrl")
-        try:
-            proxy_url = validate_proxy_url(body.proxyUrl)
-            if not proxy_url:
-                raise HTTPException(422, "Proxy URL is required")
-        except EgressError as exc:
-            raise HTTPException(422, str(exc)) from exc
-        status = "unchecked"
+        raise HTTPException(422, "Manual HTTP/SOCKS proxy is no longer supported. Use Clash or OpenVPN.")
 
     if egress_type in ("clash", "openvpn") and (body.configText is not None or body.configUrl is not None):
         if body.configText is None and body.configUrl is None:
@@ -161,10 +149,6 @@ async def update_network_egress(
         except EgressError as exc:
             raise HTTPException(422, str(exc)) from exc
         status = "unchecked"
-    elif body.configText is not None or body.configUrl is not None:
-        if egress_type != "external_proxy":
-            raise HTTPException(422, "This egress type does not accept config content")
-
     if body.disabled is not None:
         status = "disabled" if body.disabled else "unchecked"
 

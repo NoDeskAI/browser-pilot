@@ -4,6 +4,7 @@ import yaml
 import pytest
 
 from app import network_egress
+from app.routes import network_egress as network_egress_routes
 
 
 class Row(dict):
@@ -18,11 +19,28 @@ def test_effective_direct_egress_has_no_proxy():
     assert effective.status == "healthy"
 
 
-def test_effective_manual_proxy_keeps_url_without_lookup():
-    effective = network_egress.effective_proxy_from_row(None, "socks5://proxy.internal:1080")
+def test_effective_manual_proxy_is_rejected():
+    with pytest.raises(network_egress.EgressError) as exc:
+        network_egress.effective_proxy_from_row(None, "socks5://proxy.internal:1080")
 
-    assert effective.type == "external_proxy"
-    assert effective.proxy_url == "socks5://proxy.internal:1080"
+    assert "Manual HTTP/SOCKS proxy is no longer supported" in str(exc.value)
+
+
+def test_create_external_proxy_profile_is_unsupported():
+    with pytest.raises(network_egress_routes.HTTPException) as exc:
+        asyncio.run(
+            network_egress_routes.create_network_egress(
+                network_egress_routes.EgressCreateBody(
+                    name="Proxy",
+                    type="external_proxy",
+                    proxyUrl="http://proxy.internal:8080",
+                ),
+                type("User", (), {"tenant_id": "tenant-1"})(),
+            )
+        )
+
+    assert exc.value.status_code == 422
+    assert "Unsupported egress type" in exc.value.detail
 
 
 def test_managed_egress_uses_stable_network_alias():
@@ -39,31 +57,6 @@ def test_managed_egress_uses_stable_network_alias():
 
     assert effective.proxy_url == "http://bp-egress-1234567890ab:7890"
     assert network_egress.egress_container_name(row["id"]) == "bp-egress-1234567890ab"
-
-
-def test_external_proxy_health_check_only_opens_proxy_socket(monkeypatch):
-    calls = []
-
-    class FakeSocket:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return False
-
-    def fake_create_connection(addr, timeout):
-        calls.append((addr, timeout))
-        return FakeSocket()
-
-    monkeypatch.setattr(network_egress.socket, "create_connection", fake_create_connection)
-
-    status, error = asyncio.run(
-        network_egress._tcp_connect_check("http://proxy.internal:8080")
-    )
-
-    assert status == "healthy"
-    assert error == ""
-    assert calls == [(("proxy.internal", 8080), 3)]
 
 
 class _FakeResponse:
@@ -185,6 +178,7 @@ def test_prepare_session_clash_gateway_uses_runtime_namespace_and_global_config(
     monkeypatch.setattr(network_egress, "ensure_docker_network", lambda: asyncio.sleep(0))
     monkeypatch.setattr(network_egress, "update_egress_status", noop_update)
     monkeypatch.setattr(network_egress, "_run", fake_run)
+    monkeypatch.setattr(network_egress, "_wait_session_gateway_ready", lambda *_args, **_kwargs: asyncio.sleep(0, (True, "")))
 
     row = Row({
         "id": "egress-123456",
@@ -229,6 +223,7 @@ def test_prepare_session_clash_gateway_reports_global_mode_warning(tmp_path, mon
     monkeypatch.setattr(network_egress, "update_egress_status", noop_update)
     monkeypatch.setattr(network_egress, "_run", fake_run)
     monkeypatch.setattr(network_egress, "_clash_runtime_is_global", lambda _path: False)
+    monkeypatch.setattr(network_egress, "_wait_session_gateway_ready", lambda *_args, **_kwargs: asyncio.sleep(0, (True, "")))
 
     row = Row({
         "id": "egress-123456",
@@ -247,3 +242,46 @@ def test_prepare_session_clash_gateway_reports_global_mode_warning(tmp_path, mon
     )
 
     assert gateway.warnings == ["clash_global_mode_failed"]
+
+
+def test_prepare_session_openvpn_gateway_requires_full_tunnel(tmp_path, monkeypatch):
+    config_dir = tmp_path / "openvpn"
+    config_dir.mkdir()
+    (config_dir / "client.ovpn").write_text("client\n", encoding="utf-8")
+    statuses = []
+
+    async def fake_run(*_args, **_kwargs):
+        return "container-id", "", 0
+
+    async def record_status(*args, **_kwargs):
+        statuses.append(args)
+
+    async def not_ready(*_args, **_kwargs):
+        return False, "openvpn tunnel route is not ready"
+
+    monkeypatch.setattr(network_egress, "ensure_docker_network", lambda: asyncio.sleep(0))
+    monkeypatch.setattr(network_egress, "_ensure_openvpn_image", lambda: asyncio.sleep(0))
+    monkeypatch.setattr(network_egress, "update_egress_status", record_status)
+    monkeypatch.setattr(network_egress, "_run", fake_run)
+    monkeypatch.setattr(network_egress, "_wait_session_gateway_ready", not_ready)
+
+    row = Row({
+        "id": "egress-ovpn",
+        "name": "OpenVPN",
+        "type": "openvpn",
+        "status": "unchecked",
+        "config_ref": str(config_dir),
+    })
+
+    with pytest.raises(network_egress.EgressError) as exc:
+        asyncio.run(
+            network_egress.prepare_session_egress_gateway(
+                row,
+                session_id="session-1",
+                selenium_port=55100,
+                vnc_port=55101,
+            )
+        )
+
+    assert "openvpn_full_tunnel_failed" in str(exc.value)
+    assert statuses[-1][1] == "unhealthy"
