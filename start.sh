@@ -88,7 +88,52 @@ _ensure_postgres() {
     echo "[postgres] ready"
 }
 
+_infer_postgres_env_from_database_url() {
+    if [[ -z "${DATABASE_URL:-}" ]]; then
+        return
+    fi
+    if [[ -n "${POSTGRES_USER:-}" && -n "${POSTGRES_PASSWORD:-}" && -n "${POSTGRES_DB:-}" ]]; then
+        return
+    fi
+
+    local assignments
+    assignments=$(DATABASE_URL="$DATABASE_URL" \
+        POSTGRES_USER="${POSTGRES_USER:-}" \
+        POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-}" \
+        POSTGRES_DB="${POSTGRES_DB:-}" \
+        python3 - <<'PY'
+import os
+import shlex
+from urllib.parse import unquote, urlparse
+
+try:
+    parsed = urlparse(os.environ.get("DATABASE_URL", ""))
+except Exception:
+    parsed = None
+
+values = {}
+if parsed:
+    if parsed.username:
+        values["POSTGRES_USER"] = unquote(parsed.username)
+    if parsed.password is not None:
+        values["POSTGRES_PASSWORD"] = unquote(parsed.password)
+    db_name = (parsed.path or "").lstrip("/").split("/", 1)[0]
+    if db_name:
+        values["POSTGRES_DB"] = unquote(db_name)
+
+for key, value in values.items():
+    if not os.environ.get(key):
+        print(f"export {key}={shlex.quote(value)}")
+PY
+    ) || true
+    if [[ -n "$assignments" ]]; then
+        eval "$assignments"
+    fi
+}
+
 _require_database_env() {
+    _infer_postgres_env_from_database_url
+
     local missing=()
     local key
     for key in POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB DATABASE_URL; do
