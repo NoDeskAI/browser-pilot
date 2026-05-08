@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, useAttrs } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, useAttrs, watch } from 'vue'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 
@@ -29,8 +29,32 @@ const triggerAttrs = computed(() => {
   return rest
 })
 
+const triggerEl = ref<HTMLElement | null>(null)
+const isTruncated = ref(false)
+let resizeObserver: ResizeObserver | undefined
+
+function updateTruncation() {
+  const el = triggerEl.value
+  if (!el) {
+    isTruncated.value = false
+    return
+  }
+  isTruncated.value = el.scrollWidth > el.clientWidth + 1
+}
+
+function observeTrigger() {
+  resizeObserver?.disconnect()
+  resizeObserver = undefined
+  updateTruncation()
+  if (typeof ResizeObserver !== 'undefined' && triggerEl.value) {
+    resizeObserver = new ResizeObserver(updateTruncation)
+    resizeObserver.observe(triggerEl.value)
+  }
+}
+
 const triggerClass = computed(() => cn(
-  'inline-block min-w-0 max-w-[160px] truncate font-mono cursor-help border-b border-dashed border-muted-foreground/50 align-bottom',
+  'inline-block min-w-0 max-w-[160px] truncate font-mono align-bottom',
+  isTruncated.value && 'cursor-help border-b border-dashed border-muted-foreground/50',
   attrs.class,
 ))
 
@@ -55,7 +79,7 @@ const tooltipText = computed(() => {
   return String(fullValue.value || '-')
 })
 
-const hasTooltip = computed(() => tooltipText.value !== '-')
+const hasTooltip = computed(() => isTruncated.value && tooltipText.value !== '-')
 
 const tooltipContentClass = computed(() => cn(
   props.json
@@ -63,12 +87,31 @@ const tooltipContentClass = computed(() => cn(
     : 'max-w-[360px] whitespace-pre-wrap break-words text-[10px] font-mono leading-snug',
   props.contentClass,
 ))
+
+watch(displayText, async () => {
+  await nextTick()
+  updateTruncation()
+})
+
+watch(triggerEl, async () => {
+  await nextTick()
+  observeTrigger()
+})
+
+onMounted(async () => {
+  await nextTick()
+  observeTrigger()
+})
+
+onBeforeUnmount(() => {
+  resizeObserver?.disconnect()
+})
 </script>
 
 <template>
   <Tooltip v-if="hasTooltip">
     <TooltipTrigger as-child>
-      <span v-bind="triggerAttrs" :class="triggerClass">{{ displayText }}</span>
+      <span ref="triggerEl" v-bind="triggerAttrs" :class="triggerClass">{{ displayText }}</span>
     </TooltipTrigger>
     <TooltipContent
       :side="side"
@@ -79,5 +122,5 @@ const tooltipContentClass = computed(() => cn(
       <span v-else>{{ tooltipText }}</span>
     </TooltipContent>
   </Tooltip>
-  <span v-else v-bind="triggerAttrs" :class="cn('inline-block min-w-0 max-w-[160px] truncate font-mono align-bottom', attrs.class)">{{ displayText }}</span>
+  <span v-else ref="triggerEl" v-bind="triggerAttrs" :class="triggerClass">{{ displayText }}</span>
 </template>
