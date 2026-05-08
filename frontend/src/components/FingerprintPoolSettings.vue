@@ -16,6 +16,7 @@ import { Badge } from '@/components/ui/badge'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Toggle } from '@/components/ui/toggle'
 import { Trash2, Loader2 } from 'lucide-vue-next'
+import { osVersionLabel } from '@/lib/fingerprintDisplay'
 
 const { t } = useI18n()
 const { user } = useAuth()
@@ -248,8 +249,10 @@ async function saveEntry() {
 function entrySummary(entry: PoolEntry): string {
   const d = entry.data
   switch (entry.groupName) {
-    case 'platform':
-      return d.clientHints?.platform || d.navigator?.platform || '-'
+    case 'platform': {
+      const label = osVersionLabel(d.clientHints)
+      return label !== '-' ? label : d.navigator?.platform || '-'
+    }
     case 'gpu':
       return (d.renderer || '').slice(0, 60) + ((d.renderer || '').length > 60 ? '...' : '')
     case 'hardware':

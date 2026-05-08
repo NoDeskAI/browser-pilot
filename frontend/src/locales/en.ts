@@ -107,6 +107,7 @@ export default {
     fpLoading: 'Loading fingerprint profile...',
     fpNoProfile: 'No fingerprint profile is available for this session. Refresh the session or regenerate the fingerprint.',
     fpPlatform: 'Platform',
+    fpOsVersion: 'OS Version',
     fpGpu: 'GPU',
     fpMemory: 'Memory',
     fpTimezone: 'Timezone',

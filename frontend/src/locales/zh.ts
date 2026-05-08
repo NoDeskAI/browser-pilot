@@ -107,6 +107,7 @@ export default {
     fpLoading: '正在读取指纹画像...',
     fpNoProfile: '当前 session 暂无指纹画像，请刷新会话或重新生成指纹。',
     fpPlatform: '平台',
+    fpOsVersion: '系统版本',
     fpGpu: 'GPU',
     fpMemory: '内存',
     fpTimezone: '时区',

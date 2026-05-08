@@ -5,6 +5,7 @@ import RFB from '@novnc/novnc'
 import { useSessions } from '../composables/useSessions'
 import { useNetworkEgress } from '../composables/useNetworkEgress'
 import { api } from '../lib/api'
+import { osVersionLabel } from '../lib/fingerprintDisplay'
 import {
   Keyboard, Maximize, Minimize, Eye, MousePointer,
   Globe, Network, Loader2, Fingerprint,
@@ -406,6 +407,10 @@ function fpPlatformLabel(profile: Record<string, any>): string {
   return p
 }
 
+function fpOsVersionLabel(profile: Record<string, any>): string {
+  return osVersionLabel(profile?.clientHints)
+}
+
 function fpExitLocation(profile: Record<string, any>): string {
   const n = profile?.network
   if (!n) return '-'
@@ -778,6 +783,10 @@ watch(inputBarOpen, (open) => {
                 <div class="flex justify-between">
                   <span class="text-muted-foreground">{{ t('vnc.fpPlatform') }}</span>
                   <span class="font-mono">{{ fpPlatformLabel(fpProfile) }}</span>
+                </div>
+                <div class="flex justify-between">
+                  <span class="text-muted-foreground">{{ t('vnc.fpOsVersion') }}</span>
+                  <span class="font-mono truncate max-w-[160px]" :title="JSON.stringify(fpProfile.clientHints || {})">{{ fpOsVersionLabel(fpProfile) }}</span>
                 </div>
                 <div v-if="fpProfile.profileFamily" class="flex justify-between">
                   <span class="text-muted-foreground">{{ t('vnc.fpProfileFamily') }}</span>
