@@ -133,7 +133,6 @@ function connectRFB() {
   const OrigWS = window.WebSocket
   const recvRef = totalRecv
   const sentRef = totalSent
-  const bw = bytesWindow
   ;(window as any).WebSocket = new Proxy(OrigWS, {
     construct(target, args) {
       const ws = new target(...(args as [string, string?]))
@@ -142,7 +141,7 @@ function connectRFB() {
           : e.data instanceof Blob ? e.data.size
           : new Blob([e.data]).size
         recvRef.value += size
-        bw.push(size)
+        bytesWindow.push(size)
       })
       const origSend = ws.send.bind(ws)
       ws.send = (data: any) => {
