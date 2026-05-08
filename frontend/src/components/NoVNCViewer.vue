@@ -686,14 +686,9 @@ watch(inputBarOpen, (open) => {
 
         <!-- Device preset -->
         <Select :model-value="currentPreset" @update:model-value="onDeviceChange" :disabled="sessState.containerRestarting">
-          <Tooltip>
-            <TooltipTrigger as-child>
-              <SelectTrigger class="h-6 w-auto min-w-24 max-w-40 text-xs px-2 border-0 bg-transparent gap-1">
-                <SelectValue :placeholder="t('vnc.device')" />
-              </SelectTrigger>
-            </TooltipTrigger>
-            <TooltipContent>{{ t('vnc.device') }}</TooltipContent>
-          </Tooltip>
+          <SelectTrigger class="h-6 w-auto min-w-24 max-w-40 text-xs px-2 border-0 bg-transparent gap-1" :aria-label="t('vnc.device')">
+            <SelectValue :placeholder="t('vnc.device')" />
+          </SelectTrigger>
           <SelectContent>
             <SelectGroup>
               <SelectLabel class="text-[10px]">{{ t('vnc.deviceDesktop') }}</SelectLabel>
@@ -1004,15 +999,10 @@ watch(inputBarOpen, (open) => {
 
         <!-- Browser language -->
         <Select :model-value="browserLang" @update:model-value="changeLang" :disabled="langLoading">
-          <Tooltip>
-            <TooltipTrigger as-child>
-              <SelectTrigger class="h-6 w-auto min-w-16 max-w-24 text-xs px-2 border-0 bg-transparent gap-1">
-                <Globe class="size-3.5 shrink-0" />
-                <SelectValue />
-              </SelectTrigger>
-            </TooltipTrigger>
-            <TooltipContent>{{ t('vnc.browserLangTitle') }}</TooltipContent>
-          </Tooltip>
+          <SelectTrigger class="h-6 w-auto min-w-16 max-w-24 text-xs px-2 border-0 bg-transparent gap-1" :aria-label="t('vnc.browserLangTitle')">
+            <Globe class="size-3.5 shrink-0" />
+            <SelectValue />
+          </SelectTrigger>
           <SelectContent>
             <SelectItem v-for="opt in LANG_OPTIONS" :key="opt.value" :value="opt.value" class="text-xs">{{ opt.label }}</SelectItem>
           </SelectContent>
