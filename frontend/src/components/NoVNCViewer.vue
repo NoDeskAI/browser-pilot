@@ -548,13 +548,13 @@ watch(inputBarOpen, (open) => {
   <div ref="viewerRoot" class="relative w-full h-full flex flex-col">
     <TooltipProvider :delay-duration="300">
       <!-- Toolbar -->
-      <div class="shrink-0 flex items-center gap-1.5 px-2 py-1 border-b border-border text-[11px] font-mono select-none overflow-x-auto">
+      <div class="shrink-0 flex items-center gap-1.5 px-2 py-1 border-b border-border text-xs font-mono select-none overflow-x-auto">
         <!-- Connection status group -->
         <Tooltip>
           <TooltipTrigger as-child>
             <span class="flex items-center gap-1 shrink-0 px-1">
               <span class="size-1.5 rounded-full" :class="connected ? 'bg-emerald-400' : 'bg-red-400 animate-pulse'" />
-              <span class="text-[10px]" :class="connected ? 'text-emerald-400' : 'text-red-400'">{{ connected ? t('vnc.connected') : t('vnc.disconnected') }}</span>
+              <span class="text-xs" :class="connected ? 'text-emerald-400' : 'text-red-400'">{{ connected ? t('vnc.connected') : t('vnc.disconnected') }}</span>
             </span>
           </TooltipTrigger>
           <TooltipContent v-if="desktopName">{{ desktopName }}</TooltipContent>
@@ -563,7 +563,7 @@ watch(inputBarOpen, (open) => {
         <Button
           v-if="!connected && reconnectExhausted"
           variant="ghost" size="sm"
-          class="h-5 px-1.5 text-[10px] text-red-400 hover:text-red-300"
+          class="h-6 px-2 text-xs text-red-400 hover:text-red-300"
           @click="manualReconnect"
         >{{ t('vnc.reconnect') }}</Button>
 
@@ -571,8 +571,8 @@ watch(inputBarOpen, (open) => {
 
         <Tooltip v-if="localhostBridgeNotice">
           <TooltipTrigger as-child>
-            <span class="inline-flex items-center gap-1 text-[10px] text-muted-foreground shrink-0">
-              <Globe class="size-3" />
+            <span class="inline-flex items-center gap-1 text-xs text-muted-foreground shrink-0">
+              <Globe class="size-3.5" />
               {{ t('vnc.localhostBridgeShort') }}
             </span>
           </TooltipTrigger>
@@ -582,7 +582,7 @@ watch(inputBarOpen, (open) => {
         <Separator v-if="localhostBridgeNotice" orientation="vertical" />
 
         <!-- Traffic stats -->
-        <span class="flex items-center gap-1.5 text-[10px] text-muted-foreground shrink-0">
+        <span class="flex items-center gap-1.5 text-xs text-muted-foreground shrink-0">
           <span>↓{{ fmtBytes(totalRecv) }}</span>
           <span>↑{{ fmtBytes(totalSent) }}</span>
         </span>
@@ -591,12 +591,12 @@ watch(inputBarOpen, (open) => {
 
         <!-- Input bar toggle -->
         <Button variant="ghost" size="sm"
-          class="h-5 px-2 text-[10px] gap-1.5 transition-all duration-200"
+          class="h-6 px-2 text-xs gap-1.5 transition-all duration-200"
           :class="inputBarOpen 
             ? 'bg-[#FFCB00] text-black hover:bg-[#e5b600] hover:text-black dark:hover:bg-[#e5b600] dark:hover:text-black shadow-sm font-bold' 
             : 'text-muted-foreground hover:text-foreground'"
           @click="inputBarOpen = !inputBarOpen">
-          <Keyboard class="size-3" />
+          <Keyboard class="size-3.5" />
           {{ t('vnc.input') }}
         </Button>
 
@@ -607,7 +607,7 @@ watch(inputBarOpen, (open) => {
               :model-value="scaleMode === 'scale'"
               @update:model-value="toggleScaleMode"
               size="sm"
-              class="h-5 px-1.5 text-[10px] data-[state=on]:text-blue-400"
+              class="h-6 px-2 text-xs data-[state=on]:text-blue-400"
             >{{ scaleMode === 'scale' ? t('vnc.scaleFit') : t('vnc.scaleNative') }}</Toggle>
           </TooltipTrigger>
           <TooltipContent>{{ scaleMode === 'scale' ? t('vnc.scaleFitTitle') : t('vnc.scaleNativeTitle') }}</TooltipContent>
@@ -617,9 +617,9 @@ watch(inputBarOpen, (open) => {
         <Tooltip>
           <TooltipTrigger as-child>
             <span class="flex items-center gap-1 shrink-0 px-0.5">
-              <span class="text-[10px] text-muted-foreground">Q</span>
+              <span class="text-xs text-muted-foreground">Q</span>
               <Slider v-model="qualityLevel" :min="0" :max="9" :step="1" class="w-12" />
-              <span class="text-[10px] text-muted-foreground w-3 text-center">{{ qualityLevel[0] }}</span>
+              <span class="text-xs text-muted-foreground w-3 text-center">{{ qualityLevel[0] }}</span>
             </span>
           </TooltipTrigger>
           <TooltipContent>{{ t('vnc.quality') }}</TooltipContent>
@@ -632,10 +632,10 @@ watch(inputBarOpen, (open) => {
               :model-value="viewOnly"
               @update:model-value="toggleViewOnly"
               size="sm"
-              class="h-5 px-1.5 text-[10px] gap-1 data-[state=on]:text-amber-400"
+              class="h-6 px-2 text-xs gap-1 data-[state=on]:text-amber-400"
             >
-              <Eye v-if="viewOnly" class="size-3" />
-              <MousePointer v-else class="size-3" />
+              <Eye v-if="viewOnly" class="size-3.5" />
+              <MousePointer v-else class="size-3.5" />
               {{ viewOnly ? t('vnc.viewOnly') : t('vnc.interactive') }}
             </Toggle>
           </TooltipTrigger>
@@ -645,9 +645,9 @@ watch(inputBarOpen, (open) => {
         <!-- Fullscreen -->
         <Tooltip>
           <TooltipTrigger as-child>
-            <Button variant="ghost" size="sm" class="h-5 px-1.5 text-[10px]" @click="toggleFullscreen">
-              <Minimize v-if="isFullscreen" class="size-3" />
-              <Maximize v-else class="size-3" />
+            <Button variant="ghost" size="sm" class="h-6 px-2 text-xs" @click="toggleFullscreen">
+              <Minimize v-if="isFullscreen" class="size-3.5" />
+              <Maximize v-else class="size-3.5" />
             </Button>
           </TooltipTrigger>
           <TooltipContent>{{ isFullscreen ? t('vnc.exitFullscreenTitle') : t('vnc.fullscreenTitle') }}</TooltipContent>
@@ -659,7 +659,7 @@ watch(inputBarOpen, (open) => {
         <Select :model-value="currentPreset" @update:model-value="onDeviceChange" :disabled="sessState.containerRestarting">
           <Tooltip>
             <TooltipTrigger as-child>
-              <SelectTrigger class="h-5 w-auto min-w-24 max-w-40 text-[10px] px-1.5 border-0 bg-transparent gap-1">
+              <SelectTrigger class="h-6 w-auto min-w-24 max-w-40 text-xs px-2 border-0 bg-transparent gap-1">
                 <SelectValue :placeholder="t('vnc.device')" />
               </SelectTrigger>
             </TooltipTrigger>
@@ -683,11 +683,11 @@ watch(inputBarOpen, (open) => {
             <Button
               variant="ghost" size="sm"
               :disabled="sessState.containerRestarting"
-              class="h-5 px-1.5 text-[10px] gap-1"
+              class="h-6 px-2 text-xs gap-1"
               :class="currentNetworkStatus === 'unhealthy' || currentNetworkStatus === 'unsupported' ? 'text-red-400' : currentNetworkEgressId !== DIRECT_EGRESS_VALUE ? 'text-emerald-400' : ''"
               :title="currentNetworkError || currentNetworkName"
             >
-              <Network class="size-3" />
+              <Network class="size-3.5" />
               {{ t('vnc.network') }}
             </Button>
           </PopoverTrigger>
@@ -735,7 +735,7 @@ watch(inputBarOpen, (open) => {
             <Button
               variant="ghost" size="sm"
               :disabled="sessState.containerRestarting"
-              class="h-5 px-1.5 text-[10px] gap-1"
+              class="h-6 px-2 text-xs gap-1"
               :class="fpProfile ? (fpReadinessOk(fpProfile) ? 'text-violet-400' : 'text-amber-400') : ''"
               :title="t('vnc.fingerprintTitle')"
             >
@@ -937,8 +937,8 @@ watch(inputBarOpen, (open) => {
           </PopoverContent>
         </Popover>
 
-        <span v-if="sessState.containerRestarting" class="text-[10px] text-amber-400 shrink-0 animate-pulse">
-          <Loader2 class="size-3 inline animate-spin mr-0.5" />
+        <span v-if="sessState.containerRestarting" class="text-xs text-amber-400 shrink-0 animate-pulse">
+          <Loader2 class="size-3.5 inline animate-spin mr-0.5" />
           {{ t('vnc.switchingDevice') }}
         </span>
 
@@ -946,8 +946,8 @@ watch(inputBarOpen, (open) => {
         <Select :model-value="browserLang" @update:model-value="changeLang" :disabled="langLoading">
           <Tooltip>
             <TooltipTrigger as-child>
-              <SelectTrigger class="h-5 w-auto min-w-16 max-w-24 text-[10px] px-1.5 border-0 bg-transparent gap-1">
-                <Globe class="size-3 shrink-0" />
+              <SelectTrigger class="h-6 w-auto min-w-16 max-w-24 text-xs px-2 border-0 bg-transparent gap-1">
+                <Globe class="size-3.5 shrink-0" />
                 <SelectValue />
               </SelectTrigger>
             </TooltipTrigger>
@@ -958,7 +958,7 @@ watch(inputBarOpen, (open) => {
           </SelectContent>
         </Select>
 
-        <span v-if="langError" class="text-[10px] text-amber-400 shrink-0 truncate max-w-40">{{ langError }}</span>
+        <span v-if="langError" class="text-xs text-amber-400 shrink-0 truncate max-w-40">{{ langError }}</span>
       </div>
     </TooltipProvider>
 
