@@ -465,15 +465,18 @@ function fpWebglRuntimeLabel(profile: Record<string, any>): string {
   const health = profile?.runtimeHealth
   const checks = health?.checks || {}
   if (checks['webgl.contextAvailable'] === false) return 'unavailable'
+  if (checks['webgl2.contextAvailable'] === false) return 'webgl2-unavailable'
   if (checks['webgl.contextAvailable'] === true) {
     const mode = health?.expected?.webglRuntime?.resolved
-    return mode === 'swiftshader' ? 'fallback-swiftshader' : 'available'
+    const suffix = checks['webgl2.contextAvailable'] === true ? '+webgl2' : ''
+    return mode === 'swiftshader' ? `fallback-swiftshader${suffix}` : `${mode || 'available'}${suffix}`
   }
   return '-'
 }
 
 function fpWebglRuntimeOk(profile: Record<string, any>): boolean {
   return profile?.runtimeHealth?.checks?.['webgl.contextAvailable'] === true
+    && profile?.runtimeHealth?.checks?.['webgl2.contextAvailable'] !== false
 }
 
 function fpWarnings(profile: Record<string, any>): string[] {
