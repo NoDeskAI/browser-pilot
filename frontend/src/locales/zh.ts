@@ -104,6 +104,8 @@ export default {
     networkSaving: '保存中...',
     fingerprint: '指纹',
     fingerprintTitle: '浏览器指纹画像',
+    fpLoading: '正在读取指纹画像...',
+    fpNoProfile: '当前 session 暂无指纹画像，请刷新会话或重新生成指纹。',
     fpPlatform: '平台',
     fpGpu: 'GPU',
     fpMemory: '内存',

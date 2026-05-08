@@ -33,6 +33,7 @@ const {
   refreshNetworkProfile,
   syncObservedNetworkProfile,
   overrideNetworkProfile,
+  fetchSessions,
 } = useSessions()
 const { state: egressState, fetchNetworkEgress } = useNetworkEgress()
 
@@ -74,6 +75,7 @@ const reconnectExhausted = ref(false)
 const networkOpen = ref(false)
 const selectedNetworkEgressId = ref('__direct__')
 const fpOpen = ref(false)
+const fpLoading = ref(false)
 const fpConfirmRegenerate = ref(false)
 const fpNetworkEditOpen = ref(false)
 const fpNetworkJson = ref('')
@@ -353,6 +355,27 @@ async function onNetworkOpenChange(open: boolean) {
     selectedNetworkEgressId.value = currentNetworkEgressId.value
     await fetchNetworkEgress()
   }
+}
+
+async function refreshFpSessionSnapshot() {
+  if (fpLoading.value) return
+  fpLoading.value = true
+  try {
+    await fetchSessions()
+  } finally {
+    fpLoading.value = false
+  }
+}
+
+function onFpOpenChange(open: boolean) {
+  fpOpen.value = open
+  if (!open) {
+    fpConfirmRegenerate.value = false
+    fpNetworkEditOpen.value = false
+    fpNetworkError.value = ''
+    return
+  }
+  void refreshFpSessionSnapshot()
 }
 
 async function saveNetworkEgress() {
@@ -730,7 +753,7 @@ watch(inputBarOpen, (open) => {
         </Popover>
 
         <!-- Fingerprint popover -->
-        <Popover :open="fpOpen" @update:open="(o: boolean) => { fpOpen = o; if (!o) { fpConfirmRegenerate = false; fpNetworkEditOpen = false; fpNetworkError = '' } }">
+        <Popover :open="fpOpen" @update:open="onFpOpenChange">
           <PopoverTrigger as-child>
             <Button
               variant="ghost" size="sm"
@@ -744,7 +767,13 @@ watch(inputBarOpen, (open) => {
             </Button>
           </PopoverTrigger>
           <PopoverContent class="w-72 p-3" align="start">
-            <template v-if="fpProfile">
+            <template v-if="fpLoading && !fpProfile">
+              <div class="flex items-center gap-2 text-xs text-muted-foreground">
+                <Loader2 class="size-3.5 animate-spin" />
+                {{ t('vnc.fpLoading') }}
+              </div>
+            </template>
+            <template v-else-if="fpProfile">
               <div class="space-y-1.5 text-xs">
                 <div class="flex justify-between">
                   <span class="text-muted-foreground">{{ t('vnc.fpPlatform') }}</span>
@@ -933,7 +962,7 @@ watch(inputBarOpen, (open) => {
                 class="w-full mt-3 h-7 text-[11px] border-violet-600/30 text-violet-400 hover:bg-violet-600/10"
               >{{ sessState.containerRestarting ? t('vnc.fpRegenerating') : t('vnc.fpRegenerate') }}</Button>
             </template>
-            <span v-else class="text-xs text-muted-foreground">-</span>
+            <p v-else class="text-xs text-muted-foreground leading-snug">{{ t('vnc.fpNoProfile') }}</p>
           </PopoverContent>
         </Popover>
 

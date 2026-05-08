@@ -104,6 +104,8 @@ export default {
     networkSaving: 'Saving...',
     fingerprint: 'Fingerprint',
     fingerprintTitle: 'Browser Fingerprint Profile',
+    fpLoading: 'Loading fingerprint profile...',
+    fpNoProfile: 'No fingerprint profile is available for this session. Refresh the session or regenerate the fingerprint.',
     fpPlatform: 'Platform',
     fpGpu: 'GPU',
     fpMemory: 'Memory',
