@@ -783,7 +783,7 @@ watch(inputBarOpen, (open) => {
               <div class="space-y-1.5 text-xs">
                 <div class="flex justify-between">
                   <span class="text-muted-foreground">{{ t('vnc.fpPlatform') }}</span>
-                  <span class="font-mono">{{ fpPlatformLabel(fpProfile) }}</span>
+                  <TruncatedTooltipValue :display="fpPlatformLabel(fpProfile)" :content="fpPlatformLabel(fpProfile)" />
                 </div>
                 <div class="flex justify-between">
                   <span class="text-muted-foreground">{{ t('vnc.fpOsVersion') }}</span>
@@ -836,33 +836,45 @@ watch(inputBarOpen, (open) => {
                 </div>
                 <div class="flex justify-between">
                   <span class="text-muted-foreground">{{ t('vnc.fpCpu') }}</span>
-                  <span class="font-mono">{{ fpProfile.navigator?.hardwareConcurrency || '-' }} cores</span>
+                  <TruncatedTooltipValue
+                    :display="`${fpProfile.navigator?.hardwareConcurrency || '-'} cores`"
+                    :content="`${fpProfile.navigator?.hardwareConcurrency || '-'} cores`"
+                  />
                 </div>
                 <div class="flex justify-between">
                   <span class="text-muted-foreground">{{ t('vnc.fpMemory') }}</span>
-                  <span class="font-mono">{{ fpProfile.navigator?.deviceMemory || '-' }} GB</span>
+                  <TruncatedTooltipValue
+                    :display="`${fpProfile.navigator?.deviceMemory || '-'} GB`"
+                    :content="`${fpProfile.navigator?.deviceMemory || '-'} GB`"
+                  />
                 </div>
                 <div class="flex justify-between">
                   <span class="text-muted-foreground">{{ t('vnc.fpScreen') }}</span>
-                  <span class="font-mono">{{ fpProfile.screen?.colorDepth || '-' }}bit / DPR {{ fpProfile.devicePixelRatio || '-' }}</span>
+                  <TruncatedTooltipValue
+                    :display="`${fpProfile.screen?.colorDepth || '-'}bit / DPR ${fpProfile.devicePixelRatio || '-'}`"
+                    :content="`${fpProfile.screen?.colorDepth || '-'}bit / DPR ${fpProfile.devicePixelRatio || '-'}`"
+                  />
                 </div>
                 <div class="flex justify-between">
                   <span class="text-muted-foreground">{{ t('vnc.fpAudio') }}</span>
-                  <span class="font-mono">{{ fpProfile.audio?.sampleRate ? `${fpProfile.audio.sampleRate} Hz / ${fpProfile.audio.baseLatency}s` : '-' }}</span>
+                  <TruncatedTooltipValue
+                    :display="fpProfile.audio?.sampleRate ? `${fpProfile.audio.sampleRate} Hz / ${fpProfile.audio.baseLatency}s` : '-'"
+                    :content="fpProfile.audio?.sampleRate ? `${fpProfile.audio.sampleRate} Hz / ${fpProfile.audio.baseLatency}s` : '-'"
+                  />
                 </div>
                 <div class="flex justify-between">
                   <span class="text-muted-foreground">{{ t('vnc.fpNetwork') }}</span>
-                  <span class="font-mono">{{ fpProfile.connection?.effectiveType ? `${fpProfile.connection.effectiveType} / ${fpProfile.connection.rtt}ms` : '-' }}</span>
+                  <TruncatedTooltipValue
+                    :display="fpProfile.connection?.effectiveType ? `${fpProfile.connection.effectiveType} / ${fpProfile.connection.rtt}ms` : '-'"
+                    :content="fpProfile.connection?.effectiveType ? `${fpProfile.connection.effectiveType} / ${fpProfile.connection.rtt}ms` : '-'"
+                  />
                 </div>
                 <div class="flex justify-between">
                   <span class="text-muted-foreground">{{ t('vnc.fpFonts') }}</span>
-                  <Tooltip v-if="fpProfile.fonts?.length">
-                    <TooltipTrigger as-child>
-                      <span class="font-mono cursor-help border-b border-dashed border-muted-foreground/50">{{ t('vnc.fpFontsCount', { count: fpProfile.fonts.length }) }}</span>
-                    </TooltipTrigger>
-                    <TooltipContent side="left" align="start" class="max-w-[200px] break-words text-[10px]">{{ fpProfile.fonts.join(', ') }}</TooltipContent>
-                  </Tooltip>
-                  <span v-else class="font-mono">-</span>
+                  <TruncatedTooltipValue
+                    :display="fpProfile.fonts?.length ? t('vnc.fpFontsCount', { count: fpProfile.fonts.length }) : '-'"
+                    :content="fpProfile.fonts?.length ? fpProfile.fonts.join(', ') : '-'"
+                  />
                 </div>
                 <div v-if="fpProfile.fontPolicy" class="flex justify-between">
                   <span class="text-muted-foreground">{{ t('vnc.fpFontPolicy') }}</span>
@@ -874,24 +886,17 @@ watch(inputBarOpen, (open) => {
                 </div>
                 <div class="flex justify-between">
                   <span class="text-muted-foreground">{{ t('vnc.fpWebglParams') }}</span>
-                  <Tooltip v-if="fpProfile.webgl?.params && Object.keys(fpProfile.webgl.params).length">
-                    <TooltipTrigger as-child>
-                      <span class="font-mono cursor-help border-b border-dashed border-muted-foreground/50">{{ t('vnc.fpWebglParamsCount', { count: Object.keys(fpProfile.webgl.params).length }) }}</span>
-                    </TooltipTrigger>
-                    <TooltipContent side="left" align="start" class="max-w-[360px] text-[10px]">
-                      <div class="grid grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)] gap-x-2 gap-y-0.5">
-                        <template v-for="(v, k) in fpProfile.webgl.params" :key="k">
-                          <span class="text-muted-foreground break-all">{{ String(k) }}</span>
-                          <span class="font-mono break-all">{{ Array.isArray(v) ? v.join('x') : String(v) }}</span>
-                        </template>
-                      </div>
-                    </TooltipContent>
-                  </Tooltip>
-                  <span v-else class="font-mono">-</span>
+                  <TruncatedTooltipValue
+                    v-if="fpProfile.webgl?.params && Object.keys(fpProfile.webgl.params).length"
+                    :display="t('vnc.fpWebglParamsCount', { count: Object.keys(fpProfile.webgl.params).length })"
+                    :content="fpProfile.webgl.params"
+                    json
+                  />
+                  <TruncatedTooltipValue v-else display="-" content="-" />
                 </div>
                 <div class="flex justify-between">
                   <span class="text-muted-foreground">{{ t('vnc.fpTimezone') }}</span>
-                  <span class="font-mono">{{ fpProfile.timezone }}</span>
+                  <TruncatedTooltipValue :display="fpProfile.timezone" :content="fpProfile.timezone" />
                 </div>
                 <div v-if="fpProfile.network" class="pt-1 mt-1 border-t border-border/60 space-y-1.5">
                   <div class="flex justify-between">
@@ -971,7 +976,7 @@ watch(inputBarOpen, (open) => {
                 </div>
                 <div class="flex justify-between">
                   <span class="text-muted-foreground">{{ t('vnc.fpSeed') }}</span>
-                  <span class="font-mono text-muted-foreground">{{ fpProfile.seed }}</span>
+                  <TruncatedTooltipValue :display="fpProfile.seed" :content="fpProfile.seed" class="text-muted-foreground" />
                 </div>
               </div>
               <div v-if="fpConfirmRegenerate" class="mt-3 p-2 bg-amber-500/10 border border-amber-500/20 rounded-md space-y-2">

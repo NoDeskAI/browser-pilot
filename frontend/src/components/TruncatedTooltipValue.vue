@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, useAttrs, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
+import { toast } from 'vue-sonner'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 
@@ -21,6 +23,7 @@ const props = withDefaults(defineProps<{
   align: 'start',
 })
 
+const { t } = useI18n()
 const attrs = useAttrs()
 
 const triggerAttrs = computed(() => {
@@ -53,8 +56,8 @@ function observeTrigger() {
 }
 
 const triggerClass = computed(() => cn(
-  'inline-block min-w-0 max-w-[160px] truncate font-mono align-bottom',
-  isTruncated.value && 'cursor-help border-b border-dashed border-muted-foreground/50',
+  'inline-block min-w-0 max-w-[160px] truncate font-mono cursor-pointer align-bottom',
+  isTruncated.value && 'border-b border-dashed border-muted-foreground/50',
   attrs.class,
 ))
 
@@ -80,6 +83,7 @@ const tooltipText = computed(() => {
 })
 
 const hasTooltip = computed(() => isTruncated.value && tooltipText.value !== '-')
+const copyText = computed(() => (hasTooltip.value ? tooltipText.value : displayText.value))
 
 const tooltipContentClass = computed(() => cn(
   props.json
@@ -87,6 +91,58 @@ const tooltipContentClass = computed(() => cn(
     : 'max-w-[360px] whitespace-pre-wrap break-words text-[10px] font-mono leading-snug',
   props.contentClass,
 ))
+
+function writeClipboardTextWithSelection(text: string): boolean {
+  const activeElement = document.activeElement instanceof HTMLElement ? document.activeElement : null
+  const selection = window.getSelection()
+  const ranges = selection
+    ? Array.from({ length: selection.rangeCount }, (_, i) => selection.getRangeAt(i))
+    : []
+  const textarea = document.createElement('textarea')
+  textarea.value = text
+  textarea.setAttribute('readonly', '')
+  textarea.style.position = 'fixed'
+  textarea.style.inset = '0 auto auto 0'
+  textarea.style.opacity = '0'
+  textarea.style.pointerEvents = 'none'
+  document.body.appendChild(textarea)
+  textarea.focus()
+  textarea.select()
+  textarea.setSelectionRange(0, textarea.value.length)
+
+  try {
+    return document.execCommand('copy')
+  } catch {
+    return false
+  } finally {
+    document.body.removeChild(textarea)
+    if (selection) {
+      selection.removeAllRanges()
+      ranges.forEach(range => selection.addRange(range))
+    }
+    activeElement?.focus()
+  }
+}
+
+async function writeClipboardText(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text)
+      return true
+    }
+  } catch {
+  }
+  return writeClipboardTextWithSelection(text)
+}
+
+async function copyValue() {
+  const copied = await writeClipboardText(copyText.value)
+  if (copied) {
+    toast.success(t('session.copied'))
+  } else {
+    toast.error(t('vnc.clipboardError'))
+  }
+}
 
 watch(displayText, async () => {
   await nextTick()
@@ -111,7 +167,16 @@ onBeforeUnmount(() => {
 <template>
   <Tooltip v-if="hasTooltip">
     <TooltipTrigger as-child>
-      <span ref="triggerEl" v-bind="triggerAttrs" :class="triggerClass">{{ displayText }}</span>
+      <span
+        ref="triggerEl"
+        v-bind="triggerAttrs"
+        :class="triggerClass"
+        role="button"
+        tabindex="0"
+        @click.stop="copyValue"
+        @keydown.enter.prevent.stop="copyValue"
+        @keydown.space.prevent.stop="copyValue"
+      >{{ displayText }}</span>
     </TooltipTrigger>
     <TooltipContent
       :side="side"
@@ -122,5 +187,15 @@ onBeforeUnmount(() => {
       <span v-else>{{ tooltipText }}</span>
     </TooltipContent>
   </Tooltip>
-  <span v-else ref="triggerEl" v-bind="triggerAttrs" :class="triggerClass">{{ displayText }}</span>
+  <span
+    v-else
+    ref="triggerEl"
+    v-bind="triggerAttrs"
+    :class="triggerClass"
+    role="button"
+    tabindex="0"
+    @click.stop="copyValue"
+    @keydown.enter.prevent.stop="copyValue"
+    @keydown.space.prevent.stop="copyValue"
+  >{{ displayText }}</span>
 </template>
