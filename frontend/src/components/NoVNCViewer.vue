@@ -567,7 +567,7 @@ watch(inputBarOpen, (open) => {
           @click="manualReconnect"
         >{{ t('vnc.reconnect') }}</Button>
 
-        <Separator orientation="vertical" class="h-3.5" />
+        <Separator orientation="vertical" />
 
         <Tooltip v-if="localhostBridgeNotice">
           <TooltipTrigger as-child>
@@ -579,7 +579,7 @@ watch(inputBarOpen, (open) => {
           <TooltipContent>{{ localhostBridgeNotice }}</TooltipContent>
         </Tooltip>
 
-        <Separator v-if="localhostBridgeNotice" orientation="vertical" class="h-3.5" />
+        <Separator v-if="localhostBridgeNotice" orientation="vertical" />
 
         <!-- Traffic stats -->
         <span class="flex items-center gap-1.5 text-[10px] text-muted-foreground shrink-0">
@@ -587,7 +587,7 @@ watch(inputBarOpen, (open) => {
           <span>↑{{ fmtBytes(totalSent) }}</span>
         </span>
 
-        <Separator orientation="vertical" class="h-3.5" />
+        <Separator orientation="vertical" />
 
         <!-- Input bar toggle -->
         <Button variant="ghost" size="sm"
@@ -653,7 +653,7 @@ watch(inputBarOpen, (open) => {
           <TooltipContent>{{ isFullscreen ? t('vnc.exitFullscreenTitle') : t('vnc.fullscreenTitle') }}</TooltipContent>
         </Tooltip>
 
-        <Separator orientation="vertical" class="h-3.5" />
+        <Separator orientation="vertical" />
 
         <!-- Device preset -->
         <Select :model-value="currentPreset" @update:model-value="onDeviceChange" :disabled="sessState.containerRestarting">
