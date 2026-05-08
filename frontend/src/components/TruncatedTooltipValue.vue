@@ -55,12 +55,6 @@ function observeTrigger() {
   }
 }
 
-const triggerClass = computed(() => cn(
-  'inline-block min-w-0 max-w-[160px] truncate font-mono cursor-pointer align-bottom',
-  isTruncated.value && 'border-b border-dashed border-muted-foreground/50',
-  attrs.class,
-))
-
 const displayText = computed(() => {
   if (props.display === null || props.display === undefined || props.display === '') return '-'
   return String(props.display)
@@ -84,6 +78,14 @@ const tooltipText = computed(() => {
 
 const hasTooltip = computed(() => isTruncated.value && tooltipText.value !== '-')
 const copyText = computed(() => (hasTooltip.value ? tooltipText.value : displayText.value))
+const canCopy = computed(() => displayText.value !== '-')
+
+const triggerClass = computed(() => cn(
+  'inline-block min-w-0 max-w-[160px] truncate font-mono align-bottom',
+  canCopy.value && 'cursor-pointer',
+  hasTooltip.value && 'border-b border-dashed border-muted-foreground/50',
+  attrs.class,
+))
 
 const tooltipContentClass = computed(() => cn(
   props.json
@@ -136,6 +138,7 @@ async function writeClipboardText(text: string): Promise<boolean> {
 }
 
 async function copyValue() {
+  if (!canCopy.value) return
   const copied = await writeClipboardText(copyText.value)
   if (copied) {
     toast.success(t('session.copied'))
@@ -188,7 +191,7 @@ onBeforeUnmount(() => {
     </TooltipContent>
   </Tooltip>
   <span
-    v-else
+    v-else-if="canCopy"
     ref="triggerEl"
     v-bind="triggerAttrs"
     :class="triggerClass"
@@ -197,5 +200,11 @@ onBeforeUnmount(() => {
     @click.stop="copyValue"
     @keydown.enter.prevent.stop="copyValue"
     @keydown.space.prevent.stop="copyValue"
+  >{{ displayText }}</span>
+  <span
+    v-else
+    ref="triggerEl"
+    v-bind="triggerAttrs"
+    :class="triggerClass"
   >{{ displayText }}</span>
 </template>
