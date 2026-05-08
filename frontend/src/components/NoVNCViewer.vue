@@ -93,25 +93,16 @@ const mobilePresets = computed(() => sessState.devicePresets.filter(p => p.categ
 
 const totalRecv = ref(0)
 const totalSent = ref(0)
-const currentRate = ref(0)
 
 let rfb: RFB | null = null
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 let reconnectAttempts = 0
 const MAX_RECONNECT_ATTEMPTS = 3
-let bytesWindow: number[] = []
-let rateTimer: ReturnType<typeof setInterval> | null = null
 
 function fmtBytes(b: number): string {
   if (b < 1024) return b + ' B'
   if (b < 1048576) return (b / 1024).toFixed(1) + ' KB'
   return (b / 1048576).toFixed(1) + ' MB'
-}
-
-function fmtRate(bps: number): string {
-  if (bps < 1024) return bps.toFixed(0) + ' B/s'
-  if (bps < 1048576) return (bps / 1024).toFixed(1) + ' KB/s'
-  return (bps / 1048576).toFixed(1) + ' MB/s'
 }
 
 function clearContainer() {
@@ -141,7 +132,6 @@ function connectRFB() {
           : e.data instanceof Blob ? e.data.size
           : new Blob([e.data]).size
         recvRef.value += size
-        bytesWindow.push(size)
       })
       const origSend = ws.send.bind(ws)
       ws.send = (data: any) => {
@@ -213,8 +203,6 @@ function scheduleReconnect() {
 async function navigate(url: string) {
   totalRecv.value = 0
   totalSent.value = 0
-  currentRate.value = 0
-  bytesWindow = []
   try {
     const resp = await api('/api/docker/navigate', {
       method: 'POST',
@@ -529,10 +517,6 @@ async function saveFpNetworkOverride() {
 defineExpose({ navigate })
 
 onMounted(() => {
-  rateTimer = setInterval(() => {
-    currentRate.value = bytesWindow.reduce((a, b) => a + b, 0)
-    bytesWindow = []
-  }, 1000)
   connectRFB()
   document.addEventListener('fullscreenchange', onFullscreenChange)
 })
@@ -540,7 +524,6 @@ onMounted(() => {
 onUnmounted(() => {
   if (rfb) { try { rfb.disconnect() } catch { /* noop */ } rfb = null }
   if (reconnectTimer) clearTimeout(reconnectTimer)
-  if (rateTimer) clearInterval(rateTimer)
   document.removeEventListener('fullscreenchange', onFullscreenChange)
 })
 
@@ -602,7 +585,6 @@ watch(inputBarOpen, (open) => {
         <span class="flex items-center gap-1.5 text-[10px] text-muted-foreground shrink-0">
           <span>↓{{ fmtBytes(totalRecv) }}</span>
           <span>↑{{ fmtBytes(totalSent) }}</span>
-          <span>{{ fmtRate(currentRate) }}</span>
         </span>
 
         <Separator orientation="vertical" class="h-3.5" />
