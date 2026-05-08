@@ -15,8 +15,10 @@ import { Switch } from '@/components/ui/switch'
 import { Badge } from '@/components/ui/badge'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Toggle } from '@/components/ui/toggle'
+import { TooltipProvider } from '@/components/ui/tooltip'
 import { Trash2, Loader2 } from 'lucide-vue-next'
 import { osVersionLabel } from '@/lib/fingerprintDisplay'
+import TruncatedTooltipValue from '@/components/TruncatedTooltipValue.vue'
 
 const { t } = useI18n()
 const { user } = useAuth()
@@ -246,7 +248,11 @@ async function saveEntry() {
   }
 }
 
-function entrySummary(entry: PoolEntry): string {
+function entrySummaryDisplay(entry: PoolEntry): string {
+  return entrySummaryFull(entry)
+}
+
+function entrySummaryFull(entry: PoolEntry): string {
   const d = entry.data
   switch (entry.groupName) {
     case 'platform': {
@@ -254,7 +260,7 @@ function entrySummary(entry: PoolEntry): string {
       return label !== '-' ? label : d.navigator?.platform || '-'
     }
     case 'gpu':
-      return (d.renderer || '').slice(0, 60) + ((d.renderer || '').length > 60 ? '...' : '')
+      return d.renderer || '-'
     case 'hardware':
       return `${d.hardwareConcurrency}C / ${d.deviceMemory}GB` + (d.audio ? ` / ${(d.audio.sampleRate / 1000)}kHz` : '') + (d.connection ? ` / ${d.connection.effectiveType}` : '')
     case 'screen':
@@ -281,13 +287,14 @@ function onPlatformPresetChange(val: any) {
 </script>
 
 <template>
-  <div class="space-y-6">
-    <div v-if="loading" class="flex justify-center py-12">
-      <div class="animate-spin h-6 w-6 border-2 border-primary border-t-transparent rounded-full" />
-    </div>
+  <TooltipProvider :delay-duration="300">
+    <div class="space-y-6">
+      <div v-if="loading" class="flex justify-center py-12">
+        <div class="animate-spin h-6 w-6 border-2 border-primary border-t-transparent rounded-full" />
+      </div>
 
-    <template v-else>
-      <Card v-for="group in GROUPS" :key="group.key">
+      <template v-else>
+        <Card v-for="group in GROUPS" :key="group.key">
         <CardHeader class="flex flex-row items-center justify-between space-y-0 pb-3">
           <CardTitle class="text-base font-medium">{{ t(group.label) }}</CardTitle>
           <Button v-if="isAdmin" size="sm" variant="outline" @click="openAdd(group.key)">
@@ -309,7 +316,13 @@ function onPlatformPresetChange(val: any) {
               <TableBody>
                 <TableRow v-for="entry in pool[group.key]" :key="entry.id">
                   <TableCell class="font-medium">{{ entry.label }}</TableCell>
-                  <TableCell class="text-muted-foreground text-xs font-mono max-w-[300px] truncate">{{ entrySummary(entry) }}</TableCell>
+                  <TableCell class="text-muted-foreground text-xs font-mono max-w-[300px]">
+                    <TruncatedTooltipValue
+                      :display="entrySummaryDisplay(entry)"
+                      :content="entrySummaryFull(entry)"
+                      class="max-w-[300px] text-muted-foreground"
+                    />
+                  </TableCell>
                   <TableCell>
                     <Badge v-for="tag in entry.tags" :key="tag" variant="secondary" class="mr-1 text-xs">{{ tag }}</Badge>
                     <span v-if="!entry.tags?.length" class="text-muted-foreground text-xs">{{ t('fingerprintPool.allPlatforms') }}</span>
@@ -603,5 +616,6 @@ function onPlatformPresetChange(val: any) {
         </DialogFooter>
       </DialogContent>
     </Dialog>
-  </div>
+    </div>
+  </TooltipProvider>
 </template>

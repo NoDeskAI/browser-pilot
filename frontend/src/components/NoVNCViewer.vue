@@ -24,6 +24,7 @@ import {
   Tooltip, TooltipContent, TooltipProvider, TooltipTrigger,
 } from '@/components/ui/tooltip'
 import { Toggle } from '@/components/ui/toggle'
+import TruncatedTooltipValue from '@/components/TruncatedTooltipValue.vue'
 
 const { t } = useI18n()
 const {
@@ -786,42 +787,52 @@ watch(inputBarOpen, (open) => {
                 </div>
                 <div class="flex justify-between">
                   <span class="text-muted-foreground">{{ t('vnc.fpOsVersion') }}</span>
-                  <span class="font-mono truncate max-w-[160px]" :title="JSON.stringify(fpProfile.clientHints || {})">{{ fpOsVersionLabel(fpProfile) }}</span>
+                  <TruncatedTooltipValue
+                    :display="fpOsVersionLabel(fpProfile)"
+                    :content="fpProfile.clientHints || {}"
+                    json
+                  />
                 </div>
                 <div v-if="fpProfile.profileFamily" class="flex justify-between">
                   <span class="text-muted-foreground">{{ t('vnc.fpProfileFamily') }}</span>
-                  <span class="font-mono truncate max-w-[160px]" :title="fpProfile.profileFamily">{{ fpProfile.profileFamily }}</span>
+                  <TruncatedTooltipValue :display="fpProfile.profileFamily" :content="fpProfile.profileFamily" />
                 </div>
                 <div v-if="fpProfile.runtimeHealth" class="flex justify-between">
                   <span class="text-muted-foreground">{{ t('vnc.fpRuntimeHealth') }}</span>
-                  <span
-                    class="font-mono truncate max-w-[160px]"
+                  <TruncatedTooltipValue
+                    :display="fpRuntimeHealthLabel(fpProfile)"
+                    :content="fpProfile.runtimeHealth"
+                    json
                     :class="fpProfile.runtimeHealth?.ok ? 'text-emerald-400' : 'text-amber-500'"
-                    :title="JSON.stringify(fpProfile.runtimeHealth)"
-                  >{{ fpRuntimeHealthLabel(fpProfile) }}</span>
+                  />
                 </div>
                 <div class="flex justify-between">
                   <span class="text-muted-foreground">{{ t('vnc.fpReadiness') }}</span>
-                  <span
-                    class="font-mono truncate max-w-[160px]"
+                  <TruncatedTooltipValue
+                    :display="fpReadinessLabel(fpProfile)"
+                    :content="fpReadiness(fpProfile)"
+                    json
                     :class="fpReadinessOk(fpProfile) ? 'text-emerald-400' : 'text-amber-500'"
-                    :title="JSON.stringify(fpProfile.readiness || {})"
-                  >{{ fpReadinessLabel(fpProfile) }}</span>
+                  />
                 </div>
                 <p v-if="fpReadinessHint(fpProfile)" class="text-[10px] leading-tight text-amber-500">
                   {{ fpReadinessHint(fpProfile) }}
                 </p>
                 <div class="flex justify-between">
                   <span class="text-muted-foreground">{{ t('vnc.fpGpu') }}</span>
-                  <span class="font-mono truncate max-w-[160px]" :title="fpProfile.webgl?.renderer">{{ fpProfile.webgl?.renderer?.split(',')[0] || '-' }}</span>
+                  <TruncatedTooltipValue
+                    :display="fpProfile.webgl?.renderer?.split(',')[0] || '-'"
+                    :content="fpProfile.webgl?.renderer || '-'"
+                  />
                 </div>
                 <div v-if="fpProfile.runtimeHealth" class="flex justify-between">
                   <span class="text-muted-foreground">{{ t('vnc.fpWebglRuntime') }}</span>
-                  <span
-                    class="font-mono truncate max-w-[160px]"
+                  <TruncatedTooltipValue
+                    :display="fpWebglRuntimeLabel(fpProfile)"
+                    :content="fpProfile.runtimeHealth?.checks || {}"
+                    json
                     :class="fpWebglRuntimeOk(fpProfile) ? 'text-emerald-400' : 'text-amber-500'"
-                    :title="JSON.stringify(fpProfile.runtimeHealth?.checks || {})"
-                  >{{ fpWebglRuntimeLabel(fpProfile) }}</span>
+                  />
                 </div>
                 <div class="flex justify-between">
                   <span class="text-muted-foreground">{{ t('vnc.fpCpu') }}</span>
@@ -855,7 +866,11 @@ watch(inputBarOpen, (open) => {
                 </div>
                 <div v-if="fpProfile.fontPolicy" class="flex justify-between">
                   <span class="text-muted-foreground">{{ t('vnc.fpFontPolicy') }}</span>
-                  <span class="font-mono truncate max-w-[160px]" :title="JSON.stringify(fpProfile.fontPolicy)">{{ fpFontPolicyLabel(fpProfile) }}</span>
+                  <TruncatedTooltipValue
+                    :display="fpFontPolicyLabel(fpProfile)"
+                    :content="fpProfile.fontPolicy"
+                    json
+                  />
                 </div>
                 <div class="flex justify-between">
                   <span class="text-muted-foreground">{{ t('vnc.fpWebglParams') }}</span>
@@ -863,11 +878,11 @@ watch(inputBarOpen, (open) => {
                     <TooltipTrigger as-child>
                       <span class="font-mono cursor-help border-b border-dashed border-muted-foreground/50">{{ t('vnc.fpWebglParamsCount', { count: Object.keys(fpProfile.webgl.params).length }) }}</span>
                     </TooltipTrigger>
-                    <TooltipContent side="left" align="start" class="max-w-[200px] text-[10px]">
-                      <div class="grid grid-cols-2 gap-x-2 gap-y-0.5">
+                    <TooltipContent side="left" align="start" class="max-w-[360px] text-[10px]">
+                      <div class="grid grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)] gap-x-2 gap-y-0.5">
                         <template v-for="(v, k) in fpProfile.webgl.params" :key="k">
-                          <span class="text-muted-foreground truncate" :title="String(k)">{{ String(k) }}</span>
-                          <span class="font-mono truncate" :title="String(v)">{{ Array.isArray(v) ? v.join('x') : v }}</span>
+                          <span class="text-muted-foreground break-all">{{ String(k) }}</span>
+                          <span class="font-mono break-all">{{ Array.isArray(v) ? v.join('x') : String(v) }}</span>
                         </template>
                       </div>
                     </TooltipContent>
@@ -881,21 +896,23 @@ watch(inputBarOpen, (open) => {
                 <div v-if="fpProfile.network" class="pt-1 mt-1 border-t border-border/60 space-y-1.5">
                   <div class="flex justify-between">
                     <span class="text-muted-foreground">{{ t('vnc.fpExitIp') }}</span>
-                    <span class="font-mono truncate max-w-[160px]" :title="fpProfile.network.ip">{{ fpProfile.network.ip || '-' }}</span>
+                    <TruncatedTooltipValue :display="fpProfile.network.ip || '-'" :content="fpProfile.network.ip || '-'" />
                   </div>
                   <div class="flex justify-between">
                     <span class="text-muted-foreground">{{ t('vnc.fpExitLocation') }}</span>
-                    <span class="font-mono truncate max-w-[160px]" :title="fpExitLocation(fpProfile)">{{ fpExitLocation(fpProfile) }}</span>
+                    <TruncatedTooltipValue :display="fpExitLocation(fpProfile)" :content="fpExitLocation(fpProfile)" />
                   </div>
                   <div class="flex justify-between">
                     <span class="text-muted-foreground">{{ t('vnc.fpDns') }}</span>
-                    <span class="font-mono truncate max-w-[160px]" :title="fpDnsLabel(fpProfile)">{{ fpDnsLabel(fpProfile) }}</span>
+                    <TruncatedTooltipValue :display="fpDnsLabel(fpProfile)" :content="fpDnsLabel(fpProfile)" />
                   </div>
                   <div v-if="fpProfile.network.observed" class="flex justify-between">
                     <span class="text-muted-foreground">{{ t('vnc.fpObserved') }}</span>
-                    <span class="font-mono truncate max-w-[160px]" :title="JSON.stringify(fpProfile.network.observed)">
-                      {{ fpProfile.network.observed.ip || '-' }} / {{ fpObservedLocation(fpProfile) }}
-                    </span>
+                    <TruncatedTooltipValue
+                      :display="`${fpProfile.network.observed.ip || '-'} / ${fpObservedLocation(fpProfile)}`"
+                      :content="fpProfile.network.observed"
+                      json
+                    />
                   </div>
                   <div class="grid grid-cols-3 gap-1 pt-1">
                     <Button
