@@ -56,6 +56,13 @@ const tooltipText = computed(() => {
 })
 
 const hasTooltip = computed(() => tooltipText.value !== '-')
+
+const tooltipContentClass = computed(() => cn(
+  props.json
+    ? 'w-[320px] max-w-[calc(100vw-2rem)] text-[10px] font-mono leading-snug'
+    : 'max-w-[360px] whitespace-pre-wrap break-words text-[10px] font-mono leading-snug',
+  props.contentClass,
+))
 </script>
 
 <template>
@@ -66,9 +73,9 @@ const hasTooltip = computed(() => tooltipText.value !== '-')
     <TooltipContent
       :side="side"
       :align="align"
-      :class="cn('max-w-[360px] whitespace-pre-wrap break-words text-[10px] font-mono leading-snug', contentClass)"
+      :class="tooltipContentClass"
     >
-      <pre v-if="json" class="max-h-64 overflow-auto whitespace-pre-wrap break-words font-mono">{{ tooltipText }}</pre>
+      <pre v-if="json" class="w-full min-w-0 max-h-64 overflow-y-auto overflow-x-hidden whitespace-pre-wrap break-words [scrollbar-gutter:stable] font-mono">{{ tooltipText }}</pre>
       <span v-else>{{ tooltipText }}</span>
     </TooltipContent>
   </Tooltip>
