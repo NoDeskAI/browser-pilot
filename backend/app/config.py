@@ -45,6 +45,15 @@ APP_TITLE = _env("APP_TITLE", "Browser Pilot")
 CLI_COMMAND_NAME = _env("CLI_COMMAND_NAME", "bpilot")
 CONTAINER_PREFIX = _env("CONTAINER_PREFIX", "bp")
 
+# --- Built-in MinIO storage bootstrap ---
+
+MINIO_STORAGE_BOOTSTRAP = _env("MINIO_STORAGE_BOOTSTRAP", "").lower() in {"1", "true", "yes", "on"}
+MINIO_ROOT_USER = _env("MINIO_ROOT_USER", "")
+MINIO_ROOT_PASSWORD = _env("MINIO_ROOT_PASSWORD", "")
+MINIO_BUCKET = _env("MINIO_BUCKET", "")
+MINIO_ENDPOINT = "http://minio:9000"
+MINIO_REGION = "us-east-1"
+
 # --- Declared network profile ---
 
 DEFAULT_NETWORK_COUNTRY_CODE = _env("DEFAULT_NETWORK_COUNTRY_CODE", "")

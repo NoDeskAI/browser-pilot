@@ -24,9 +24,15 @@ services:
       NETWORK_EGRESS_CLASH_PROXY_PORT: ${NETWORK_EGRESS_CLASH_PROXY_PORT:-7890}
       NETWORK_EGRESS_OPENVPN_IMAGE: ${NETWORK_EGRESS_OPENVPN_IMAGE:-browser-pilot-openvpn-egress:latest}
       NETWORK_EGRESS_OPENVPN_PROXY_PORT: ${NETWORK_EGRESS_OPENVPN_PROXY_PORT:-8888}
+      MINIO_STORAGE_BOOTSTRAP: "true"
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?copy .env.example to .env and set MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?copy .env.example to .env and set MINIO_ROOT_PASSWORD}
+      MINIO_BUCKET: ${MINIO_BUCKET:?copy .env.example to .env and set MINIO_BUCKET}
     depends_on:
       postgres:
         condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
 
   postgres:
     image: postgres:16-alpine
@@ -45,6 +51,36 @@ services:
       timeout: 3s
       retries: 5
 
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?copy .env.example to .env and set MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?copy .env.example to .env and set MINIO_ROOT_PASSWORD}
+    expose:
+      - "9000"
+    volumes:
+      - miniodata:/data
+
+  minio-init:
+    image: minio/mc:latest
+    restart: "no"
+    depends_on:
+      minio:
+        condition: service_started
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?copy .env.example to .env and set MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?copy .env.example to .env and set MINIO_ROOT_PASSWORD}
+      MINIO_BUCKET: ${MINIO_BUCKET:?copy .env.example to .env and set MINIO_BUCKET}
+    entrypoint: >
+      /bin/sh -c '
+        until mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD"; do
+          sleep 1;
+        done;
+        mc mb --ignore-existing "local/$$MINIO_BUCKET";
+      '
+
   selenium:
     build:
       context: ./services/selenium-chrome
@@ -56,3 +92,4 @@ services:
 volumes:
   pgdata:
   egressdata:
+  miniodata:

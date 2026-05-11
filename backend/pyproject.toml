@@ -16,10 +16,8 @@ dependencies = [
     "alembic>=1.15.0",
     "socksio>=1.0.0",
     "PyYAML>=6.0.0",
+    "boto3>=1.35.0",
 ]
-
-[project.optional-dependencies]
-s3 = ["boto3>=1.35.0"]
 
 # Dev server: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 

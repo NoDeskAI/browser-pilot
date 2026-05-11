@@ -136,16 +136,16 @@ _require_database_env() {
 
     local missing=()
     local key
-    for key in POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB DATABASE_URL; do
+    for key in POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB DATABASE_URL MINIO_ROOT_USER MINIO_ROOT_PASSWORD MINIO_BUCKET; do
         if [[ -z "${!key:-}" ]]; then
             missing+=("$key")
         fi
     done
 
     if (( ${#missing[@]} > 0 )); then
-        echo "缺少数据库配置: ${missing[*]}" >&2
+        echo "缺少启动配置: ${missing[*]}" >&2
         echo "请先执行: cp .env.example .env" >&2
-        echo "然后按需修改 .env 中的 DATABASE_URL、POSTGRES_USER、POSTGRES_PASSWORD、POSTGRES_DB。" >&2
+        echo "然后按需修改 .env 中的 DATABASE_URL、POSTGRES_*、MINIO_*。" >&2
         exit 1
     fi
 }

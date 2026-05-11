@@ -7,7 +7,6 @@ import { Loader2, Check } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Switch } from '@/components/ui/switch'
 import {
   Card, CardContent, CardDescription, CardHeader, CardTitle,
 } from '@/components/ui/card'
@@ -25,17 +24,21 @@ const form = reactive({
   s3Endpoint: '',
   s3Presign: true,
   s3PresignExpires: 3600,
+  s3SecretConfigured: false,
 })
 
 const saving = ref(false)
 const saved = ref(false)
 const touched = ref(false)
 
-const s3RequiredFields = ['s3Bucket', 's3Region', 's3AccessKey', 's3SecretKey'] as const
+const s3RequiredFields = ['s3Bucket', 's3Region', 's3AccessKey'] as const
 
 const s3MissingFields = computed(() =>
   form.storage === 's3'
-    ? s3RequiredFields.filter(f => !form[f].trim())
+    ? [
+        ...s3RequiredFields.filter(f => !form[f].trim()),
+        ...(!form.s3SecretConfigured && !form.s3SecretKey.trim() ? ['s3SecretKey'] : []),
+      ]
     : []
 )
 
@@ -53,6 +56,7 @@ onMounted(async () => {
     if (res.ok) {
       const data = await res.json()
       Object.assign(form, data)
+      form.s3SecretKey = ''
     }
   } catch { /* keep defaults */ }
 })
@@ -79,6 +83,10 @@ async function saveSettings() {
     if (res.ok) {
       saved.value = true
       touched.value = false
+      if (form.storage === 's3') {
+        form.s3SecretConfigured = true
+        form.s3SecretKey = ''
+      }
       notifySuccess(t('settings.saved'))
       setTimeout(() => { saved.value = false }, 2000)
     } else {
@@ -125,16 +133,16 @@ async function saveSettings() {
             :id="field"
             v-model="form[field]"
             :type="field === 's3SecretKey' ? 'password' : 'text'"
+            :placeholder="field === 's3SecretKey' && form.s3SecretConfigured ? t('settings.s3SecretPlaceholder') : ''"
             :class="isFieldMissing(field) ? 'border-destructive' : ''"
           />
+          <p v-if="field === 's3SecretKey'" class="text-xs text-muted-foreground">
+            {{ t('settings.s3SecretHint') }}
+          </p>
         </div>
         <div class="md:col-span-2 space-y-2">
           <Label for="s3Endpoint">{{ t('settings.s3Endpoint') }}</Label>
           <Input id="s3Endpoint" v-model="form.s3Endpoint" placeholder="https://s3.example.com" />
-        </div>
-        <div class="md:col-span-2 flex items-center gap-3">
-          <Switch id="s3Presign" v-model:checked="form.s3Presign" />
-          <Label for="s3Presign" class="cursor-pointer font-normal">{{ t('settings.s3Presign') }}</Label>
         </div>
       </div>
 

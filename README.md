@@ -14,6 +14,9 @@ Requires **Docker** (with Compose v2).
 git clone https://github.com/NoDeskAI/browser-pilot.git
 cd browser-pilot
 
+cp .env.example .env
+# Edit passwords before production/public deployment.
+
 # Build all images and start services
 docker compose build && docker compose up -d
 ```
@@ -69,6 +72,7 @@ graph TB
   subgraph compose ["docker compose up"]
     Backend["backend:8000 — FastAPI + Web UI"]
     Postgres["postgres:5432"]
+    MinIO["minio:9000 — S3-compatible storage"]
   end
   subgraph dynamic ["Created on demand"]
     B1["bp-xxx — Chrome + Selenium"]
@@ -79,6 +83,7 @@ graph TB
   CLI["bpilot CLI"] -->|"REST API"| Backend
   Backend -->|"Docker socket"| dynamic
   Backend --> Postgres
+  Backend --> MinIO
 ```
 
 
@@ -118,6 +123,9 @@ This starts PostgreSQL in Docker, builds the Selenium image, and runs the backen
 | `POSTGRES_USER`       | Required in `.env`; see `.env.example`                         | PostgreSQL user used by Docker Compose and local development.                                                                      |
 | `POSTGRES_PASSWORD`   | Required in `.env`; see `.env.example`                         | PostgreSQL password. Change it before production/public deployment.                                                                |
 | `POSTGRES_DB`         | Required in `.env`; see `.env.example`                         | PostgreSQL database name.                                                                                                         |
+| `MINIO_ROOT_USER`     | Required in `.env`; see `.env.example`                         | Root user for the built-in MinIO service used as the default S3-compatible storage backend.                                        |
+| `MINIO_ROOT_PASSWORD` | Required in `.env`; see `.env.example`                         | Root password for the built-in MinIO service. Change it before production/public deployment.                                      |
+| `MINIO_BUCKET`        | Required in `.env`; see `.env.example`                         | Bucket created automatically by Docker Compose and preconfigured as the default S3 storage bucket.                                |
 | `SELENIUM_BASE_IMAGE` | `selenium/standalone-chrome:latest`                            | Base image for browser containers. ARM users: `seleniarm/standalone-chromium:latest`                                               |
 | `DOCKER_HOST_ADDR`    | `localhost`                                                    | How the backend reaches browser containers. Set to `host.docker.internal` in Docker deployment (auto-configured by docker-compose) |
 | `OPENAI_API_KEY`      | —                                                              | Optional. When set, uses LLM to auto-name sessions on first navigation. Without it, sessions are named by page title.              |
@@ -130,6 +138,10 @@ This starts PostgreSQL in Docker, builds the Selenium image, and runs the backen
 | `NETWORK_EGRESS_CLASH_PROXY_PORT` | `7890` | Proxy port exposed by managed Clash containers on the internal Docker network. |
 | `NETWORK_EGRESS_OPENVPN_IMAGE` | `browser-pilot-openvpn-egress:latest` | Container image used for managed OpenVPN egress profiles. The default image is built from `services/network-egress-openvpn` on first use. |
 | `NETWORK_EGRESS_OPENVPN_PROXY_PORT` | `8888` | HTTP proxy port exposed by managed OpenVPN containers on the internal Docker network. |
+
+### File storage
+
+Docker Compose starts a built-in MinIO service and preconfigures it as regular S3-compatible storage on first backend startup. The storage settings page still only exposes two modes: **S3 Storage** and **Built-in Storage**. To use AWS S3, Cloudflare R2, OSS, or another S3-compatible provider, edit the S3 fields in the settings page; existing database settings are never overwritten by the Compose defaults.
 
 ### Database migrations
 

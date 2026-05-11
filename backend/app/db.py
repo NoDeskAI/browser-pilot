@@ -17,6 +17,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.pool import NullPool
 
+from app import config
 from app.config import require_database_url
 
 logger = logging.getLogger("db")
@@ -254,6 +255,7 @@ async def _attempt_init(database_url: str, attempt: int) -> str:
     try:
         info = await _run_migrations(database_url)
         _pool = await asyncpg.create_pool(database_url, min_size=1, max_size=5, init=_init_connection)
+        await _ensure_default_storage_config()
         current = info.current_revision_after or info.current_revision
         _set_bootstrap_state(
             "ready",
@@ -299,6 +301,61 @@ async def _attempt_init(database_url: str, attempt: int) -> str:
             await _pool.close()
             _pool = None
         return "retry"
+
+
+def _default_minio_storage_config() -> dict[str, Any] | None:
+    if not config.MINIO_STORAGE_BOOTSTRAP:
+        return None
+    missing = [
+        key
+        for key, value in {
+            "MINIO_ROOT_USER": config.MINIO_ROOT_USER,
+            "MINIO_ROOT_PASSWORD": config.MINIO_ROOT_PASSWORD,
+            "MINIO_BUCKET": config.MINIO_BUCKET,
+        }.items()
+        if not value
+    ]
+    if missing:
+        logger.warning("Skipping default S3 storage bootstrap; missing %s", missing)
+        return None
+    return {
+        "storage": "s3",
+        "s3Bucket": config.MINIO_BUCKET,
+        "s3Region": config.MINIO_REGION,
+        "s3AccessKey": config.MINIO_ROOT_USER,
+        "s3SecretKey": config.MINIO_ROOT_PASSWORD,
+        "s3Endpoint": config.MINIO_ENDPOINT,
+        "s3Presign": True,
+        "s3PresignExpires": 3600,
+    }
+
+
+async def _ensure_default_storage_config() -> None:
+    if _pool is None:
+        return
+    storage_config = _default_minio_storage_config()
+    if not storage_config:
+        return
+    try:
+        row = await _pool.fetchrow(
+            "SELECT value FROM app_state WHERE key = $1",
+            "storage_config",
+        )
+        if row:
+            return
+        await _pool.execute(
+            """INSERT INTO app_state (key, value) VALUES ($1, $2)
+               ON CONFLICT (key) DO NOTHING""",
+            "storage_config",
+            json.dumps(storage_config, ensure_ascii=False),
+        )
+        logger.info(
+            "Default S3 storage config initialized bucket=%s endpoint=%s",
+            storage_config["s3Bucket"],
+            storage_config["s3Endpoint"],
+        )
+    except Exception as exc:
+        logger.warning("Failed to initialize default S3 storage config: %s", exc)
 
 
 async def close_db() -> None:

@@ -6,9 +6,17 @@ from app import db
 class FakePool:
     def __init__(self):
         self.closed = False
+        self.rows = {}
+        self.executed = []
 
     async def close(self):
         self.closed = True
+
+    async def fetchrow(self, _query, key):
+        return self.rows.get(key)
+
+    async def execute(self, query, *args):
+        self.executed.append((query, args))
 
 
 def reset_db_state():
@@ -132,6 +140,7 @@ def test_attempt_init_marks_ready_after_successful_migration(monkeypatch):
 
     monkeypatch.setattr(db, "_run_migrations", fake_run_migrations)
     monkeypatch.setattr(db.asyncpg, "create_pool", fake_create_pool)
+    monkeypatch.setattr(db, "_ensure_default_storage_config", lambda: _noop_async())
 
     result = asyncio.run(db._attempt_init("postgresql://user:pass@localhost/db", 1))
     state = db.get_bootstrap_state()
@@ -248,3 +257,66 @@ def test_run_migrations_wraps_upgrade_in_advisory_lock(monkeypatch):
     assert "pg_advisory_unlock" in calls[2][0]
     assert calls[3] == ("commit", {})
     assert calls[-1] == ("dispose", {})
+
+
+async def _noop_async():
+    return None
+
+
+def test_default_minio_storage_config_uses_minio_env(monkeypatch):
+    monkeypatch.setattr(db.config, "MINIO_STORAGE_BOOTSTRAP", True)
+    monkeypatch.setattr(db.config, "MINIO_ROOT_USER", "browserpilot")
+    monkeypatch.setattr(db.config, "MINIO_ROOT_PASSWORD", "secret")
+    monkeypatch.setattr(db.config, "MINIO_BUCKET", "browser-pilot")
+
+    config = db._default_minio_storage_config()
+
+    assert config == {
+        "storage": "s3",
+        "s3Bucket": "browser-pilot",
+        "s3Region": "us-east-1",
+        "s3AccessKey": "browserpilot",
+        "s3SecretKey": "secret",
+        "s3Endpoint": "http://minio:9000",
+        "s3Presign": True,
+        "s3PresignExpires": 3600,
+    }
+
+
+def test_default_minio_storage_config_skips_without_bootstrap(monkeypatch):
+    monkeypatch.setattr(db.config, "MINIO_STORAGE_BOOTSTRAP", False)
+
+    assert db._default_minio_storage_config() is None
+
+
+def test_ensure_default_storage_config_does_not_override_existing(monkeypatch):
+    pool = FakePool()
+    pool.rows["storage_config"] = {"value": "{}"}
+    db._pool = pool
+    monkeypatch.setattr(
+        db,
+        "_default_minio_storage_config",
+        lambda: {"storage": "s3", "s3Bucket": "browser-pilot"},
+    )
+
+    asyncio.run(db._ensure_default_storage_config())
+
+    assert pool.executed == []
+
+
+def test_ensure_default_storage_config_inserts_when_missing(monkeypatch):
+    pool = FakePool()
+    db._pool = pool
+    monkeypatch.setattr(
+        db,
+        "_default_minio_storage_config",
+        lambda: {"storage": "s3", "s3Bucket": "browser-pilot"},
+    )
+
+    asyncio.run(db._ensure_default_storage_config())
+
+    assert len(pool.executed) == 1
+    assert pool.executed[0][1] == (
+        "storage_config",
+        '{"storage": "s3", "s3Bucket": "browser-pilot"}',
+    )

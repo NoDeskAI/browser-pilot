@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import binascii
 import json
 import logging
 import time
@@ -20,6 +21,20 @@ class FileStore(Protocol):
         ext: str = "png",
     ) -> dict: ...
 
+    async def get(self, file_id: str) -> tuple[bytes, str] | None: ...
+
+
+def _encode_file_id(key: str) -> str:
+    return base64.urlsafe_b64encode(key.encode()).decode().rstrip("=")
+
+
+def _decode_file_id(file_id: str) -> str | None:
+    try:
+        padding = "=" * (-len(file_id) % 4)
+        return base64.urlsafe_b64decode(f"{file_id}{padding}").decode()
+    except (binascii.Error, UnicodeDecodeError):
+        return None
+
 
 class S3Store:
     def __init__(
@@ -31,19 +46,25 @@ class S3Store:
         endpoint: str,
         presign: bool,
         presign_expires: int,
+        base_url: str,
     ):
         import boto3
+        from botocore.config import Config
 
         session = boto3.Session(
             aws_access_key_id=access_key,
             aws_secret_access_key=secret_key,
             region_name=region,
         )
-        kwargs = {"endpoint_url": endpoint} if endpoint else {}
+        kwargs = {
+            "config": Config(s3={"addressing_style": "path"}),
+            **({"endpoint_url": endpoint} if endpoint else {}),
+        }
         self._client = session.client("s3", **kwargs)
         self._bucket = bucket
         self._presign = presign
         self._presign_expires = presign_expires
+        self._base_url = base_url.rstrip("/")
 
     async def save(
         self,
@@ -61,23 +82,24 @@ class S3Store:
                 Bucket=self._bucket, Key=key, Body=raw, ContentType=content_type
             ),
         )
-        if self._presign:
-            url = await loop.run_in_executor(
-                None,
-                lambda: self._client.generate_presigned_url(
-                    "get_object",
-                    Params={"Bucket": self._bucket, "Key": key},
-                    ExpiresIn=self._presign_expires,
-                ),
-            )
-        else:
-            ep = self._client.meta.endpoint_url
-            url = (
-                f"{ep}/{self._bucket}/{key}"
-                if ep
-                else f"https://{self._bucket}.s3.amazonaws.com/{key}"
-            )
+        file_id = _encode_file_id(key)
+        url = f"{self._base_url}/api/files/{file_id}.{ext}"
         return {"type": "url", "url": url}
+
+    async def get(self, file_id: str) -> tuple[bytes, str] | None:
+        key = _decode_file_id(file_id)
+        if not key:
+            return None
+        loop = asyncio.get_running_loop()
+        try:
+            def fetch():
+                obj = self._client.get_object(Bucket=self._bucket, Key=key)
+                return obj["Body"].read(), obj.get("ContentType") or "application/octet-stream"
+
+            return await loop.run_in_executor(None, fetch)
+        except Exception as exc:
+            logger.warning("S3 file fetch failed key=%s: %s", key, exc)
+            return None
 
 
 class BuiltinStore:
@@ -99,7 +121,7 @@ class BuiltinStore:
         self._cleanup()
         return {"type": "url", "url": f"{self._base_url}/api/files/{fid}.{ext}"}
 
-    def get(self, file_id: str) -> tuple[bytes, str] | None:
+    async def get(self, file_id: str) -> tuple[bytes, str] | None:
         item = self._cache.get(file_id)
         if item and time.time() - item[2] < self._ttl:
             return item[0], item[1]
@@ -131,6 +153,7 @@ async def _init_store():
     global _store
     config = await _load_config_from_db()
     mode = config.get("storage", "builtin")
+    from app.config import API_BASE_URL
 
     if mode == "s3" and config.get("s3Bucket"):
         _store = S3Store(
@@ -141,11 +164,16 @@ async def _init_store():
             endpoint=config.get("s3Endpoint", ""),
             presign=config.get("s3Presign", True),
             presign_expires=config.get("s3PresignExpires", 3600),
+            base_url=API_BASE_URL,
+        )
+        logger.info(
+            "File store initialized mode=s3 bucket=%s endpoint=%s",
+            config["s3Bucket"],
+            config.get("s3Endpoint", ""),
         )
     else:
-        from app.config import API_BASE_URL
-
         _store = BuiltinStore(API_BASE_URL, ttl=3600)
+        logger.info("File store initialized mode=builtin")
 
 
 async def _load_config_from_db() -> dict:

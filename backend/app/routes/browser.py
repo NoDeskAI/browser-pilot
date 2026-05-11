@@ -366,11 +366,21 @@ async def api_switch_tab(body: SwitchTabBody, user: CurrentUser = Depends(get_se
 # ---------------------------------------------------------------------------
 
 @router.get("/api/browser/screenshot")
-async def api_screenshot(sessionId: str = Query(...), user: CurrentUser = Depends(get_session_aware_user)):
+async def api_screenshot(
+    sessionId: str = Query(...),
+    store: bool = Query(False),
+    user: CurrentUser = Depends(get_session_aware_user),
+):
     await verify_session_access(sessionId, user)
     try:
         async with browser_session(sessionId) as (sid, base):
             b64 = await wd_fetch(f"/session/{sid}/screenshot", base_url=base)
+        if store:
+            from app.file_store import get_store
+
+            file_store = await get_store()
+            file = await file_store.save(b64, sessionId, content_type="image/png", ext="png")
+            return {"ok": True, "file": file, "screenshot": None}
         return {"ok": True, "screenshot": b64}
     except Exception as exc:
         return {"ok": False, "error": str(exc)}

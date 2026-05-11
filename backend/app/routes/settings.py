@@ -33,6 +33,25 @@ class StorageConfig(BaseModel):
     s3Endpoint: str = ""
     s3Presign: bool = True
     s3PresignExpires: int = 3600
+    s3SecretConfigured: bool = False
+
+
+def _storage_payload(cfg: StorageConfig) -> dict:
+    return cfg.model_dump(exclude={"s3SecretConfigured"})
+
+
+def _public_storage_config(config: dict) -> dict:
+    body = StorageConfig(**config)
+    data = body.model_dump()
+    data["s3SecretConfigured"] = bool(data.get("s3SecretKey"))
+    data["s3SecretKey"] = ""
+    return data
+
+
+async def _load_storage_config() -> dict | None:
+    pool = get_pool()
+    row = await pool.fetchrow("SELECT value FROM app_state WHERE key = $1", _KEY)
+    return json.loads(row["value"]) if row else None
 
 
 async def _verify_s3_connection(cfg: StorageConfig) -> None:
@@ -71,16 +90,18 @@ async def _verify_s3_connection(cfg: StorageConfig) -> None:
 
 @router.get("/api/settings/storage")
 async def get_storage_settings(_user: CurrentUser = Depends(require_role(["superadmin", "admin"]))):
-    pool = get_pool()
-    row = await pool.fetchrow("SELECT value FROM app_state WHERE key = $1", _KEY)
-    if row:
-        return StorageConfig(**json.loads(row["value"])).model_dump()
+    config = await _load_storage_config()
+    if config:
+        return _public_storage_config(config)
     return StorageConfig().model_dump()
 
 
 @router.put("/api/settings/storage")
 async def save_storage_settings(body: StorageConfig, _user: CurrentUser = Depends(require_role(["superadmin", "admin"]))):
+    existing = await _load_storage_config()
     if body.storage == "s3":
+        if not body.s3SecretKey and existing and existing.get("storage") == "s3":
+            body.s3SecretKey = existing.get("s3SecretKey", "")
         missing = [
             label
             for field, label in _S3_REQUIRED_FIELDS.items()
@@ -96,7 +117,7 @@ async def save_storage_settings(body: StorageConfig, _user: CurrentUser = Depend
         """INSERT INTO app_state (key, value) VALUES ($1, $2)
            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value""",
         _KEY,
-        json.dumps(body.model_dump(), ensure_ascii=False),
+        json.dumps(_storage_payload(body), ensure_ascii=False),
     )
     from app.file_store import invalidate_store
 

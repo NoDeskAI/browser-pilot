@@ -10,12 +10,10 @@ router = APIRouter()
 
 @router.get("/api/files/{file_id}.{ext}")
 async def serve_file(file_id: str, ext: str, _user: CurrentUser = Depends(get_current_user)):
-    from app.file_store import BuiltinStore, get_store
+    from app.file_store import get_store
 
     store = await get_store()
-    if not isinstance(store, BuiltinStore):
-        raise HTTPException(404)
-    result = store.get(file_id)
+    result = await store.get(file_id)
     if not result:
         raise HTTPException(404, "File not found or expired")
     data, content_type = result
