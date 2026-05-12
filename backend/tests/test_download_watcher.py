@@ -38,6 +38,37 @@ def test_list_downloads_skips_incomplete_crdownload(monkeypatch):
     ]
 
 
+def test_download_watcher_default_does_not_start_legacy_task(monkeypatch):
+    monkeypatch.setattr(download_watcher, "_watchers", {})
+    monkeypatch.setattr("app.config.BP_LEGACY_DOCKER_DOWNLOAD_WATCHER", False)
+
+    download_watcher.start_download_watcher("session-1")
+
+    assert download_watcher._watchers == {}
+
+
+def test_download_watcher_legacy_flag_starts_task(monkeypatch):
+    created = []
+
+    class FakeTask:
+        def done(self):
+            return False
+
+    def fake_create_task(coro):
+        coro.close()
+        created.append(coro)
+        return FakeTask()
+
+    monkeypatch.setattr(download_watcher, "_watchers", {})
+    monkeypatch.setattr("app.config.BP_LEGACY_DOCKER_DOWNLOAD_WATCHER", True)
+    monkeypatch.setattr(asyncio, "create_task", fake_create_task)
+
+    download_watcher.start_download_watcher("session-1")
+
+    assert "session-1" in download_watcher._watchers
+    assert len(created) == 2
+
+
 def test_upload_download_uses_file_service_with_source_metadata(monkeypatch):
     saved = {}
 

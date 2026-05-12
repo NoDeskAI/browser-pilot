@@ -40,6 +40,8 @@ def require_database_url() -> str:
 
 DOCKER_HOST_ADDR = _env("DOCKER_HOST_ADDR", "localhost")
 API_BASE_URL = _env("API_BASE_URL", "http://localhost:8000")
+BROWSER_RUNTIME_BACKEND_URL = _env("BROWSER_RUNTIME_BACKEND_URL", "http://host.docker.internal:8000")
+BP_LEGACY_DOCKER_DOWNLOAD_WATCHER = _env("BP_LEGACY_DOCKER_DOWNLOAD_WATCHER", "").lower() in {"1", "true", "yes", "on"}
 
 APP_TITLE = _env("APP_TITLE", "Browser Pilot")
 CLI_COMMAND_NAME = _env("CLI_COMMAND_NAME", "bpilot")

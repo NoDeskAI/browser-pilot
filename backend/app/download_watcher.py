@@ -21,10 +21,15 @@ _configured_download_behavior: set[str] = set()
 
 
 def start_download_watcher(session_id: str) -> None:
+    from app.config import BP_LEGACY_DOCKER_DOWNLOAD_WATCHER
+
+    if not BP_LEGACY_DOCKER_DOWNLOAD_WATCHER:
+        return
     task = _watchers.get(session_id)
     if task and not task.done():
         return
     _watchers[session_id] = asyncio.create_task(_watch_downloads(session_id))
+    asyncio.create_task(_mark_legacy_fallback(session_id))
     logger.info("Download watcher started for session %s", session_id)
 
 
@@ -51,6 +56,10 @@ async def configure_download_behavior_for_webdriver(
     webdriver_session_id: str,
     selenium_base_url: str,
 ) -> None:
+    from app.config import BP_LEGACY_DOCKER_DOWNLOAD_WATCHER
+
+    if not BP_LEGACY_DOCKER_DOWNLOAD_WATCHER:
+        return
     if session_id in _configured_download_behavior:
         return
     from app.tools.browser.session import wd_fetch
@@ -74,10 +83,28 @@ async def configure_download_behavior_for_webdriver(
 
 
 async def configure_download_behavior(session_id: str) -> None:
+    from app.config import BP_LEGACY_DOCKER_DOWNLOAD_WATCHER
+
+    if not BP_LEGACY_DOCKER_DOWNLOAD_WATCHER:
+        return
     from app.tools.browser.session import browser_session
 
     async with browser_session(session_id) as (sid, base):
         await configure_download_behavior_for_webdriver(session_id, sid, base)
+
+
+async def _mark_legacy_fallback(session_id: str) -> None:
+    try:
+        from app.file_capture import mark_file_capture_status
+
+        await mark_file_capture_status(
+            session_id,
+            "degraded",
+            "file_capture_legacy_docker_fallback",
+            heartbeat=True,
+        )
+    except Exception as exc:
+        logger.debug("Could not mark legacy file capture fallback for %s: %s", session_id, exc)
 
 
 async def _watch_downloads(session_id: str) -> None:

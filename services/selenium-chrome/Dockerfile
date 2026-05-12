@@ -63,6 +63,10 @@ COPY cdp-logger.py /opt/bin/cdp-logger.py
 COPY cdp-logger.conf /etc/supervisor/conf.d/cdp-logger.conf
 COPY cdp-fingerprint-agent.py /opt/bin/cdp-fingerprint-agent.py
 COPY cdp-fingerprint-agent.conf /etc/supervisor/conf.d/cdp-fingerprint-agent.conf
+COPY file-capture-agent.py /opt/bin/file-capture-agent.py
+COPY file-capture-agent.conf /etc/supervisor/conf.d/file-capture-agent.conf
 COPY localhost-bridge.py /opt/bin/localhost-bridge.py
-RUN chmod +x /opt/bin/localhost-bridge.py
+RUN mkdir -p /home/seluser/Downloads \
+    && chown -R seluser:seluser /home/seluser/Downloads \
+    && chmod +x /opt/bin/localhost-bridge.py /opt/bin/file-capture-agent.py
 USER seluser

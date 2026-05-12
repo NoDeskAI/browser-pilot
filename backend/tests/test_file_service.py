@@ -46,6 +46,16 @@ class FakePool:
             return {"tenant_id": tenant} if tenant else None
         if "SELECT * FROM session_files WHERE id" in query:
             return self.rows.get(args[0])
+        if "SELECT * FROM session_files" in query and "source_id = $3" in query:
+            session_id, source, source_id = args
+            for row in self.rows.values():
+                if (
+                    row["session_id"] == session_id
+                    and row["source"] == source
+                    and row.get("source_id") == source_id
+                ):
+                    return row
+            return None
         if "SELECT * FROM session_files" in query and "source_path" in query:
             session_id, source, source_path, source_mtime, size_bytes = args
             for row in self.rows.values():
@@ -73,8 +83,10 @@ class FakePool:
             size_bytes,
             storage,
             object_key,
+            source_id,
             source_path,
             source_mtime,
+            sha256,
         ) = args
         self.rows[file_id] = {
             "id": file_id,
@@ -86,8 +98,11 @@ class FakePool:
             "size_bytes": size_bytes,
             "storage": storage,
             "object_key": object_key,
+            "source_id": source_id,
             "source_path": source_path,
             "source_mtime": source_mtime,
+            "sha256": sha256,
+            "uploaded_at": datetime(2026, 5, 12, tzinfo=timezone.utc),
             "created_at": datetime(2026, 5, 12, tzinfo=timezone.utc),
         }
         return "INSERT 0 1"
@@ -148,6 +163,40 @@ def test_save_file_dedupes_browser_download_by_source_metadata(monkeypatch, tmp_
             filename="report.txt",
             source_path="/home/seluser/Downloads/report.txt",
             source_mtime=123.0,
+        )
+    )
+
+    assert second["id"] == first["id"]
+    assert len(pool.rows) == 1
+    assert len(store.objects) == 1
+
+
+def test_save_file_dedupes_browser_download_by_source_id(monkeypatch, tmp_path):
+    store = FakeStore()
+    pool = FakePool()
+    downloaded = tmp_path / "report.txt"
+    downloaded.write_text("hello")
+    monkeypatch.setattr(file_service, "get_store", lambda: asyncio.sleep(0, store))
+    monkeypatch.setattr(file_service, "get_pool", lambda: pool)
+
+    first = asyncio.run(
+        file_service.save_file(
+            session_id="session-1",
+            source="browser_download",
+            path=downloaded,
+            filename="report.txt",
+            source_id="download-guid-1",
+        )
+    )
+    renamed = tmp_path / "report-renamed.txt"
+    renamed.write_text("hello")
+    second = asyncio.run(
+        file_service.save_file(
+            session_id="session-1",
+            source="browser_download",
+            path=renamed,
+            filename="report-renamed.txt",
+            source_id="download-guid-1",
         )
     )
 

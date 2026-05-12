@@ -15,6 +15,7 @@ from urllib.parse import urlparse
 import httpx
 
 from app.config import (
+    BROWSER_RUNTIME_BACKEND_URL,
     DOCKER_HOST_ADDR,
     CONTAINER_PREFIX as _PREFIX,
     NETWORK_EGRESS_DOCKER_NETWORK,
@@ -1122,6 +1123,15 @@ async def create_container(
         env["FINGERPRINT_PROFILE"] = base64.b64encode(
             json.dumps(fingerprint_profile, separators=(",", ":")).encode()
         ).decode()
+    try:
+        from app.file_capture import issue_file_capture_token
+
+        env["BP_BACKEND_URL"] = BROWSER_RUNTIME_BACKEND_URL
+        env["BP_SESSION_ID"] = session_id
+        env["BP_FILE_CAPTURE_TOKEN"] = await issue_file_capture_token(session_id)
+        env["BP_DOWNLOAD_DIR"] = "/home/seluser/Downloads"
+    except Exception as exc:
+        logger.warning("File capture runtime token setup failed for %s: %s", session_id, exc)
     if not image_name:
         raise RuntimeError(
             "No browser image available. Build one in Settings > Browser Images."

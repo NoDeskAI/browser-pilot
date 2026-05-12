@@ -1,8 +1,13 @@
 import asyncio
 import base64
+import io
 
 from app.auth.dependencies import CurrentUser
+from fastapi import UploadFile
+import pytest
+
 from app import file_service
+from app import file_capture
 from app.routes import browser, files, sessions
 
 
@@ -113,3 +118,70 @@ def test_session_files_route_verifies_access_and_lists_files(monkeypatch):
 
     assert result == {"files": [{"id": "file-1"}]}
     assert calls == {"verify": ("session-1", "user-1"), "list": "session-1"}
+
+
+def test_ingest_route_verifies_runtime_token_and_saves_file(monkeypatch):
+    captured = {}
+
+    async def fake_verify(session_id, raw_token):
+        captured["verify"] = (session_id, raw_token)
+        return {"tenant_id": "tenant-1"}
+
+    async def fake_save_file(**kwargs):
+        captured["save"] = kwargs
+        return {"id": "file-1", "url": "http://localhost:8000/api/files/file-1.txt"}
+
+    async def fake_heartbeat(session_id, status="running", error=None):
+        captured["heartbeat"] = (session_id, status, error)
+
+    monkeypatch.setattr(file_capture, "verify_file_capture_token", fake_verify)
+    monkeypatch.setattr(file_capture, "heartbeat_file_capture", fake_heartbeat)
+    monkeypatch.setattr(file_service, "save_file", fake_save_file)
+
+    upload = UploadFile(filename="ignored.txt", file=io.BytesIO(b"downloaded"))
+    result = asyncio.run(
+        files.ingest_session_file(
+            "session-1",
+            file=upload,
+            source="browser_download",
+            sourceId="guid-1",
+            originalName="report.txt",
+            contentType="text/plain",
+            sizeBytes=len(b"downloaded"),
+            sourcePath="/home/seluser/Downloads/report.txt",
+            sourceMtime=123.0,
+            sha256="b7a8a844a613be796bc1892dc480f9d92c50d32a5713a87758e5c5addc4ec814",
+            authorization="Bearer bpr_token",
+        )
+    )
+
+    assert result == {"ok": True, "file": {"id": "file-1", "url": "http://localhost:8000/api/files/file-1.txt"}}
+    assert captured["verify"] == ("session-1", "bpr_token")
+    assert captured["save"]["session_id"] == "session-1"
+    assert captured["save"]["source"] == "browser_download"
+    assert captured["save"]["filename"] == "report.txt"
+    assert captured["save"]["content_type"] == "text/plain"
+    assert captured["save"]["source_id"] == "guid-1"
+    assert captured["save"]["source_path"] == "/home/seluser/Downloads/report.txt"
+    assert captured["save"]["source_mtime"] == 123.0
+    assert captured["save"]["sha256"] == "b7a8a844a613be796bc1892dc480f9d92c50d32a5713a87758e5c5addc4ec814"
+    assert captured["heartbeat"] == ("session-1", "running", None)
+
+
+def test_ingest_route_rejects_bad_runtime_token(monkeypatch):
+    async def fake_verify(_session_id, _raw_token):
+        raise file_capture.HTTPException(401, "Invalid runtime token")
+
+    monkeypatch.setattr(file_capture, "verify_file_capture_token", fake_verify)
+
+    upload = UploadFile(filename="report.txt", file=io.BytesIO(b"downloaded"))
+    with pytest.raises(file_capture.HTTPException) as exc:
+        asyncio.run(
+            files.ingest_session_file(
+                "session-1",
+                file=upload,
+                authorization="Bearer wrong",
+            )
+        )
+
+    assert exc.value.status_code == 401

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import mimetypes
 import re
 import uuid
@@ -33,16 +34,27 @@ def _file_url(file_id: str, filename: str) -> str:
     return f"{API_BASE_URL.rstrip()}/api/files/{file_id}{suffix}"
 
 
+def _row_value(row: Any, key: str, default: Any = None) -> Any:
+    try:
+        return row[key]
+    except (KeyError, IndexError, TypeError):
+        return default
+
+
 def _file_dto(row: Any) -> dict[str, Any]:
     name = row["original_name"]
+    uploaded_at = _row_value(row, "uploaded_at")
     return {
         "id": row["id"],
         "name": name,
         "source": row["source"],
+        "sourceId": _row_value(row, "source_id"),
         "contentType": row["content_type"],
         "size": row["size_bytes"],
         "url": _file_url(row["id"], name),
         "storage": row["storage"],
+        "sha256": _row_value(row, "sha256"),
+        "uploadedAt": uploaded_at.isoformat() if uploaded_at else None,
         "createdAt": row["created_at"].isoformat() if row["created_at"] else "",
     }
 
@@ -62,10 +74,27 @@ async def _existing_download(
     source_path: str | None,
     source_mtime: float | None,
     size_bytes: int,
+    source_id: str | None = None,
 ) -> dict[str, Any] | None:
+    pool = get_pool()
+    if source_id:
+        row = await pool.fetchrow(
+            """
+            SELECT * FROM session_files
+            WHERE session_id = $1
+              AND source = $2
+              AND source_id = $3
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            session_id,
+            source,
+            source_id,
+        )
+        if row:
+            return _file_dto(row)
     if not source_path or source_mtime is None:
         return None
-    pool = get_pool()
     row = await pool.fetchrow(
         """
         SELECT * FROM session_files
@@ -93,15 +122,19 @@ async def save_bytes(
     data: bytes,
     filename: str,
     content_type: str | None = None,
+    source_id: str | None = None,
     source_path: str | None = None,
     source_mtime: float | None = None,
+    sha256: str | None = None,
 ) -> dict[str, Any]:
     filename = _safe_filename(filename, "file")
     content_type = content_type or _content_type(filename)
     size_bytes = len(data)
+    sha256 = sha256 or hashlib.sha256(data).hexdigest()
     existing = await _existing_download(
         session_id=session_id,
         source=source,
+        source_id=source_id,
         source_path=source_path,
         source_mtime=source_mtime,
         size_bytes=size_bytes,
@@ -124,8 +157,10 @@ async def save_bytes(
         size_bytes=size_bytes,
         storage=store.storage_name,
         object_key=object_key,
+        source_id=source_id,
         source_path=source_path,
         source_mtime=source_mtime,
+        sha256=sha256,
     )
 
 
@@ -136,15 +171,19 @@ async def save_file(
     path: Path,
     filename: str | None = None,
     content_type: str | None = None,
+    source_id: str | None = None,
     source_path: str | None = None,
     source_mtime: float | None = None,
+    sha256: str | None = None,
 ) -> dict[str, Any]:
     filename = _safe_filename(filename or path.name, "file")
     content_type = content_type or _content_type(filename)
     size_bytes = path.stat().st_size
+    sha256 = sha256 or _sha256_file(path)
     existing = await _existing_download(
         session_id=session_id,
         source=source,
+        source_id=source_id,
         source_path=source_path,
         source_mtime=source_mtime,
         size_bytes=size_bytes,
@@ -167,8 +206,10 @@ async def save_file(
         size_bytes=size_bytes,
         storage=store.storage_name,
         object_key=object_key,
+        source_id=source_id,
         source_path=source_path,
         source_mtime=source_mtime,
+        sha256=sha256,
     )
 
 
@@ -183,17 +224,19 @@ async def _insert_file_record(
     size_bytes: int,
     storage: str,
     object_key: str,
+    source_id: str | None,
     source_path: str | None,
     source_mtime: float | None,
+    sha256: str | None,
 ) -> dict[str, Any]:
     pool = get_pool()
     await pool.execute(
         """
         INSERT INTO session_files (
             id, session_id, tenant_id, source, original_name, content_type,
-            size_bytes, storage, object_key, source_path, source_mtime
+            size_bytes, storage, object_key, source_id, source_path, source_mtime, sha256, uploaded_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW())
         ON CONFLICT DO NOTHING
         """,
         file_id,
@@ -205,8 +248,10 @@ async def _insert_file_record(
         size_bytes,
         storage,
         object_key,
+        source_id,
         source_path,
         source_mtime,
+        sha256,
     )
     row = await pool.fetchrow("SELECT * FROM session_files WHERE id = $1", file_id)
     if row:
@@ -214,6 +259,7 @@ async def _insert_file_record(
     existing = await _existing_download(
         session_id=session_id,
         source=source,
+        source_id=source_id,
         source_path=source_path,
         source_mtime=source_mtime,
         size_bytes=size_bytes,
@@ -249,3 +295,11 @@ async def get_file_payload(file_id: str, user: CurrentUser) -> tuple[bytes, str]
 
     store = await get_store()
     return await store.get_by_key(row["object_key"])
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()

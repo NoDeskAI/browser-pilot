@@ -18,6 +18,8 @@ services:
       PROJECT_ROOT: /app
       DATABASE_URL: postgresql://${POSTGRES_USER:?copy .env.example to .env and set POSTGRES_USER}:${POSTGRES_PASSWORD:?copy .env.example to .env and set POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:?copy .env.example to .env and set POSTGRES_DB}
       DOCKER_HOST_ADDR: host.docker.internal
+      BROWSER_RUNTIME_BACKEND_URL: ${BROWSER_RUNTIME_BACKEND_URL:-http://host.docker.internal:8000}
+      BP_LEGACY_DOCKER_DOWNLOAD_WATCHER: ${BP_LEGACY_DOCKER_DOWNLOAD_WATCHER:-false}
       NETWORK_EGRESS_DOCKER_NETWORK: ${NETWORK_EGRESS_DOCKER_NETWORK:-browser-pilot-net}
       NETWORK_EGRESS_CONFIG_DIR: ${NETWORK_EGRESS_CONFIG_DIR:-/app/data/network-egress}
       NETWORK_EGRESS_CLASH_IMAGE: ${NETWORK_EGRESS_CLASH_IMAGE:-ghcr.io/metacubex/mihomo:latest}

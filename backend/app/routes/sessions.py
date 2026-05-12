@@ -30,6 +30,7 @@ from app.container import (
 from app.db import get_pool
 from app.device_presets import DEVICE_PRESETS, DEFAULT_PRESET, get_preset
 from app.download_watcher import configure_download_behavior, start_download_watcher, stop_download_watcher
+from app.file_capture import get_file_capture_status, mark_file_capture_status
 from app.fingerprint import (
     PoolEmptyError,
     attach_network_profile,
@@ -52,6 +53,18 @@ async def _activate_file_capture(session_id: str) -> None:
         await configure_download_behavior(session_id)
     except Exception as exc:
         logger.warning("Download behavior configuration failed for %s: %s", session_id, exc)
+
+
+async def _file_capture_payload(session_id: str, *, container_status: str | None = None) -> dict[str, Any]:
+    try:
+        return await get_file_capture_status(session_id, container_status=container_status)
+    except Exception as exc:
+        return {
+            "status": "unavailable",
+            "lastHeartbeatAt": None,
+            "lastError": str(exc),
+            "warnings": ["file_capture_status_unavailable"],
+        }
 
 
 async def _verify_session_tenant(session_id: str, user: CurrentUser) -> None:
@@ -479,6 +492,7 @@ async def list_sessions(user: CurrentUser = Depends(get_current_user)):
             "proxyUrl": _session_proxy_url(r),
             "fingerprintProfile": fp_response,
             "browserLang": r["browser_lang"] or "zh-CN",
+            "fileCapture": await _file_capture_payload(sid, container_status=container_status),
             **egress_payload,
         }
 
@@ -598,6 +612,7 @@ async def get_session(session_id: str, user: CurrentUser = Depends(get_session_a
             pass
     egress_payload = _egress_payload_from_row(row)
     fp_response = await _with_runtime_health(session_id, fp)
+    container_status = await get_container_status(session_id)
     _apply_fingerprint_readiness(
         fp_response,
         egress_type=egress_payload["networkEgressType"],
@@ -614,6 +629,7 @@ async def get_session(session_id: str, user: CurrentUser = Depends(get_session_a
         "proxyUrl": _session_proxy_url(row),
         "fingerprintProfile": fp_response,
         "browserLang": row["browser_lang"] or "zh-CN",
+        "fileCapture": await _file_capture_payload(session_id, container_status=container_status),
         **egress_payload,
     }
 
@@ -677,7 +693,12 @@ async def start_session_container(session_id: str, user: CurrentUser = Depends(g
         )
         if row:
             _apply_row_fingerprint_readiness(fp, row)
-        return {"ok": True, "ports": ports, "fingerprintProfile": fp}
+        return {
+            "ok": True,
+            "ports": ports,
+            "fingerprintProfile": fp,
+            "fileCapture": await _file_capture_payload(session_id, container_status="running"),
+        }
     except Exception as exc:
         logger.error("Container start failed for %s: %s", session_id, exc)
         return {"ok": False, "error": str(exc)}
@@ -689,6 +710,7 @@ async def stop_session_container(session_id: str, user: CurrentUser = Depends(ge
     try:
         await stop_download_watcher(session_id)
         await stop_container(session_id)
+        await mark_file_capture_status(session_id, "unavailable", "container_stopped")
         return {"ok": True}
     except Exception as exc:
         logger.error("Container stop failed for %s: %s", session_id, exc)
@@ -701,6 +723,7 @@ async def pause_session_container(session_id: str, user: CurrentUser = Depends(g
     try:
         await stop_download_watcher(session_id)
         await pause_container(session_id)
+        await mark_file_capture_status(session_id, "unavailable", "container_paused")
         return {"ok": True}
     except Exception as exc:
         logger.error("Container pause failed for %s: %s", session_id, exc)
@@ -732,7 +755,12 @@ async def unpause_session_container(session_id: str, user: CurrentUser = Depends
         )
         if row:
             _apply_row_fingerprint_readiness(fp, row)
-        return {"ok": True, "ports": ports, "fingerprintProfile": fp}
+        return {
+            "ok": True,
+            "ports": ports,
+            "fingerprintProfile": fp,
+            "fileCapture": await _file_capture_payload(session_id, container_status="running"),
+        }
     except Exception as exc:
         logger.error("Container unpause failed for %s: %s", session_id, exc)
         return {"ok": False, "error": str(exc)}

@@ -105,9 +105,41 @@ class SessionFile(Base):
     size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
     storage: Mapped[str] = mapped_column(Text, nullable=False)
     object_key: Mapped[str] = mapped_column(Text, nullable=False)
+    source_id: Mapped[str | None] = mapped_column(Text)
+    sha256: Mapped[str | None] = mapped_column(Text)
     source_path: Mapped[str | None] = mapped_column(Text)
     source_mtime: Mapped[float | None] = mapped_column(Float)
+    uploaded_at: Mapped[datetime | None] = mapped_column()
     created_at: Mapped[datetime] = mapped_column(
+        nullable=False, server_default=func.now()
+    )
+
+
+class SessionRuntimeToken(Base):
+    __tablename__ = "session_runtime_tokens"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    session_id: Mapped[str] = mapped_column(Text, ForeignKey("sessions.id"), nullable=False)
+    tenant_id: Mapped[str | None] = mapped_column(Text)
+    purpose: Mapped[str] = mapped_column(Text, nullable=False)
+    token_hash: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
+    expires_at: Mapped[datetime | None] = mapped_column()
+    revoked_at: Mapped[datetime | None] = mapped_column()
+    last_used_at: Mapped[datetime | None] = mapped_column()
+    created_at: Mapped[datetime] = mapped_column(
+        nullable=False, server_default=func.now()
+    )
+
+
+class SessionRuntimeStatus(Base):
+    __tablename__ = "session_runtime_status"
+
+    session_id: Mapped[str] = mapped_column(Text, ForeignKey("sessions.id"), primary_key=True)
+    purpose: Mapped[str] = mapped_column(Text, primary_key=True)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    last_heartbeat_at: Mapped[datetime | None] = mapped_column()
+    last_error: Mapped[str | None] = mapped_column(Text)
+    updated_at: Mapped[datetime] = mapped_column(
         nullable=False, server_default=func.now()
     )
 

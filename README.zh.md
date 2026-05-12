@@ -120,6 +120,8 @@ cp .env.example .env
 | `MINIO_ENDPOINT`      | `start.sh` 使用 `http://localhost:9000`；Docker Compose 使用 `http://minio:9000` | 后端访问内置 MinIO/S3 服务的 endpoint。                               |
 | `SELENIUM_BASE_IMAGE` | `selenium/standalone-chrome:latest`                            | 浏览器容器基础镜像。ARM 用户使用 `seleniarm/standalone-chromium:latest`             |
 | `DOCKER_HOST_ADDR`    | `localhost`                                                    | 后端访问浏览器容器的地址。Docker 部署时设为 `host.docker.internal`（docker-compose 自动配置） |
+| `BROWSER_RUNTIME_BACKEND_URL` | `http://host.docker.internal:8000` | 注入浏览器 runtime agent 的后端地址，用于回传文件 ingest API。 |
+| `BP_LEGACY_DOCKER_DOWNLOAD_WATCHER` | `false` | 旧 Selenium 镜像没有 `file-capture-agent` 时的临时 fallback；启用后后端会使用 Docker copy 命令并返回 degraded warning。 |
 | `OPENAI_API_KEY`      | —                                                              | 可选。设置后会用 LLM 在首次导航时自动命名会话，未设置则以页面标题命名                                 |
 | `LOG_LEVEL`           | `INFO`                                                         | 后端日志级别。排查问题时可设为 `DEBUG`                                               |
 | `NETWORK_EGRESS_DOCKER_NETWORK` | `browser-pilot-net` | 浏览器容器和托管网络出口容器共用的 Docker bridge 网络。 |
@@ -132,6 +134,8 @@ cp .env.example .env
 ### 文件存储
 
 Docker Compose 会启动内置 MinIO，并在后端首次启动时把它作为普通 S3 兼容存储写入设置。设置页仍只展示 **S3 存储** 和 **内置存储** 两种方式。要切换 AWS S3、Cloudflare R2、OSS 或其他 S3 兼容服务，直接在同一个 S3 表单中修改配置；已有数据库配置不会被 Compose 默认值覆盖。
+
+浏览器下载由 Selenium/Chrome runtime 内的 `file-capture-agent` 捕获。agent 监听 Chrome 下载完成事件，把完成后的文件上传到后端 ingest API；S3/Builtin 存储凭据只保留在后端。旧版后端 Docker watcher 默认关闭，只应在旧浏览器镜像没有 runtime agent 时临时启用。
 
 ### 数据库迁移
 
