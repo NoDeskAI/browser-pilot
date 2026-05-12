@@ -20,6 +20,7 @@ from app.tools.browser.session import (
     quick_observe,
     wd_fetch,
 )
+from app.tools.vision.ui_detector import attach_dom_hints, build_mixed_candidates, ui_detector
 
 logger = logging.getLogger("routes.browser")
 
@@ -38,6 +39,10 @@ router = APIRouter()
 
 class SessionBody(BaseModel):
     sessionId: str
+    mode: str = "dom"
+    maxCandidates: int = Field(default=40, ge=1, le=500)
+    threshold: float = Field(default=0.05, ge=0.0, le=1.0)
+    includeScreenshot: bool = False
 
 
 class NavigateBody(BaseModel):
@@ -129,12 +134,70 @@ async def api_current(sessionId: str = Query(...), user: CurrentUser = Depends(g
 async def api_observe(body: SessionBody, user: CurrentUser = Depends(get_session_aware_user)):
     await verify_session_access(body.sessionId, user)
     try:
+        mode = (body.mode or "dom").strip().lower()
+        if mode not in {"dom", "vision", "mix"}:
+            return {"ok": False, "error": 'observe mode must be one of: "dom", "vision", "mix"'}
+
         async with browser_session(body.sessionId) as (sid, base):
-            result = await wd_fetch(
-                f"/session/{sid}/execute/sync", "POST",
-                {"script": OBSERVE_SCRIPT, "args": []},
-                base_url=base,
-            )
+            result = {}
+            screenshot_base64 = None
+            vision_result = None
+
+            if mode in {"dom", "mix"}:
+                result = await wd_fetch(
+                    f"/session/{sid}/execute/sync", "POST",
+                    {"script": OBSERVE_SCRIPT, "args": []},
+                    base_url=base,
+                )
+
+            if mode in {"vision", "mix"} or body.includeScreenshot:
+                screenshot_base64 = await wd_fetch(f"/session/{sid}/screenshot", base_url=base)
+
+            if mode == "vision":
+                url = await wd_fetch(f"/session/{sid}/url", timeout=5, base_url=base)
+                title = await wd_fetch(f"/session/{sid}/title", timeout=5, base_url=base)
+                vision_result = await asyncio.to_thread(
+                    ui_detector.detect_base64,
+                    screenshot_base64,
+                    max_candidates=body.maxCandidates,
+                    threshold=body.threshold,
+                )
+                result = {
+                    "url": url,
+                    "title": title,
+                    "mode": mode,
+                    "viewport": vision_result.viewport,
+                    "visionCandidates": vision_result.candidates,
+                    "trace": vision_result.trace,
+                }
+
+            if mode == "mix":
+                elements = (result or {}).get("elements", []) if isinstance(result, dict) else []
+                vision_result = await asyncio.to_thread(
+                    ui_detector.detect_base64,
+                    screenshot_base64,
+                    max_candidates=body.maxCandidates,
+                    threshold=body.threshold,
+                )
+                vision_candidates = attach_dom_hints(vision_result.candidates, elements)
+                result = {
+                    **(result if isinstance(result, dict) else {}),
+                    "mode": mode,
+                    "viewport": vision_result.viewport,
+                    "visionCandidates": vision_candidates,
+                    "mixedCandidates": build_mixed_candidates(
+                        elements=elements,
+                        vision_candidates=vision_candidates,
+                        max_candidates=body.maxCandidates,
+                    ),
+                    "trace": vision_result.trace,
+                }
+
+            if mode == "dom" and isinstance(result, dict):
+                result["mode"] = mode
+
+            if body.includeScreenshot and screenshot_base64 and isinstance(result, dict):
+                result["screenshot"] = screenshot_base64
         if isinstance(result, dict):
             asyncio.create_task(_update_session_page(body.sessionId, result.get("url"), result.get("title")))
         return {"ok": True, **(result if isinstance(result, dict) else {})}

@@ -301,7 +301,18 @@ cmd_navigate() {
 }
 
 cmd_observe() {
-  _api_post "/api/browser/observe" "{\"sessionId\":\"$(_sid)\"}" | _out
+  local mode="dom" max_candidates="40" threshold="0.05" include_screenshot="false"
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --mode) mode="${2:-dom}"; shift 2 ;;
+      --max-candidates) max_candidates="${2:-40}"; shift 2 ;;
+      --threshold) threshold="${2:-0.05}"; shift 2 ;;
+      --include-screenshot) include_screenshot="true"; shift ;;
+      *) echo "Unknown observe option: $1"; exit 1 ;;
+    esac
+  done
+  _api_post "/api/browser/observe" \
+    "{\"sessionId\":\"$(_sid)\",\"mode\":\"$(_esc "$mode")\",\"maxCandidates\":$max_candidates,\"threshold\":$threshold,\"includeScreenshot\":$include_screenshot}" | _out
 }
 
 cmd_click() {
@@ -567,7 +578,7 @@ Session target:
 
 Browser (require active session):
   navigate <url>               Go to URL
-  observe                      Get page elements with coordinates
+  observe [--mode dom|vision|mix] Get DOM elements, vision boxes, or both
   click <x> <y>                Click at coordinates
   click-element <selector>     Click by CSS selector
   type <text>                  Type into focused input
