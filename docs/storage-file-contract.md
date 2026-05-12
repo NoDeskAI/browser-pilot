@@ -87,10 +87,12 @@ CLI 输出应能区分：
 
 用户在 noVNC/Chrome 内点击下载时，文件不能只停留在 `/home/seluser/Downloads`。
 
+这里的 `download watcher` 指后端为每个运行中的 session 启动的后台同步任务。它只负责观察 Chrome 下载目录，判断文件是否已经下载完成，然后把完成后的文件交给 FileStore 保存。它不是一个新的存储系统，也不直接依赖某个 S3 vendor。
+
 目标流程：
 
 1. Chrome 下载到 session-local download staging 目录。
-2. 后端或容器内 watcher 发现下载完成。
+2. 后端 download watcher 发现下载完成。
 3. 上传到 FileStore/S3。
 4. 在 session 文件列表或 API 中暴露文件记录。
 5. 如需保留容器内文件，只能作为缓存副本，并需要清理策略。
@@ -117,7 +119,7 @@ FileStore 是文件产物的唯一持久化抽象。
 - 保存文件 bytes。
 - 保存 content type、文件名、sessionId、createdAt、size 等元数据。
 - 返回统一下载 URL。
-- 对 S3 模式隐藏内部 endpoint，例如不能向浏览器暴露 `http://minio:9000/...`。
+- 对 S3 模式隐藏内部 endpoint，例如不能向浏览器暴露任何部署内部对象存储地址。
 - 支持后端代理下载 `/api/files/...`。
 
 S3 模式下，S3 对象 key 建议包含 session 维度：
@@ -149,7 +151,7 @@ API 可以后续设计，但不应要求用户进入容器查找文件。
 - 浏览器内下载文件后，S3 中存在对象。
 - 容器 `/home/seluser/Downloads` 中的文件不能是唯一副本。
 - 前端或 API 能看到下载文件记录。
-- 文件 URL 统一走后端 `/api/files/...`，不能暴露 `http://minio:9000`。
+- 文件 URL 统一走后端 `/api/files/...`，不能暴露 S3 provider 的内部 endpoint。
 - Builtin 模式也走同一套 FileStore 抽象，只是底层存储不同。
 
 ## 非目标
@@ -167,7 +169,7 @@ API 可以后续设计，但不应要求用户进入容器查找文件。
 - CLI `-o` 先让后端写入 FileStore，再通过 `file.url` 下载一个本地副本。
 - 浏览器下载通过 session download watcher 上传到 FileStore，并写入 `session_files`。
 - `GET /api/sessions/{sessionId}/files` 返回当前 session 的文件记录。
-- 文件下载 URL 统一通过后端 `/api/files/...` 代理，不暴露 MinIO 内部地址。
+- 文件下载 URL 统一通过后端 `/api/files/...` 代理，不暴露 S3 provider 内部地址。
 
 后续仍需单独设计：
 

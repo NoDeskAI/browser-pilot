@@ -263,14 +263,14 @@ async def _noop_async():
     return None
 
 
-def test_default_minio_storage_config_uses_minio_env(monkeypatch):
-    monkeypatch.setattr(db.config, "MINIO_STORAGE_BOOTSTRAP", True)
-    monkeypatch.setattr(db.config, "MINIO_ROOT_USER", "browserpilot")
-    monkeypatch.setattr(db.config, "MINIO_ROOT_PASSWORD", "secret")
-    monkeypatch.setattr(db.config, "MINIO_BUCKET", "browser-pilot")
-    monkeypatch.setattr(db.config, "MINIO_ENDPOINT", "http://localhost:9000")
+def test_default_s3_storage_config_uses_bundled_s3_config(monkeypatch):
+    monkeypatch.setattr(db.config, "BUNDLED_S3_STORAGE_BOOTSTRAP", True)
+    monkeypatch.setattr(db.config, "BUNDLED_S3_ACCESS_KEY", "browserpilot")
+    monkeypatch.setattr(db.config, "BUNDLED_S3_SECRET_KEY", "secret")
+    monkeypatch.setattr(db.config, "BUNDLED_S3_BUCKET", "browser-pilot")
+    monkeypatch.setattr(db.config, "BUNDLED_S3_ENDPOINT", "http://localhost:9000")
 
-    config = db._default_minio_storage_config()
+    config = db._default_s3_storage_config()
 
     assert config == {
         "storage": "s3",
@@ -284,10 +284,10 @@ def test_default_minio_storage_config_uses_minio_env(monkeypatch):
     }
 
 
-def test_default_minio_storage_config_skips_without_bootstrap(monkeypatch):
-    monkeypatch.setattr(db.config, "MINIO_STORAGE_BOOTSTRAP", False)
+def test_default_s3_storage_config_skips_without_bootstrap(monkeypatch):
+    monkeypatch.setattr(db.config, "BUNDLED_S3_STORAGE_BOOTSTRAP", False)
 
-    assert db._default_minio_storage_config() is None
+    assert db._default_s3_storage_config() is None
 
 
 def test_ensure_default_storage_config_does_not_override_existing(monkeypatch):
@@ -305,7 +305,7 @@ def test_ensure_default_storage_config_does_not_override_existing(monkeypatch):
     db._pool = pool
     monkeypatch.setattr(
         db,
-        "_default_minio_storage_config",
+        "_default_s3_storage_config",
         lambda: {"storage": "s3", "s3Bucket": "browser-pilot"},
     )
 
@@ -320,7 +320,7 @@ def test_ensure_default_storage_config_preserves_builtin(monkeypatch):
     db._pool = pool
     monkeypatch.setattr(
         db,
-        "_default_minio_storage_config",
+        "_default_s3_storage_config",
         lambda: {"storage": "s3", "s3Bucket": "browser-pilot"},
     )
 
@@ -344,7 +344,7 @@ def test_ensure_default_storage_config_repairs_empty_s3_config(monkeypatch):
     db._pool = pool
     monkeypatch.setattr(
         db,
-        "_default_minio_storage_config",
+        "_default_s3_storage_config",
         lambda: {"storage": "s3", "s3Bucket": "browser-pilot", "s3Endpoint": "http://localhost:9000"},
     )
 
@@ -362,7 +362,7 @@ def test_ensure_default_storage_config_inserts_when_missing(monkeypatch):
     db._pool = pool
     monkeypatch.setattr(
         db,
-        "_default_minio_storage_config",
+        "_default_s3_storage_config",
         lambda: {"storage": "s3", "s3Bucket": "browser-pilot"},
     )
 

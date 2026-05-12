@@ -51,11 +51,11 @@ alwaysApply: true
 | `POSTGRES_USER` | docker-compose.yml/start.sh | 无 Compose/start.sh 默认；从 `.env` / 环境变量读取，`.env.example` 仅提供本地开发示例 | PG 用户名 |
 | `POSTGRES_PASSWORD` | docker-compose.yml/start.sh | 无 Compose/start.sh 默认；从 `.env` / 环境变量读取，`.env.example` 仅提供本地开发示例 | PG 密码 |
 | `POSTGRES_DB` | docker-compose.yml/start.sh | 无 Compose/start.sh 默认；从 `.env` / 环境变量读取，`.env.example` 仅提供本地开发示例 | PG 数据库名 |
-| `MINIO_STORAGE_BOOTSTRAP` | config.py/docker-compose.yml/start.sh | Docker Compose/start.sh 设为 `true` | 是否在首次 DB 初始化或旧空 S3 配置修复时预置内置 MinIO 为默认 S3 存储 |
-| `MINIO_ROOT_USER` | config.py/docker-compose.yml/start.sh | 无 Compose/start.sh 默认；从 `.env` / 环境变量读取，`.env.example` 仅提供本地开发示例 | 内置 MinIO root 用户名 |
-| `MINIO_ROOT_PASSWORD` | config.py/docker-compose.yml/start.sh | 无 Compose/start.sh 默认；从 `.env` / 环境变量读取，`.env.example` 仅提供本地开发示例 | 内置 MinIO root 密码 |
-| `MINIO_BUCKET` | config.py/docker-compose.yml/start.sh | 无 Compose/start.sh 默认；从 `.env` / 环境变量读取，`.env.example` 仅提供本地开发示例 | 内置 MinIO 默认 bucket |
-| `MINIO_ENDPOINT` | config.py/docker-compose.yml/start.sh | 本地 `http://localhost:9000`；Docker Compose backend 覆盖为 `http://minio:9000` | 后端访问内置 MinIO/S3 服务的 endpoint |
+| `MINIO_STORAGE_BOOTSTRAP` | config.py/docker-compose.yml/start.sh | Docker Compose/start.sh 设为 `true` | 是否在首次 DB 初始化或旧空 S3 配置修复时预置内置 S3 兼容存储 |
+| `MINIO_ROOT_USER` | config.py/docker-compose.yml/start.sh | 无 Compose/start.sh 默认；从 `.env` / 环境变量读取，`.env.example` 仅提供本地开发示例 | 内置 S3 兼容对象存储 root 用户名 |
+| `MINIO_ROOT_PASSWORD` | config.py/docker-compose.yml/start.sh | 无 Compose/start.sh 默认；从 `.env` / 环境变量读取，`.env.example` 仅提供本地开发示例 | 内置 S3 兼容对象存储 root 密码 |
+| `MINIO_BUCKET` | config.py/docker-compose.yml/start.sh | 无 Compose/start.sh 默认；从 `.env` / 环境变量读取，`.env.example` 仅提供本地开发示例 | 内置 S3 兼容对象存储默认 bucket |
+| `MINIO_ENDPOINT` | config.py/docker-compose.yml/start.sh | 本地 `http://localhost:9000`；Docker Compose backend 覆盖为容器内对象存储地址 | 后端访问内置 S3 兼容对象存储的 endpoint |
 
 ## 数据库密码规则
 

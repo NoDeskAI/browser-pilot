@@ -27,7 +27,7 @@ def test_get_storage_settings_masks_secret(monkeypatch):
             "s3Region": "us-east-1",
             "s3AccessKey": "browserpilot",
             "s3SecretKey": "secret",
-            "s3Endpoint": "http://minio:9000",
+            "s3Endpoint": "http://object-storage:9000",
             "s3Presign": True,
             "s3PresignExpires": 3600,
         }
@@ -48,7 +48,7 @@ def test_save_storage_settings_reuses_existing_secret(monkeypatch):
             "s3Region": "us-east-1",
             "s3AccessKey": "old-access",
             "s3SecretKey": "old-secret",
-            "s3Endpoint": "http://minio:9000",
+            "s3Endpoint": "http://object-storage:9000",
             "s3Presign": True,
             "s3PresignExpires": 3600,
         }

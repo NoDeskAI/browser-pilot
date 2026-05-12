@@ -303,15 +303,15 @@ async def _attempt_init(database_url: str, attempt: int) -> str:
         return "retry"
 
 
-def _default_minio_storage_config() -> dict[str, Any] | None:
-    if not config.MINIO_STORAGE_BOOTSTRAP:
+def _default_s3_storage_config() -> dict[str, Any] | None:
+    if not config.BUNDLED_S3_STORAGE_BOOTSTRAP:
         return None
     missing = [
         key
         for key, value in {
-            "MINIO_ROOT_USER": config.MINIO_ROOT_USER,
-            "MINIO_ROOT_PASSWORD": config.MINIO_ROOT_PASSWORD,
-            "MINIO_BUCKET": config.MINIO_BUCKET,
+            "BUNDLED_S3_ACCESS_KEY": config.BUNDLED_S3_ACCESS_KEY,
+            "BUNDLED_S3_SECRET_KEY": config.BUNDLED_S3_SECRET_KEY,
+            "BUNDLED_S3_BUCKET": config.BUNDLED_S3_BUCKET,
         }.items()
         if not value
     ]
@@ -320,17 +320,17 @@ def _default_minio_storage_config() -> dict[str, Any] | None:
         return None
     return {
         "storage": "s3",
-        "s3Bucket": config.MINIO_BUCKET,
-        "s3Region": config.MINIO_REGION,
-        "s3AccessKey": config.MINIO_ROOT_USER,
-        "s3SecretKey": config.MINIO_ROOT_PASSWORD,
-        "s3Endpoint": config.MINIO_ENDPOINT,
+        "s3Bucket": config.BUNDLED_S3_BUCKET,
+        "s3Region": config.BUNDLED_S3_REGION,
+        "s3AccessKey": config.BUNDLED_S3_ACCESS_KEY,
+        "s3SecretKey": config.BUNDLED_S3_SECRET_KEY,
+        "s3Endpoint": config.BUNDLED_S3_ENDPOINT,
         "s3Presign": True,
         "s3PresignExpires": 3600,
     }
 
 
-def _storage_config_needs_minio_repair(storage_config: dict[str, Any]) -> bool:
+def _storage_config_needs_default_s3_repair(storage_config: dict[str, Any]) -> bool:
     if not storage_config:
         return True
     mode = storage_config.get("storage")
@@ -353,7 +353,7 @@ def _storage_config_needs_minio_repair(storage_config: dict[str, Any]) -> bool:
 async def _ensure_default_storage_config() -> None:
     if _pool is None:
         return
-    storage_config = _default_minio_storage_config()
+    storage_config = _default_s3_storage_config()
     if not storage_config:
         return
     try:
@@ -365,7 +365,7 @@ async def _ensure_default_storage_config() -> None:
         if row:
             value = row.get("value") if hasattr(row, "get") else row["value"]
             existing = value if isinstance(value, dict) else json.loads(value or "{}")
-            if not _storage_config_needs_minio_repair(existing):
+            if not _storage_config_needs_default_s3_repair(existing):
                 return
             action = "repaired"
         await _pool.execute(

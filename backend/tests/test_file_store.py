@@ -47,7 +47,7 @@ def test_s3_store_returns_backend_file_url_and_can_read(monkeypatch):
         region="us-east-1",
         access_key="browserpilot",
         secret_key="secret",
-        endpoint="http://minio:9000",
+        endpoint="http://object-storage:9000",
         presign=True,
         presign_expires=3600,
         base_url="http://localhost:8000",
@@ -59,7 +59,7 @@ def test_s3_store_returns_backend_file_url_and_can_read(monkeypatch):
     loaded = asyncio.run(store.get(file_id))
 
     assert saved["url"].startswith("http://localhost:8000/api/files/")
-    assert "minio:9000" not in saved["url"]
+    assert "object-storage:9000" not in saved["url"]
     assert loaded == (b"png-bytes", "image/png")
 
 

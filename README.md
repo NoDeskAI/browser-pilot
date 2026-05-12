@@ -70,7 +70,7 @@ graph TB
   subgraph compose ["docker compose up"]
     Backend["backend:8000 — FastAPI + Web UI"]
     Postgres["postgres:5432"]
-    MinIO["minio:9000 — S3-compatible storage"]
+    ObjectStore["S3-compatible object storage"]
   end
   subgraph dynamic ["Created on demand"]
     B1["bp-xxx — Chrome + Selenium"]
@@ -81,7 +81,7 @@ graph TB
   CLI["bpilot CLI"] -->|"REST API"| Backend
   Backend -->|"Docker socket"| dynamic
   Backend --> Postgres
-  Backend --> MinIO
+  Backend --> ObjectStore
 ```
 
 
@@ -110,7 +110,7 @@ cp .env.example .env
 ./start.sh status   # check process status
 ```
 
-This starts PostgreSQL and MinIO in Docker, initializes the default bucket, builds the Selenium image, and runs the backend (uvicorn, port 8000) + frontend dev server (Vite, port 9874) on the host.
+This starts PostgreSQL and bundled S3-compatible object storage in Docker, initializes the default bucket, builds the Selenium image, and runs the backend (uvicorn, port 8000) + frontend dev server (Vite, port 9874) on the host.
 
 ## Configuration
 
@@ -121,10 +121,10 @@ This starts PostgreSQL and MinIO in Docker, initializes the default bucket, buil
 | `POSTGRES_USER`       | Required in `.env`; see `.env.example`                         | PostgreSQL user used by Docker Compose and local development.                                                                      |
 | `POSTGRES_PASSWORD`   | Required in `.env`; see `.env.example`                         | PostgreSQL password. Change it before production/public deployment.                                                                |
 | `POSTGRES_DB`         | Required in `.env`; see `.env.example`                         | PostgreSQL database name.                                                                                                         |
-| `MINIO_ROOT_USER`     | Required in `.env`; see `.env.example`                         | Root user for the built-in MinIO service used as the default S3-compatible storage backend.                                        |
-| `MINIO_ROOT_PASSWORD` | Required in `.env`; see `.env.example`                         | Root password for the built-in MinIO service. Change it before production/public deployment.                                      |
+| `MINIO_ROOT_USER`     | Required in `.env`; see `.env.example`                         | Root user for the bundled S3-compatible storage service.                                                                           |
+| `MINIO_ROOT_PASSWORD` | Required in `.env`; see `.env.example`                         | Root password for the bundled S3-compatible storage service. Change it before production/public deployment.                       |
 | `MINIO_BUCKET`        | Required in `.env`; see `.env.example`                         | Bucket created automatically by Docker Compose and preconfigured as the default S3 storage bucket.                                |
-| `MINIO_ENDPOINT`      | `http://localhost:9000` for `start.sh`; `http://minio:9000` in Docker Compose | Endpoint used by the backend to reach the built-in MinIO/S3 service.                                                 |
+| `MINIO_ENDPOINT`      | `http://localhost:9000` for `start.sh`; container-internal endpoint in Docker Compose | Endpoint used by the backend to reach the bundled S3-compatible storage service.                                      |
 | `SELENIUM_BASE_IMAGE` | `selenium/standalone-chrome:latest`                            | Base image for browser containers. ARM users: `seleniarm/standalone-chromium:latest`                                               |
 | `DOCKER_HOST_ADDR`    | `localhost`                                                    | How the backend reaches browser containers. Set to `host.docker.internal` in Docker deployment (auto-configured by docker-compose) |
 | `OPENAI_API_KEY`      | —                                                              | Optional. When set, uses LLM to auto-name sessions on first navigation. Without it, sessions are named by page title.              |
@@ -140,7 +140,7 @@ This starts PostgreSQL and MinIO in Docker, initializes the default bucket, buil
 
 ### File storage
 
-Docker Compose starts a built-in MinIO service and preconfigures it as regular S3-compatible storage on first backend startup. The storage settings page still only exposes two modes: **S3 Storage** and **Built-in Storage**. To use AWS S3, Cloudflare R2, OSS, or another S3-compatible provider, edit the S3 fields in the settings page; existing database settings are never overwritten by the Compose defaults.
+Docker Compose starts a bundled S3-compatible object storage service and preconfigures it as regular S3 storage on first backend startup. The storage settings page still only exposes two modes: **S3 Storage** and **Built-in Storage**. To use AWS S3, Cloudflare R2, OSS, or another S3-compatible provider, edit the S3 fields in the settings page; existing database settings are never overwritten by the Compose defaults.
 
 ### Database migrations
 

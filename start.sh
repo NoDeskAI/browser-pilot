@@ -88,11 +88,11 @@ _ensure_postgres() {
     echo "[postgres] ready"
 }
 
-_ensure_minio() {
-    echo "[minio] 确保 MinIO 运行中..."
+_ensure_object_storage() {
+    echo "[s3] 确保内置 S3 兼容对象存储运行中..."
     docker compose up -d minio
     docker compose up minio-init
-    echo "[minio] ready"
+    echo "[s3] ready"
 }
 
 _infer_postgres_env_from_database_url() {
@@ -152,7 +152,7 @@ _require_database_env() {
     if (( ${#missing[@]} > 0 )); then
         echo "缺少启动配置: ${missing[*]}" >&2
         echo "请先执行: cp .env.example .env" >&2
-        echo "然后按需修改 .env 中的 DATABASE_URL、POSTGRES_*、MINIO_*。" >&2
+        echo "然后按需修改 .env 中的 DATABASE_URL、POSTGRES_*、MINIO_*（内置 S3 兼容对象存储）。" >&2
         exit 1
     fi
 }
@@ -162,7 +162,7 @@ _start_processes() {
     export MINIO_STORAGE_BOOTSTRAP="${MINIO_STORAGE_BOOTSTRAP:-true}"
     export MINIO_ENDPOINT="${MINIO_ENDPOINT:-http://localhost:9000}"
     _ensure_postgres
-    _ensure_minio
+    _ensure_object_storage
 
     : > "$BACKEND_LOG"
     : > "$FRONTEND_LOG"

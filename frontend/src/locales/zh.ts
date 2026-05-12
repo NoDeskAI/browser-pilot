@@ -232,7 +232,7 @@ export default {
     tenants: '租户管理',
     storageMode: '存储方式',
     s3: 'S3 存储',
-    s3Desc: '默认已连接内置 MinIO，也可改为外部 S3 兼容存储。',
+    s3Desc: '默认已预置 S3 兼容存储，也可改为外部 S3 兼容服务。',
     builtin: '内置存储',
     builtinDesc: '文件保存在后端服务内存中，仅适合开发或临时场景。',
     s3Bucket: 'Bucket',

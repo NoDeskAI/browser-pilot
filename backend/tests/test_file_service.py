@@ -117,7 +117,7 @@ def test_save_bytes_creates_file_record_and_backend_url(monkeypatch):
 
     row = pool.rows[result["id"]]
     assert result["url"] == f"http://localhost:8000/api/files/{result['id']}.png"
-    assert "minio:9000" not in result["url"]
+    assert "object-storage:9000" not in result["url"]
     assert row["object_key"] == f"files/session-1/{result['id']}/screenshot.png"
     assert store.objects[row["object_key"]] == (b"png-bytes", "image/png")
 

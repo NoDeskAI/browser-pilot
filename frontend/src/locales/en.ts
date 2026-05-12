@@ -232,7 +232,7 @@ export default {
     tenants: 'Tenants',
     storageMode: 'Storage Mode',
     s3: 'S3 Storage',
-    s3Desc: 'Preconfigured with built-in MinIO by default; can be changed to any S3-compatible storage.',
+    s3Desc: 'Preconfigured with S3-compatible storage by default; can be changed to any external S3-compatible service.',
     builtin: 'Built-in Storage',
     builtinDesc: 'Files are stored in backend memory. Use only for development or temporary storage.',
     s3Bucket: 'Bucket',

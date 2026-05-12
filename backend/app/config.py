@@ -45,7 +45,7 @@ APP_TITLE = _env("APP_TITLE", "Browser Pilot")
 CLI_COMMAND_NAME = _env("CLI_COMMAND_NAME", "bpilot")
 CONTAINER_PREFIX = _env("CONTAINER_PREFIX", "bp")
 
-# --- Built-in MinIO storage bootstrap ---
+# --- Bundled S3-compatible storage bootstrap ---
 
 MINIO_STORAGE_BOOTSTRAP = _env("MINIO_STORAGE_BOOTSTRAP", "").lower() in {"1", "true", "yes", "on"}
 MINIO_ROOT_USER = _env("MINIO_ROOT_USER", "")
@@ -53,6 +53,13 @@ MINIO_ROOT_PASSWORD = _env("MINIO_ROOT_PASSWORD", "")
 MINIO_BUCKET = _env("MINIO_BUCKET", "")
 MINIO_ENDPOINT = _env("MINIO_ENDPOINT", "http://localhost:9000")
 MINIO_REGION = "us-east-1"
+
+BUNDLED_S3_STORAGE_BOOTSTRAP = MINIO_STORAGE_BOOTSTRAP
+BUNDLED_S3_ACCESS_KEY = MINIO_ROOT_USER
+BUNDLED_S3_SECRET_KEY = MINIO_ROOT_PASSWORD
+BUNDLED_S3_BUCKET = MINIO_BUCKET
+BUNDLED_S3_ENDPOINT = MINIO_ENDPOINT
+BUNDLED_S3_REGION = MINIO_REGION
 
 # --- Declared network profile ---
 
