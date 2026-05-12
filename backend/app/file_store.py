@@ -7,12 +7,31 @@ import json
 import logging
 import time
 import uuid
+from pathlib import Path
 from typing import Protocol
 
 logger = logging.getLogger("file_store")
 
 
 class FileStore(Protocol):
+    storage_name: str
+
+    async def save_bytes(
+        self,
+        data: bytes,
+        *,
+        key: str,
+        content_type: str,
+    ) -> None: ...
+
+    async def save_file(
+        self,
+        path: Path,
+        *,
+        key: str,
+        content_type: str,
+    ) -> None: ...
+
     async def save(
         self,
         b64_data: str,
@@ -22,6 +41,8 @@ class FileStore(Protocol):
     ) -> dict: ...
 
     async def get(self, file_id: str) -> tuple[bytes, str] | None: ...
+
+    async def get_by_key(self, key: str) -> tuple[bytes, str] | None: ...
 
 
 def _encode_file_id(key: str) -> str:
@@ -65,6 +86,37 @@ class S3Store:
         self._presign = presign
         self._presign_expires = presign_expires
         self._base_url = base_url.rstrip("/")
+        self.storage_name = "s3"
+
+    async def save_bytes(
+        self,
+        data: bytes,
+        *,
+        key: str,
+        content_type: str,
+    ) -> None:
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(
+            None,
+            lambda: self._client.put_object(
+                Bucket=self._bucket, Key=key, Body=data, ContentType=content_type
+            ),
+        )
+
+    async def save_file(
+        self,
+        path: Path,
+        *,
+        key: str,
+        content_type: str,
+    ) -> None:
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(
+            None,
+            lambda: self._client.upload_file(
+                str(path), self._bucket, key, ExtraArgs={"ContentType": content_type}
+            ),
+        )
 
     async def save(
         self,
@@ -75,13 +127,7 @@ class S3Store:
     ) -> dict:
         raw = base64.b64decode(b64_data)
         key = f"files/{session_id}/{uuid.uuid4().hex[:12]}.{ext}"
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(
-            None,
-            lambda: self._client.put_object(
-                Bucket=self._bucket, Key=key, Body=raw, ContentType=content_type
-            ),
-        )
+        await self.save_bytes(raw, key=key, content_type=content_type)
         file_id = _encode_file_id(key)
         url = f"{self._base_url}/api/files/{file_id}.{ext}"
         return {"type": "url", "url": url}
@@ -90,6 +136,9 @@ class S3Store:
         key = _decode_file_id(file_id)
         if not key:
             return None
+        return await self.get_by_key(key)
+
+    async def get_by_key(self, key: str) -> tuple[bytes, str] | None:
         loop = asyncio.get_running_loop()
         try:
             def fetch():
@@ -107,6 +156,27 @@ class BuiltinStore:
         self._cache: dict[str, tuple[bytes, str, float]] = {}
         self._base_url = base_url.rstrip("/")
         self._ttl = ttl
+        self.storage_name = "builtin"
+
+    async def save_bytes(
+        self,
+        data: bytes,
+        *,
+        key: str,
+        content_type: str,
+    ) -> None:
+        self._cache[key] = (data, content_type, time.time())
+        self._cleanup()
+
+    async def save_file(
+        self,
+        path: Path,
+        *,
+        key: str,
+        content_type: str,
+    ) -> None:
+        self._cache[key] = (path.read_bytes(), content_type, time.time())
+        self._cleanup()
 
     async def save(
         self,
@@ -116,16 +186,20 @@ class BuiltinStore:
         ext: str = "png",
     ) -> dict:
         raw = base64.b64decode(b64_data)
-        fid = uuid.uuid4().hex[:16]
-        self._cache[fid] = (raw, content_type, time.time())
-        self._cleanup()
+        key = f"files/{session_id}/{uuid.uuid4().hex[:12]}.{ext}"
+        await self.save_bytes(raw, key=key, content_type=content_type)
+        fid = _encode_file_id(key)
         return {"type": "url", "url": f"{self._base_url}/api/files/{fid}.{ext}"}
 
     async def get(self, file_id: str) -> tuple[bytes, str] | None:
-        item = self._cache.get(file_id)
+        key = _decode_file_id(file_id) or file_id
+        return await self.get_by_key(key)
+
+    async def get_by_key(self, key: str) -> tuple[bytes, str] | None:
+        item = self._cache.get(key)
         if item and time.time() - item[2] < self._ttl:
             return item[0], item[1]
-        self._cache.pop(file_id, None)
+        self._cache.pop(key, None)
         return None
 
     def _cleanup(self):

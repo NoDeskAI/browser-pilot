@@ -308,6 +308,14 @@ async def ensure_session(chat_session_id: str) -> tuple[str, str]:
         sid = await _ensure_session_impl(bs)
 
     try:
+        from app.download_watcher import configure_download_behavior_for_webdriver, start_download_watcher
+
+        start_download_watcher(chat_session_id)
+        await configure_download_behavior_for_webdriver(chat_session_id, sid, bs.selenium_base)
+    except Exception as exc:
+        logger.debug("Download capture setup skipped: %s", exc)
+
+    try:
         pool = get_pool()
         row = await pool.fetchrow(
             "SELECT device_preset, fingerprint_profile FROM sessions WHERE id = $1", chat_session_id,

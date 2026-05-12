@@ -92,7 +92,7 @@ ${c} scroll <delta_y>                # Scroll page (positive = down)
 ${c} tabs                            # List browser tabs
 ${c} switch-tab --index <n>          # Switch tab
 ${c} page-info                       # Current URL and title
-${c} screenshot -o page.png          # Save screenshot
+${c} screenshot -o page.png          # Store screenshot and export local copy
 ${c} logs                            # View CDP event logs
 
 ## Flags
@@ -142,7 +142,7 @@ ${c} scroll <delta_y>                # 滚动页面（正数 = 向下）
 ${c} tabs                            # 列出浏览器标签页
 ${c} switch-tab --index <n>          # 切换标签页
 ${c} page-info                       # 获取当前页面 URL 和标题
-${c} screenshot -o page.png          # 保存截图
+${c} screenshot -o page.png          # 存入文件存储并导出本地副本
 ${c} logs                            # 查看 CDP 事件日志
 
 ## 通用参数
@@ -221,7 +221,7 @@ ${c} --session "<session-id>" scroll <delta_y>                # Scroll page (pos
 ${c} --session "<session-id>" tabs --json                     # List browser tabs
 ${c} --session "<session-id>" switch-tab --index <n>          # Switch tab
 ${c} --session "<session-id>" page-info --json                # Current URL and title
-${c} --session "<session-id>" screenshot -o page.png          # Save screenshot
+${c} --session "<session-id>" screenshot -o page.png          # Store screenshot and export local copy
 ${c} --session "<session-id>" logs                            # View CDP event logs
 
 ## Flags
@@ -265,7 +265,7 @@ ${c} --session "<session-id>" scroll <delta_y>                # 滚动页面（�
 ${c} --session "<session-id>" tabs --json                     # 列出浏览器标签页
 ${c} --session "<session-id>" switch-tab --index <n>          # 切换标签页
 ${c} --session "<session-id>" page-info --json                # 获取当前页面 URL 和标题
-${c} --session "<session-id>" screenshot -o page.png          # 保存截图
+${c} --session "<session-id>" screenshot -o page.png          # 存入文件存储并导出本地副本
 ${c} --session "<session-id>" logs                            # 查看 CDP 事件日志
 
 ## 通用参数

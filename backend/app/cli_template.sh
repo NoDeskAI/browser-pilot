@@ -102,6 +102,17 @@ _api_get() {
   fi
 }
 
+_download_url() {
+  local url="$1" output="$2"
+  local token
+  token="$(_config_get api_token)"
+  if [[ -n "$token" ]]; then
+    curl -sfS -H "Authorization: Bearer $token" "$url" -o "$output"
+  else
+    curl -sfS "$url" -o "$output"
+  fi
+}
+
 _api_post() {
   local path="$1" body="${2:-{\}}"
   local token
@@ -325,20 +336,24 @@ cmd_screenshot() {
     esac
   done
   local resp
-  resp=$(_api_get "/api/browser/screenshot?sessionId=$(_sid)")
   if [[ -n "$output" ]]; then
-    local b64
-    b64=$(echo "$resp" | grep -o '"screenshot" *: *"[^"]*"' | sed 's/.*: *"//;s/"//')
-    if [[ "$(uname)" == "Darwin" ]]; then
-      echo "$b64" | base64 -D > "$output"
-    else
-      echo "$b64" | base64 -d > "$output"
+    resp=$(_api_get "/api/browser/screenshot?sessionId=$(_sid)&includeBase64=false")
+  else
+    resp=$(_api_get "/api/browser/screenshot?sessionId=$(_sid)")
+  fi
+  if [[ -n "$output" ]]; then
+    local file_url
+    file_url=$(echo "$resp" | grep -o '"url" *: *"[^"]*"' | head -1 | sed 's/.*: *"//;s/"//')
+    if [[ -z "$file_url" ]]; then
+      echo "$resp" | _out
+      exit 1
     fi
+    _download_url "$file_url" "$output"
     local sz; sz=$(wc -c < "$output" | tr -d ' ')
     if $JSON_OUT; then
-      echo "{\"ok\":true,\"file\":\"$output\",\"size\":$sz}"
+      echo "$resp" | sed "s|}$|,\"localCopy\":\"$(_esc "$output")\",\"size\":$sz}|"
     else
-      _green "Screenshot saved to $output ($sz bytes)"
+      _green "Screenshot stored in FileStore and exported to $output ($sz bytes)"
     fi
   else
     echo "$resp" | _out
@@ -452,7 +467,7 @@ Browser (require active session):
   tabs                         List browser tabs
   switch-tab [opts]            Switch tab (--handle, --index, --close-current)
   page-info                    Current URL and title
-  screenshot [-o file]         Take screenshot
+  screenshot [-o file]         Store screenshot; -o exports a local copy
   logs [--tail <n>]            View CDP event logs
 
 Global options:

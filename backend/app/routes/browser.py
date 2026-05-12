@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
 
 from fastapi import APIRouter, Depends, Query
@@ -369,18 +370,22 @@ async def api_switch_tab(body: SwitchTabBody, user: CurrentUser = Depends(get_se
 async def api_screenshot(
     sessionId: str = Query(...),
     store: bool = Query(False),
+    includeBase64: bool = Query(True),
     user: CurrentUser = Depends(get_session_aware_user),
 ):
     await verify_session_access(sessionId, user)
     try:
         async with browser_session(sessionId) as (sid, base):
             b64 = await wd_fetch(f"/session/{sid}/screenshot", base_url=base)
-        if store:
-            from app.file_store import get_store
+        from app.file_service import save_bytes
 
-            file_store = await get_store()
-            file = await file_store.save(b64, sessionId, content_type="image/png", ext="png")
-            return {"ok": True, "file": file, "screenshot": None}
-        return {"ok": True, "screenshot": b64}
+        file = await save_bytes(
+            session_id=sessionId,
+            source="screenshot",
+            data=base64.b64decode(b64),
+            filename="screenshot.png",
+            content_type="image/png",
+        )
+        return {"ok": True, "file": file, "screenshot": b64 if includeBase64 else None}
     except Exception as exc:
         return {"ok": False, "error": str(exc)}

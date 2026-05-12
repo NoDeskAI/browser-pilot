@@ -37,6 +37,9 @@ logger = logging.getLogger("access")
 async def lifespan(app: FastAPI):
     init_task = asyncio.create_task(db.init_db())
     yield
+    from app.download_watcher import stop_all_download_watchers
+
+    await stop_all_download_watchers()
     init_task.cancel()
     with contextlib.suppress(asyncio.CancelledError):
         await init_task

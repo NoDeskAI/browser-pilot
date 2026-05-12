@@ -47,17 +47,15 @@ bpilot config set api-url http://localhost:8000
 
 bpilot session create --name "My Task"
 bpilot session create --name "Mobile" --device iphone-16
-bpilot session create --name "Proxied" --proxy socks5://host:port
 bpilot session use <session-id>
 
 bpilot session set-device iphone-16    # 切换设备（会重启容器）
-bpilot session set-proxy socks5://h:p  # 设置代理（会重启容器）
 
 bpilot navigate https://example.com
 bpilot observe                    # 查看页面元素及坐标
 bpilot click 640 380              # 按坐标点击
 bpilot type "hello world"         # 向当前焦点输入框输入文字
-bpilot screenshot --output page.png
+bpilot screenshot --output page.png # 先存入 FileStore，再导出本地副本
 ```
 
 加 `--json` 可输出机器可读格式（供 AI Agent 使用）。
@@ -88,7 +86,7 @@ graph TB
 - noVNC（端口 7900）实时查看
 - CDP 事件日志用于调试
 - **设备预设**：在桌面分辨率（1920×1080 到 1280×720）和移动设备模拟（iPhone、iPad、Galaxy、Pixel）之间切换，自动适配 UA 和视口
-- **网络出口配置**：为每个会话复用部署侧的外部代理、Clash 或 OpenVPN 出口，可在 UI 中随时切换
+- **网络出口配置**：会话可走直连、Clash 或 OpenVPN 出口，可在 UI 中随时切换
 
 ## 本地开发
 
@@ -105,7 +103,7 @@ cp .env.example .env
 ./start.sh status   # 检查进程状态
 ```
 
-该脚本会在 Docker 中启动 PostgreSQL、构建 Selenium 镜像，并在宿主机上运行后端（uvicorn，端口 8000）和前端开发服务器（Vite，端口 9874）。
+该脚本会在 Docker 中启动 PostgreSQL 和 MinIO、初始化默认 bucket、构建 Selenium 镜像，并在宿主机上运行后端（uvicorn，端口 8000）和前端开发服务器（Vite，端口 9874）。
 
 ## 配置项
 
@@ -116,6 +114,10 @@ cp .env.example .env
 | `POSTGRES_USER`       | 必须在 `.env` 中设置；见 `.env.example`                         | Docker Compose 和本地开发使用的 PostgreSQL 用户名。                              |
 | `POSTGRES_PASSWORD`   | 必须在 `.env` 中设置；见 `.env.example`                         | PostgreSQL 密码，生产/公网部署前必须修改。                                      |
 | `POSTGRES_DB`         | 必须在 `.env` 中设置；见 `.env.example`                         | PostgreSQL 数据库名。                                                       |
+| `MINIO_ROOT_USER`     | 必须在 `.env` 中设置；见 `.env.example`                         | 内置 MinIO root 用户名，用作默认 S3 兼容存储。                                      |
+| `MINIO_ROOT_PASSWORD` | 必须在 `.env` 中设置；见 `.env.example`                         | 内置 MinIO root 密码，生产/公网部署前必须修改。                                     |
+| `MINIO_BUCKET`        | 必须在 `.env` 中设置；见 `.env.example`                         | Docker Compose 自动创建并预置为默认 S3 存储的 bucket。                            |
+| `MINIO_ENDPOINT`      | `start.sh` 使用 `http://localhost:9000`；Docker Compose 使用 `http://minio:9000` | 后端访问内置 MinIO/S3 服务的 endpoint。                               |
 | `SELENIUM_BASE_IMAGE` | `selenium/standalone-chrome:latest`                            | 浏览器容器基础镜像。ARM 用户使用 `seleniarm/standalone-chromium:latest`             |
 | `DOCKER_HOST_ADDR`    | `localhost`                                                    | 后端访问浏览器容器的地址。Docker 部署时设为 `host.docker.internal`（docker-compose 自动配置） |
 | `OPENAI_API_KEY`      | —                                                              | 可选。设置后会用 LLM 在首次导航时自动命名会话，未设置则以页面标题命名                                 |
@@ -126,6 +128,10 @@ cp .env.example .env
 | `NETWORK_EGRESS_CLASH_PROXY_PORT` | `7890` | 托管 Clash 容器在内部 Docker 网络暴露的代理端口。 |
 | `NETWORK_EGRESS_OPENVPN_IMAGE` | `browser-pilot-openvpn-egress:latest` | 托管 OpenVPN 出口使用的容器镜像。默认镜像会在首次使用时从 `services/network-egress-openvpn` 构建。 |
 | `NETWORK_EGRESS_OPENVPN_PROXY_PORT` | `8888` | 托管 OpenVPN 容器在内部 Docker 网络暴露的 HTTP 代理端口。 |
+
+### 文件存储
+
+Docker Compose 会启动内置 MinIO，并在后端首次启动时把它作为普通 S3 兼容存储写入设置。设置页仍只展示 **S3 存储** 和 **内置存储** 两种方式。要切换 AWS S3、Cloudflare R2、OSS 或其他 S3 兼容服务，直接在同一个 S3 表单中修改配置；已有数据库配置不会被 Compose 默认值覆盖。
 
 ### 数据库迁移
 
@@ -138,7 +144,6 @@ Browser Pilot 后端启动时会自动执行 Alembic 迁移。正常升级只需
 Browser Pilot 可以在 **设置 > 网络出口** 中配置部署侧出口，并让会话通过指定出口访问内网：
 
 - `直连`：不设置浏览器代理，保持当前默认行为。
-- `外部代理`：使用已有的 HTTP/HTTPS/SOCKS 代理地址。
 - `Clash`：运行托管的 Clash 兼容容器，并让浏览器会话连接其内部代理端口。
 - `OpenVPN`：运行托管 OpenVPN 容器和 HTTP 代理封装。该模式要求 Docker 宿主机允许 `/dev/net/tun` 和 `NET_ADMIN`。
 

@@ -287,6 +287,8 @@ def test_regenerate_fingerprint_preserves_network_and_does_not_fallback_to_utc(m
     monkeypatch.setattr(sessions, "generate_profile", fake_generate_profile)
     monkeypatch.setattr(sessions, "_resolve_session_network", fake_network)
     monkeypatch.setattr(sessions, "recreate_container", fake_recreate_container)
+    monkeypatch.setattr(sessions, "stop_download_watcher", lambda session_id: asyncio.sleep(0))
+    monkeypatch.setattr(sessions, "_activate_file_capture", lambda session_id: asyncio.sleep(0))
 
     result = asyncio.run(
         sessions.regenerate_fingerprint(
@@ -945,6 +947,7 @@ def test_explicit_refresh_stores_observed_network_without_syncing_timezone(monke
     monkeypatch.setattr(sessions, "get_pool", lambda: pool)
     monkeypatch.setattr(sessions, "_with_runtime_health", fake_runtime)
     monkeypatch.setattr(sessions, "sync_fingerprint_profile_to_container", fake_sync)
+    monkeypatch.setattr(sessions, "_activate_file_capture", lambda session_id: asyncio.sleep(0))
 
     result = asyncio.run(sessions.refresh_network_profile("session-1", _user()))
 

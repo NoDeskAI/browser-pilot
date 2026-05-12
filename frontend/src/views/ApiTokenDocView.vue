@@ -65,9 +65,8 @@ curl -X POST http://localhost:9222/api/browser/observe \\
 ### 截图
 
 \`\`\`bash
-curl http://localhost:9222/api/browser/screenshot?sessionId=$SESSION_ID \\
-  -H "Authorization: Bearer $TOKEN" \\
-  --output screenshot.png
+curl "http://localhost:9222/api/browser/screenshot?sessionId=$SESSION_ID&includeBase64=false" \\
+  -H "Authorization: Bearer $TOKEN"
 \`\`\`
 
 ### 点击元素
@@ -184,9 +183,8 @@ curl -X POST http://localhost:9222/api/browser/observe \\
 ### Take a Screenshot
 
 \`\`\`bash
-curl http://localhost:9222/api/browser/screenshot?sessionId=$SESSION_ID \\
-  -H "Authorization: Bearer $TOKEN" \\
-  --output screenshot.png
+curl "http://localhost:9222/api/browser/screenshot?sessionId=$SESSION_ID&includeBase64=false" \\
+  -H "Authorization: Bearer $TOKEN"
 \`\`\`
 
 ### Click at Coordinates

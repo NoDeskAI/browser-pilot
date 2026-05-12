@@ -21,6 +21,11 @@ class FakeS3Client:
     def put_object(self, Bucket, Key, Body, ContentType):
         self.objects[(Bucket, Key)] = (Body, ContentType)
 
+    def upload_file(self, Filename, Bucket, Key, ExtraArgs=None):
+        content_type = (ExtraArgs or {}).get("ContentType", "application/octet-stream")
+        with open(Filename, "rb") as fh:
+            self.objects[(Bucket, Key)] = (fh.read(), content_type)
+
     def get_object(self, Bucket, Key):
         body, content_type = self.objects[(Bucket, Key)]
         return {"Body": FakeBody(body), "ContentType": content_type}

@@ -29,6 +29,7 @@ from app.container import (
 )
 from app.db import get_pool
 from app.device_presets import DEVICE_PRESETS, DEFAULT_PRESET, get_preset
+from app.download_watcher import configure_download_behavior, start_download_watcher, stop_download_watcher
 from app.fingerprint import (
     PoolEmptyError,
     attach_network_profile,
@@ -43,6 +44,14 @@ from app.network_egress import (
 
 logger = logging.getLogger("routes.sessions")
 router = APIRouter()
+
+
+async def _activate_file_capture(session_id: str) -> None:
+    start_download_watcher(session_id)
+    try:
+        await configure_download_behavior(session_id)
+    except Exception as exc:
+        logger.warning("Download behavior configuration failed for %s: %s", session_id, exc)
 
 
 async def _verify_session_tenant(session_id: str, user: CurrentUser) -> None:
@@ -609,6 +618,14 @@ async def get_session(session_id: str, user: CurrentUser = Depends(get_session_a
     }
 
 
+@router.get("/api/sessions/{session_id}/files")
+async def list_session_files_route(session_id: str, user: CurrentUser = Depends(get_session_aware_user)):
+    await verify_session_access(session_id, user)
+    from app.file_service import list_session_files
+
+    return {"files": await list_session_files(session_id)}
+
+
 @router.patch("/api/sessions/{session_id}")
 async def update_session(session_id: str, body: UpdateSessionBody, user: CurrentUser = Depends(get_current_user)):
     await _verify_session_tenant(session_id, user)
@@ -624,6 +641,7 @@ async def update_session(session_id: str, body: UpdateSessionBody, user: Current
 async def delete_session(session_id: str, user: CurrentUser = Depends(get_current_user)):
     await _verify_session_tenant(session_id, user)
     pool = get_pool()
+    await stop_download_watcher(session_id)
     await remove_container(session_id)
     await pool.execute("DELETE FROM sessions WHERE id = $1", session_id)
     logger.info("Session deleted: %s", session_id)
@@ -639,6 +657,7 @@ async def start_session_container(session_id: str, user: CurrentUser = Depends(g
     await verify_session_access(session_id, user)
     try:
         ports = await ensure_container_running(session_id)
+        await _activate_file_capture(session_id)
         pool = get_pool()
         row = await pool.fetchrow(
             """
@@ -668,6 +687,7 @@ async def start_session_container(session_id: str, user: CurrentUser = Depends(g
 async def stop_session_container(session_id: str, user: CurrentUser = Depends(get_session_aware_user)):
     await verify_session_access(session_id, user)
     try:
+        await stop_download_watcher(session_id)
         await stop_container(session_id)
         return {"ok": True}
     except Exception as exc:
@@ -679,6 +699,7 @@ async def stop_session_container(session_id: str, user: CurrentUser = Depends(ge
 async def pause_session_container(session_id: str, user: CurrentUser = Depends(get_session_aware_user)):
     await verify_session_access(session_id, user)
     try:
+        await stop_download_watcher(session_id)
         await pause_container(session_id)
         return {"ok": True}
     except Exception as exc:
@@ -691,6 +712,7 @@ async def unpause_session_container(session_id: str, user: CurrentUser = Depends
     await verify_session_access(session_id, user)
     try:
         ports = await ensure_container_running(session_id)
+        await _activate_file_capture(session_id)
         pool = get_pool()
         row = await pool.fetchrow(
             """
@@ -773,6 +795,7 @@ async def change_device_preset(session_id: str, body: DevicePresetBody, user: Cu
     fp_ua = fp_profile.get("navigator", {}).get("userAgent") if isinstance(fp_profile, dict) else None
     from app.tools.browser.session import invalidate_session_cache
     invalidate_session_cache(session_id)
+    await stop_download_watcher(session_id)
     ports = await recreate_container(
         session_id,
         width=preset_data["width"],
@@ -783,6 +806,7 @@ async def change_device_preset(session_id: str, body: DevicePresetBody, user: Cu
         browser_lang=row["browser_lang"] or "zh-CN",
         image_name=image_name,
     )
+    await _activate_file_capture(session_id)
     fp_response = await _with_runtime_health(session_id, fp_profile)
     return {"ok": True, "ports": ports, "devicePreset": body.preset, "fingerprintProfile": fp_response}
 
@@ -839,6 +863,7 @@ async def change_network_egress(
     fp_ua = fp_profile.get("navigator", {}).get("userAgent") if isinstance(fp_profile, dict) else None
     from app.tools.browser.session import invalidate_session_cache
     invalidate_session_cache(session_id)
+    await stop_download_watcher(session_id)
     ports = await recreate_container(
         session_id,
         width=preset_data["width"],
@@ -849,6 +874,7 @@ async def change_network_egress(
         browser_lang=row["browser_lang"] or "zh-CN",
         image_name=image_name,
     )
+    await _activate_file_capture(session_id)
     fp_response = await _with_runtime_health(session_id, fp_profile)
     return {
         "ok": True,
@@ -905,6 +931,7 @@ async def regenerate_fingerprint(session_id: str, body: FingerprintActionBody, u
 
     fp_ua = fp_profile.get("navigator", {}).get("userAgent") if isinstance(fp_profile, dict) else None
 
+    await stop_download_watcher(session_id)
     ports = await recreate_container(
         session_id,
         width=preset_data["width"],
@@ -915,6 +942,7 @@ async def regenerate_fingerprint(session_id: str, body: FingerprintActionBody, u
         browser_lang=row["browser_lang"] or "zh-CN",
         image_name=image_name,
     )
+    await _activate_file_capture(session_id)
     fp_response = await _with_runtime_health(session_id, fp_profile)
     return {
         "ok": True,
@@ -933,6 +961,7 @@ async def regenerate_fingerprint(session_id: str, body: FingerprintActionBody, u
 async def refresh_network_profile(session_id: str, user: CurrentUser = Depends(get_session_aware_user)):
     await verify_session_access(session_id, user)
     ports = await ensure_container_running(session_id)
+    await _activate_file_capture(session_id)
     observed = await resolve_network_via_browser(ports, session_id=session_id, mode="deep")
     observed_payload = _stable_network_payload(observed)
     observed_payload["observedAt"] = datetime.now(timezone.utc).isoformat()
