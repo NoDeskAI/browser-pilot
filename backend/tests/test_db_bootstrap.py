@@ -268,6 +268,7 @@ def test_default_minio_storage_config_uses_minio_env(monkeypatch):
     monkeypatch.setattr(db.config, "MINIO_ROOT_USER", "browserpilot")
     monkeypatch.setattr(db.config, "MINIO_ROOT_PASSWORD", "secret")
     monkeypatch.setattr(db.config, "MINIO_BUCKET", "browser-pilot")
+    monkeypatch.setattr(db.config, "MINIO_ENDPOINT", "http://localhost:9000")
 
     config = db._default_minio_storage_config()
 
@@ -277,7 +278,7 @@ def test_default_minio_storage_config_uses_minio_env(monkeypatch):
         "s3Region": "us-east-1",
         "s3AccessKey": "browserpilot",
         "s3SecretKey": "secret",
-        "s3Endpoint": "http://minio:9000",
+        "s3Endpoint": "http://localhost:9000",
         "s3Presign": True,
         "s3PresignExpires": 3600,
     }
@@ -291,7 +292,16 @@ def test_default_minio_storage_config_skips_without_bootstrap(monkeypatch):
 
 def test_ensure_default_storage_config_does_not_override_existing(monkeypatch):
     pool = FakePool()
-    pool.rows["storage_config"] = {"value": "{}"}
+    pool.rows["storage_config"] = {
+        "value": {
+            "storage": "s3",
+            "s3Bucket": "external-bucket",
+            "s3Region": "us-east-1",
+            "s3AccessKey": "external-access",
+            "s3SecretKey": "external-secret",
+            "s3Endpoint": "https://s3.example.com",
+        }
+    }
     db._pool = pool
     monkeypatch.setattr(
         db,
@@ -302,6 +312,49 @@ def test_ensure_default_storage_config_does_not_override_existing(monkeypatch):
     asyncio.run(db._ensure_default_storage_config())
 
     assert pool.executed == []
+
+
+def test_ensure_default_storage_config_preserves_builtin(monkeypatch):
+    pool = FakePool()
+    pool.rows["storage_config"] = {"value": {"storage": "builtin"}}
+    db._pool = pool
+    monkeypatch.setattr(
+        db,
+        "_default_minio_storage_config",
+        lambda: {"storage": "s3", "s3Bucket": "browser-pilot"},
+    )
+
+    asyncio.run(db._ensure_default_storage_config())
+
+    assert pool.executed == []
+
+
+def test_ensure_default_storage_config_repairs_empty_s3_config(monkeypatch):
+    pool = FakePool()
+    pool.rows["storage_config"] = {
+        "value": {
+            "storage": "s3",
+            "s3Bucket": "",
+            "s3Region": "",
+            "s3AccessKey": "",
+            "s3SecretKey": "",
+            "s3Endpoint": "",
+        }
+    }
+    db._pool = pool
+    monkeypatch.setattr(
+        db,
+        "_default_minio_storage_config",
+        lambda: {"storage": "s3", "s3Bucket": "browser-pilot", "s3Endpoint": "http://localhost:9000"},
+    )
+
+    asyncio.run(db._ensure_default_storage_config())
+
+    assert len(pool.executed) == 1
+    assert pool.executed[0][1] == (
+        "storage_config",
+        '{"storage": "s3", "s3Bucket": "browser-pilot", "s3Endpoint": "http://localhost:9000"}',
+    )
 
 
 def test_ensure_default_storage_config_inserts_when_missing(monkeypatch):

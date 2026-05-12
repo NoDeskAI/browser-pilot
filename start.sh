@@ -88,6 +88,13 @@ _ensure_postgres() {
     echo "[postgres] ready"
 }
 
+_ensure_minio() {
+    echo "[minio] 确保 MinIO 运行中..."
+    docker compose up -d minio
+    docker compose up minio-init
+    echo "[minio] ready"
+}
+
 _infer_postgres_env_from_database_url() {
     if [[ -z "${DATABASE_URL:-}" ]]; then
         return
@@ -152,7 +159,10 @@ _require_database_env() {
 
 _start_processes() {
     _require_database_env
+    export MINIO_STORAGE_BOOTSTRAP="${MINIO_STORAGE_BOOTSTRAP:-true}"
+    export MINIO_ENDPOINT="${MINIO_ENDPOINT:-http://localhost:9000}"
     _ensure_postgres
+    _ensure_minio
 
     : > "$BACKEND_LOG"
     : > "$FRONTEND_LOG"

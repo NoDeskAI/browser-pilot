@@ -51,7 +51,7 @@ MINIO_STORAGE_BOOTSTRAP = _env("MINIO_STORAGE_BOOTSTRAP", "").lower() in {"1", "
 MINIO_ROOT_USER = _env("MINIO_ROOT_USER", "")
 MINIO_ROOT_PASSWORD = _env("MINIO_ROOT_PASSWORD", "")
 MINIO_BUCKET = _env("MINIO_BUCKET", "")
-MINIO_ENDPOINT = "http://minio:9000"
+MINIO_ENDPOINT = _env("MINIO_ENDPOINT", "http://localhost:9000")
 MINIO_REGION = "us-east-1"
 
 # --- Declared network profile ---

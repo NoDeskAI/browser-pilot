@@ -330,6 +330,26 @@ def _default_minio_storage_config() -> dict[str, Any] | None:
     }
 
 
+def _storage_config_needs_minio_repair(storage_config: dict[str, Any]) -> bool:
+    if not storage_config:
+        return True
+    mode = storage_config.get("storage")
+    if not mode:
+        return True
+    if mode == "builtin":
+        return False
+    if mode != "s3":
+        return False
+    required = (
+        "s3Bucket",
+        "s3Region",
+        "s3AccessKey",
+        "s3SecretKey",
+        "s3Endpoint",
+    )
+    return any(not str(storage_config.get(field) or "").strip() for field in required)
+
+
 async def _ensure_default_storage_config() -> None:
     if _pool is None:
         return
@@ -341,16 +361,22 @@ async def _ensure_default_storage_config() -> None:
             "SELECT value FROM app_state WHERE key = $1",
             "storage_config",
         )
+        action = "initialized"
         if row:
-            return
+            value = row.get("value") if hasattr(row, "get") else row["value"]
+            existing = value if isinstance(value, dict) else json.loads(value or "{}")
+            if not _storage_config_needs_minio_repair(existing):
+                return
+            action = "repaired"
         await _pool.execute(
             """INSERT INTO app_state (key, value) VALUES ($1, $2)
-               ON CONFLICT (key) DO NOTHING""",
+               ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value""",
             "storage_config",
             json.dumps(storage_config, ensure_ascii=False),
         )
         logger.info(
-            "Default S3 storage config initialized bucket=%s endpoint=%s",
+            "Default S3 storage config %s bucket=%s endpoint=%s",
+            action,
             storage_config["s3Bucket"],
             storage_config["s3Endpoint"],
         )
