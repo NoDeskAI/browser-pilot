@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { ref, defineAsyncComponent } from 'vue'
+import { computed, defineAsyncComponent, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useRoute, useRouter } from 'vue-router'
 import StorageSettings from '../components/StorageSettings.vue'
 import OrgSettings from '../components/OrgSettings.vue'
 import FingerprintPoolSettings from '../components/FingerprintPoolSettings.vue'
@@ -16,7 +17,59 @@ const TenantManager = isEE
   : null
 
 const { t } = useI18n()
-const activeTab = ref('organization')
+const route = useRoute()
+const router = useRouter()
+
+type SettingsTab = 'organization' | 'storage' | 'fingerprintPool' | 'browserImages' | 'networkEgress' | 'sso' | 'tenants'
+
+const sectionToTab: Record<string, SettingsTab> = {
+  organization: 'organization',
+  storage: 'storage',
+  'fingerprint-pool': 'fingerprintPool',
+  'browser-images': 'browserImages',
+  'network-egress': 'networkEgress',
+  sso: 'sso',
+  tenants: 'tenants',
+}
+
+const tabToPath: Record<SettingsTab, string> = {
+  organization: '/settings',
+  storage: '/settings/storage',
+  fingerprintPool: '/settings/fingerprint-pool',
+  browserImages: '/settings/browser-images',
+  networkEgress: '/settings/network-egress',
+  sso: '/settings/sso',
+  tenants: '/settings/tenants',
+}
+
+function normalizeSection(section: string | string[] | undefined): string | undefined {
+  return Array.isArray(section) ? section[0] : section
+}
+
+function resolveTab(section: string | string[] | undefined): SettingsTab | null {
+  const normalized = normalizeSection(section)
+  if (!normalized) return 'organization'
+  const tab = sectionToTab[normalized]
+  if (!tab) return null
+  if (!isEE && (tab === 'sso' || tab === 'tenants')) return null
+  return tab
+}
+
+const activeTab = computed<SettingsTab>(() => resolveTab(route.params.section) || 'organization')
+
+watch(
+  () => route.params.section,
+  (section) => {
+    if (normalizeSection(section) && !resolveTab(section)) {
+      router.replace('/settings')
+    }
+  },
+  { immediate: true },
+)
+
+function goToTab(tab: SettingsTab) {
+  router.push(tabToPath[tab])
+}
 </script>
 
 <template>
@@ -29,35 +82,35 @@ const activeTab = ref('organization')
           <!-- Left Navigation -->
           <nav class="flex md:flex-col gap-1 md:w-[200px] shrink-0 overflow-x-auto pb-2 md:pb-0">
             <button
-              @click="activeTab = 'organization'"
+              @click="goToTab('organization')"
               class="px-3 py-2 text-sm rounded-md transition-colors text-left whitespace-nowrap"
               :class="activeTab === 'organization' ? 'bg-accent text-accent-foreground font-medium' : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground'"
             >
               {{ t('settings.organization') }}
             </button>
             <button
-              @click="activeTab = 'storage'"
+              @click="goToTab('storage')"
               class="px-3 py-2 text-sm rounded-md transition-colors text-left whitespace-nowrap"
               :class="activeTab === 'storage' ? 'bg-accent text-accent-foreground font-medium' : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground'"
             >
               {{ t('settings.fileStorage') }}
             </button>
             <button
-              @click="activeTab = 'fingerprintPool'"
+              @click="goToTab('fingerprintPool')"
               class="px-3 py-2 text-sm rounded-md transition-colors text-left whitespace-nowrap"
               :class="activeTab === 'fingerprintPool' ? 'bg-accent text-accent-foreground font-medium' : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground'"
             >
               {{ t('settings.fingerprintPool') }}
             </button>
             <button
-              @click="activeTab = 'browserImages'"
+              @click="goToTab('browserImages')"
               class="px-3 py-2 text-sm rounded-md transition-colors text-left whitespace-nowrap"
               :class="activeTab === 'browserImages' ? 'bg-accent text-accent-foreground font-medium' : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground'"
             >
               {{ t('settings.browserImages') }}
             </button>
             <button
-              @click="activeTab = 'networkEgress'"
+              @click="goToTab('networkEgress')"
               class="px-3 py-2 text-sm rounded-md transition-colors text-left whitespace-nowrap"
               :class="activeTab === 'networkEgress' ? 'bg-accent text-accent-foreground font-medium' : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground'"
             >
@@ -65,7 +118,7 @@ const activeTab = ref('organization')
             </button>
             <button
               v-if="isEE"
-              @click="activeTab = 'sso'"
+              @click="goToTab('sso')"
               class="px-3 py-2 text-sm rounded-md transition-colors text-left whitespace-nowrap"
               :class="activeTab === 'sso' ? 'bg-accent text-accent-foreground font-medium' : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground'"
             >
@@ -73,7 +126,7 @@ const activeTab = ref('organization')
             </button>
             <button
               v-if="isEE"
-              @click="activeTab = 'tenants'"
+              @click="goToTab('tenants')"
               class="px-3 py-2 text-sm rounded-md transition-colors text-left whitespace-nowrap"
               :class="activeTab === 'tenants' ? 'bg-accent text-accent-foreground font-medium' : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground'"
             >

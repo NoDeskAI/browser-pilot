@@ -38,7 +38,10 @@ export default {
     createHint: 'Create a new browser session',
     autoRefresh: 'Auto Refresh',
     refresh: 'Refresh',
-    noImageHint: 'Build a browser image in Settings > Browser Images first',
+    noImageHint: 'Build a browser image first',
+    configureImages: 'Image settings',
+    noImageEmptyPrefix: 'No ready browser image yet. Open ',
+    noImageEmptySuffix: ' to build one before creating a session.',
   },
   session: {
     sessions: 'Sessions',

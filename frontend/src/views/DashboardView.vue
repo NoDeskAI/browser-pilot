@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import { ref, watch, nextTick, onMounted, onUnmounted, type ComponentPublicInstance } from 'vue'
-import { useRouter } from 'vue-router'
+import { RouterLink, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useSessions } from '../composables/useSessions'
 import { useNetworkEgress } from '../composables/useNetworkEgress'
 import { useNotify } from '../composables/useNotify'
-import { Plus, Play, Pause, Trash2, Monitor, Globe, Hash, Clock, RefreshCw, Loader2, Network, CornerDownLeft } from 'lucide-vue-next'
+import { Plus, Play, Pause, Trash2, Monitor, Globe, Hash, Clock, RefreshCw, Loader2, Network, CornerDownLeft, ArrowUpRight } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
@@ -45,6 +45,7 @@ const DIRECT_EGRESS_VALUE = '__direct__'
 
 const isMac = navigator.platform.includes('Mac')
 const shortcutLabel = isMac ? '⌘N' : 'Ctrl+N'
+const browserImagesSettingsPath = '/settings/browser-images'
 
 const autoRefresh = ref(localStorage.getItem('bp_auto_refresh') === 'true')
 let refreshTimer: ReturnType<typeof setInterval> | null = null
@@ -308,7 +309,16 @@ async function onPauseContainer(id: string) {
                 </Button>
               </span>
             </TooltipTrigger>
-            <TooltipContent>{{ t('dashboard.noImageHint') }}</TooltipContent>
+            <TooltipContent class="gap-2">
+              <span>{{ t('dashboard.noImageHint') }}</span>
+              <RouterLink
+                :to="browserImagesSettingsPath"
+                class="inline-flex items-center gap-0.5 rounded-sm font-medium underline underline-offset-2 outline-none transition-opacity hover:opacity-80 focus-visible:ring-2 focus-visible:ring-background/60"
+              >
+                {{ t('dashboard.configureImages') }}
+                <ArrowUpRight class="size-3" aria-hidden="true" />
+              </RouterLink>
+            </TooltipContent>
           </Tooltip>
         </div>
       </div>
@@ -472,7 +482,18 @@ async function onPauseContainer(id: string) {
       <div v-else-if="!sessions.loading" class="py-32 flex flex-col items-center justify-center text-center">
         <Monitor class="size-12 mb-4 text-muted-foreground opacity-20" :stroke-width="1" />
         <h3 class="text-lg font-medium mb-2">{{ t('dashboard.empty') }}</h3>
-        <p class="text-sm text-muted-foreground max-w-sm mb-6">{{ t('dashboard.emptyHint') }}</p>
+        <p v-if="hasReadyImages" class="text-sm text-muted-foreground max-w-sm mb-6">{{ t('dashboard.emptyHint') }}</p>
+        <p v-else class="text-sm text-muted-foreground max-w-sm mb-6">
+          <span>{{ t('dashboard.noImageEmptyPrefix') }}</span>
+          <RouterLink
+            :to="browserImagesSettingsPath"
+            class="inline-flex items-center gap-0.5 rounded-sm font-medium text-primary underline underline-offset-4 outline-none transition-colors hover:text-primary/80 focus-visible:ring-2 focus-visible:ring-ring/60"
+          >
+            {{ t('dashboard.configureImages') }}
+            <ArrowUpRight class="size-3.5" aria-hidden="true" />
+          </RouterLink>
+          <span>{{ t('dashboard.noImageEmptySuffix') }}</span>
+        </p>
         <Tooltip v-if="hasReadyImages">
           <TooltipTrigger as-child>
             <Button :disabled="creating" class="gap-2" @click="openCreateDialog">
@@ -496,7 +517,16 @@ async function onPauseContainer(id: string) {
               </Button>
             </span>
           </TooltipTrigger>
-          <TooltipContent>{{ t('dashboard.noImageHint') }}</TooltipContent>
+          <TooltipContent class="gap-2">
+            <span>{{ t('dashboard.noImageHint') }}</span>
+            <RouterLink
+              :to="browserImagesSettingsPath"
+              class="inline-flex items-center gap-0.5 rounded-sm font-medium underline underline-offset-2 outline-none transition-opacity hover:opacity-80 focus-visible:ring-2 focus-visible:ring-background/60"
+            >
+              {{ t('dashboard.configureImages') }}
+              <ArrowUpRight class="size-3" aria-hidden="true" />
+            </RouterLink>
+          </TooltipContent>
         </Tooltip>
       </div>
     </div>

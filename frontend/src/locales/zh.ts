@@ -38,7 +38,10 @@ export default {
     createHint: '创建新的浏览器会话',
     autoRefresh: '自动刷新',
     refresh: '刷新',
-    noImageHint: '请先在 设置 > 浏览器镜像 中构建镜像',
+    noImageHint: '请先构建浏览器镜像',
+    configureImages: '设置镜像',
+    noImageEmptyPrefix: '还没有可用镜像，请先 ',
+    noImageEmptySuffix: ' 后再创建会话',
   },
   session: {
     sessions: '会话',

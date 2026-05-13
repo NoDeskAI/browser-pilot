@@ -108,7 +108,7 @@ function toggleLocale() {
         <button
           @click="router.push('/settings')"
           class="flex items-center gap-2 px-2 md:px-3 py-1.5 rounded-md text-sm transition-colors"
-          :class="route.path === '/settings' ? 'bg-accent text-accent-foreground font-medium' : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'"
+          :class="route.path.startsWith('/settings') ? 'bg-accent text-accent-foreground font-medium' : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'"
           :title="t('app.settings')"
         >
           <Settings class="size-4 shrink-0" />
