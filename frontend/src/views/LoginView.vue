@@ -74,7 +74,7 @@ async function handleLogin() {
     }
     const data = await res.json()
     setAuth(data.access_token, data.user)
-    router.push('/')
+    await router.push('/')
   } catch {
     notify.error(t('auth.loginNetworkError'))
   } finally {
@@ -106,7 +106,7 @@ function toggleLocale() {
         <div class="space-y-2">
           <Label for="email">{{ t('auth.email') }}</Label>
           <Input
-            id="email" v-model="email" type="email" autocomplete="email"
+            id="email" v-model="email" type="text" inputmode="email" autocomplete="username"
             :placeholder="t('auth.emailPlaceholder')"
             required autofocus
           />

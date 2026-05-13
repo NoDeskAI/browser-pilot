@@ -40,9 +40,10 @@ router = APIRouter()
 class SessionBody(BaseModel):
     sessionId: str
     mode: str = "dom"
-    maxCandidates: int = Field(default=40, ge=1, le=500)
-    threshold: float = Field(default=0.05, ge=0.0, le=1.0)
+    maxCandidates: int = Field(default=180, ge=1, le=500)
+    threshold: float = Field(default=0.01, ge=0.0, le=1.0)
     includeScreenshot: bool = False
+    includeAnnotatedScreenshot: bool = False
 
 
 class NavigateBody(BaseModel):
@@ -161,6 +162,7 @@ async def api_observe(body: SessionBody, user: CurrentUser = Depends(get_session
                     screenshot_base64,
                     max_candidates=body.maxCandidates,
                     threshold=body.threshold,
+                    include_annotated=body.includeAnnotatedScreenshot,
                 )
                 result = {
                     "url": url,
@@ -168,8 +170,11 @@ async def api_observe(body: SessionBody, user: CurrentUser = Depends(get_session
                     "mode": mode,
                     "viewport": vision_result.viewport,
                     "visionCandidates": vision_result.candidates,
+                    "visionGroups": vision_result.groups,
                     "trace": vision_result.trace,
                 }
+                if vision_result.annotated_screenshot:
+                    result["annotatedScreenshot"] = vision_result.annotated_screenshot
 
             if mode == "mix":
                 elements = (result or {}).get("elements", []) if isinstance(result, dict) else []
@@ -178,6 +183,7 @@ async def api_observe(body: SessionBody, user: CurrentUser = Depends(get_session
                     screenshot_base64,
                     max_candidates=body.maxCandidates,
                     threshold=body.threshold,
+                    include_annotated=body.includeAnnotatedScreenshot,
                 )
                 vision_candidates = attach_dom_hints(vision_result.candidates, elements)
                 result = {
@@ -185,13 +191,17 @@ async def api_observe(body: SessionBody, user: CurrentUser = Depends(get_session
                     "mode": mode,
                     "viewport": vision_result.viewport,
                     "visionCandidates": vision_candidates,
+                    "visionGroups": vision_result.groups,
                     "mixedCandidates": build_mixed_candidates(
                         elements=elements,
                         vision_candidates=vision_candidates,
+                        vision_groups=vision_result.groups,
                         max_candidates=body.maxCandidates,
                     ),
                     "trace": vision_result.trace,
                 }
+                if vision_result.annotated_screenshot:
+                    result["annotatedScreenshot"] = vision_result.annotated_screenshot
 
             if mode == "dom" and isinstance(result, dict):
                 result["mode"] = mode
