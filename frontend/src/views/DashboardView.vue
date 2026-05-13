@@ -284,12 +284,20 @@ async function onPauseContainer(id: string) {
               {{ t('dashboard.autoRefresh') }}
             </label>
           </div>
-          <Button v-if="hasReadyImages" :disabled="creating" class="gap-2" @click="openCreateDialog">
-            <Loader2 v-if="creating" class="size-4 animate-spin" />
-            <Plus v-else class="size-4" />
-            {{ creating ? t('session.creating') : t('dashboard.create') }}
-            <kbd v-if="!creating" data-slot="kbd">{{ shortcutLabel }}</kbd>
-          </Button>
+          <Tooltip v-if="hasReadyImages">
+            <TooltipTrigger as-child>
+              <Button :disabled="creating" class="gap-2" @click="openCreateDialog">
+                <Loader2 v-if="creating" class="size-4 animate-spin" />
+                <Plus v-else class="size-4" />
+                {{ creating ? t('session.creating') : t('dashboard.create') }}
+                <kbd v-if="!creating" data-slot="kbd">{{ shortcutLabel }}</kbd>
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>
+              {{ t('dashboard.createHint') }}
+              <kbd v-if="!creating" data-slot="kbd">{{ shortcutLabel }}</kbd>
+            </TooltipContent>
+          </Tooltip>
           <Tooltip v-else>
             <TooltipTrigger as-child>
               <span class="inline-flex">
@@ -465,12 +473,20 @@ async function onPauseContainer(id: string) {
         <Monitor class="size-12 mb-4 text-muted-foreground opacity-20" :stroke-width="1" />
         <h3 class="text-lg font-medium mb-2">{{ t('dashboard.empty') }}</h3>
         <p class="text-sm text-muted-foreground max-w-sm mb-6">{{ t('dashboard.emptyHint') }}</p>
-        <Button v-if="hasReadyImages" :disabled="creating" class="gap-2" @click="openCreateDialog">
-          <Loader2 v-if="creating" class="size-4 animate-spin" />
-          <Plus v-else class="size-4" />
-          {{ creating ? t('session.creating') : t('dashboard.create') }}
-          <kbd v-if="!creating" data-slot="kbd">{{ shortcutLabel }}</kbd>
-        </Button>
+        <Tooltip v-if="hasReadyImages">
+          <TooltipTrigger as-child>
+            <Button :disabled="creating" class="gap-2" @click="openCreateDialog">
+              <Loader2 v-if="creating" class="size-4 animate-spin" />
+              <Plus v-else class="size-4" />
+              {{ creating ? t('session.creating') : t('dashboard.create') }}
+              <kbd v-if="!creating" data-slot="kbd">{{ shortcutLabel }}</kbd>
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>
+            {{ t('dashboard.createHint') }}
+            <kbd v-if="!creating" data-slot="kbd">{{ shortcutLabel }}</kbd>
+          </TooltipContent>
+        </Tooltip>
         <Tooltip v-else>
           <TooltipTrigger as-child>
             <span class="inline-flex">

@@ -35,6 +35,7 @@ export default {
     create: '创建会话',
     empty: '暂无会话',
     emptyHint: '创建第一个浏览器会话开始使用',
+    createHint: '创建新的浏览器会话',
     autoRefresh: '自动刷新',
     refresh: '刷新',
     noImageHint: '请先在 设置 > 浏览器镜像 中构建镜像',

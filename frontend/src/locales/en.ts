@@ -35,6 +35,7 @@ export default {
     create: 'Create Session',
     empty: 'No sessions yet',
     emptyHint: 'Create your first browser session to get started',
+    createHint: 'Create a new browser session',
     autoRefresh: 'Auto Refresh',
     refresh: 'Refresh',
     noImageHint: 'Build a browser image in Settings > Browser Images first',
