@@ -9,6 +9,7 @@ import { Loader2 } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { useNotify } from '@/composables/useNotify'
 
 const isEE = __EE__
 const SsoLoginButton = isEE
@@ -19,6 +20,7 @@ const { t } = useI18n()
 const router = useRouter()
 const { setAuth } = useAuth()
 const { brand, fetchBrand } = useSessions()
+const notify = useNotify()
 
 onMounted(() => fetchBrand())
 
@@ -45,10 +47,11 @@ function getLoginErrorMessage(status: number, detail: string) {
       ? t('auth.accountDisabled')
       : t('auth.loginError')
   }
-  if (status >= 500 || status === 502 || status === 503 || status === 504) {
-    return t('auth.loginServiceUnavailable')
-  }
   return t('auth.loginUnexpectedError')
+}
+
+function isLoginServiceUnavailable(status: number) {
+  return status >= 500 && status <= 599
 }
 
 async function handleLogin() {
@@ -62,6 +65,10 @@ async function handleLogin() {
     })
     if (!res.ok) {
       const detail = await readLoginErrorDetail(res)
+      if (isLoginServiceUnavailable(res.status)) {
+        notify.error(t('auth.loginServiceUnavailable'))
+        return
+      }
       error.value = getLoginErrorMessage(res.status, detail)
       return
     }
@@ -69,7 +76,7 @@ async function handleLogin() {
     setAuth(data.access_token, data.user)
     router.push('/')
   } catch {
-    error.value = t('auth.loginNetworkError')
+    notify.error(t('auth.loginNetworkError'))
   } finally {
     loading.value = false
   }
