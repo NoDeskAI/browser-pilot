@@ -101,7 +101,7 @@ ${c} files list --json               # List session files with status
 ${c} files upload ./report.csv       # Upload local file into active session
 ${c} files get <file-id> -o file.csv # Save a completed session file locally
 ${c} files rename <file-id> name.csv # Rename completed session file
-${c} files delete <file-id>          # Delete completed session file
+${c} files delete <file-id>          # Delete file; response separates object and record deletion
 
 ## Flags
 
@@ -163,7 +163,7 @@ ${c} files list --json               # 列出 Session 文件及状态
 ${c} files upload ./report.csv       # 上传本地文件到当前会话
 ${c} files get <file-id> -o file.csv # 保存已完成的 Session 文件到本地
 ${c} files rename <file-id> name.csv # 重命名已完成的 Session 文件
-${c} files delete <file-id>          # 删除已完成的 Session 文件
+${c} files delete <file-id>          # 删除文件，返回对象删除和记录删除状态
 
 ## 通用参数
 
@@ -254,7 +254,7 @@ ${c} --session "<session-id>" files list --json               # List session fil
 ${c} --session "<session-id>" files upload ./report.csv       # Upload local file into session
 ${c} --session "<session-id>" files get <file-id> -o file.csv # Save completed session file locally
 ${c} --session "<session-id>" files rename <file-id> name.csv # Rename completed session file
-${c} --session "<session-id>" files delete <file-id>          # Delete completed session file
+${c} --session "<session-id>" files delete <file-id>          # Delete file; response separates object and record deletion
 
 ## Flags
 
@@ -310,7 +310,7 @@ ${c} --session "<session-id>" files list --json               # 列出 Session �
 ${c} --session "<session-id>" files upload ./report.csv       # 上传本地文件到会话
 ${c} --session "<session-id>" files get <file-id> -o file.csv # 保存已完成的 Session 文件到本地
 ${c} --session "<session-id>" files rename <file-id> name.csv # 重命名已完成的 Session 文件
-${c} --session "<session-id>" files delete <file-id>          # 删除已完成的 Session 文件
+${c} --session "<session-id>" files delete <file-id>          # 删除文件，返回对象删除和记录删除状态
 
 ## 通用参数
 

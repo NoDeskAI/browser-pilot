@@ -177,6 +177,7 @@ def test_session_file_management_routes_verify_access(monkeypatch):
 
     async def fake_delete(session_id, file_id):
         captured["delete"] = (session_id, file_id)
+        return {"ok": True, "objectDeleted": True, "recordDeleted": True, "warning": None}
 
     monkeypatch.setattr(files, "verify_session_access", fake_verify)
     monkeypatch.setattr(file_service, "get_session_file", fake_get)
@@ -197,7 +198,7 @@ def test_session_file_management_routes_verify_access(monkeypatch):
 
     assert get_result == {"file": {"id": "file-1", "name": "a.txt"}}
     assert rename_result == {"ok": True, "file": {"id": "file-1", "name": "renamed.txt"}}
-    assert delete_result == {"ok": True}
+    assert delete_result == {"ok": True, "objectDeleted": True, "recordDeleted": True, "warning": None}
     assert captured["verify"] == [
         ("session-1", "user-1"),
         ("session-1", "user-1"),

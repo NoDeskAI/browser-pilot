@@ -108,8 +108,9 @@ export default {
     renameFailed: '重命名失败',
     delete: '删除',
     deleteTitle: '删除文件',
-    deleteConfirm: '确定删除「{name}」？该文件会从后端文件存储中移除。',
+    deleteConfirm: '确定删除「{name}」？系统会先尝试删除后端文件对象，然后移除列表记录；如果对象删除失败，会保留提示但仍移除列表记录。',
     deleted: '文件已删除',
+    deleteObjectWarning: '文件列表记录已删除，但后端存储对象未确认删除。若近期切换过 S3 存储，请检查旧存储桶。',
     deleteFailed: '删除文件失败',
   },
   vnc: {

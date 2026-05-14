@@ -383,8 +383,14 @@ def test_session_file_metadata_rename_and_delete(monkeypatch):
     assert renamed["url"] == f"http://localhost:8000/api/files/{saved['id']}.txt"
     assert pool.rows[saved["id"]]["object_key"] == object_key
 
-    asyncio.run(file_service.delete_session_file("session-1", saved["id"]))
+    deleted = asyncio.run(file_service.delete_session_file("session-1", saved["id"]))
 
+    assert deleted == {
+        "ok": True,
+        "objectDeleted": True,
+        "recordDeleted": True,
+        "warning": None,
+    }
     assert saved["id"] not in pool.rows
     assert object_key not in store.objects
 
@@ -417,7 +423,7 @@ def test_session_file_operations_require_matching_session(monkeypatch):
     assert saved["id"] in pool.rows
 
 
-def test_delete_session_file_keeps_record_when_object_delete_fails(monkeypatch):
+def test_delete_session_file_removes_record_when_object_delete_fails(monkeypatch):
     store = FakeStore()
     pool = FakePool()
     monkeypatch.setattr(file_service, "get_store", lambda: asyncio.sleep(0, store))
@@ -433,8 +439,12 @@ def test_delete_session_file_keeps_record_when_object_delete_fails(monkeypatch):
     )
     store.fail_delete = True
 
-    with pytest.raises(file_service.HTTPException) as exc:
-        asyncio.run(file_service.delete_session_file("session-1", saved["id"]))
+    deleted = asyncio.run(file_service.delete_session_file("session-1", saved["id"]))
 
-    assert exc.value.status_code == 502
-    assert saved["id"] in pool.rows
+    assert deleted == {
+        "ok": True,
+        "objectDeleted": False,
+        "recordDeleted": True,
+        "warning": "file_object_delete_failed",
+    }
+    assert saved["id"] not in pool.rows

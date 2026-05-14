@@ -347,8 +347,6 @@ async function onPauseContainer() {
       </DialogContent>
     </Dialog>
 
-    <SessionFilesDialog v-model:open="filesDialogOpen" :session-id="sessions.activeId" />
-
     <div class="flex-1 relative overflow-hidden min-h-0 bg-muted/10">
       <NoVNCViewer v-if="vncUrl && sessions.activeId" :key="vncUrl" :ws-url="vncUrl" :session-id="sessions.activeId" />
       
@@ -364,6 +362,7 @@ async function onPauseContainer() {
         <p class="text-sm">{{ t('app.startingBrowser') }}</p>
         <p class="text-xs mt-1 opacity-60 max-w-sm text-center">{{ t('app.startingBrowserHint') }}</p>
       </div>
+      <SessionFilesDialog v-model:open="filesDialogOpen" :session-id="sessions.activeId" />
     </div>
     <BrowserLogPanel :session-id="sessions.activeId" />
   </div>

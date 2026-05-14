@@ -151,7 +151,7 @@ Docker Compose starts a bundled S3-compatible object storage service and preconf
 
 Browser downloads are captured inside the Selenium/Chrome runtime by `file-capture-agent`. The agent listens to Chrome download completion events and uploads finished files to the backend ingest API; storage provider credentials stay only in the backend. The older backend Docker watcher is disabled by default and should only be enabled temporarily for old browser images that do not contain the runtime agent.
 
-Session files are managed through the backend FileStore. Users and session-scoped API tokens can list, upload, read, rename, and delete session files through `/api/sessions/{sessionId}/files`; file content URLs continue to use the backend `/api/files/...` proxy and never expose internal S3 endpoints.
+Session files are managed through the backend FileStore. Users and session-scoped API tokens can list, upload, read, rename, and delete session files through `/api/sessions/{sessionId}/files`; delete responses distinguish backend object deletion from file-list record deletion. File content URLs continue to use the backend `/api/files/...` proxy and never expose internal S3 endpoints.
 
 ### Database migrations
 

@@ -196,5 +196,4 @@ async def delete_session_file_route(
     from app.file_service import delete_session_file
 
     await verify_session_access(session_id, user)
-    await delete_session_file(session_id, file_id)
-    return {"ok": True}
+    return await delete_session_file(session_id, file_id)

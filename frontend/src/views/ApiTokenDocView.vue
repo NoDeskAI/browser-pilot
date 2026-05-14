@@ -88,7 +88,7 @@ curl -X PATCH "http://localhost:9222/api/sessions/$SESSION_ID/files/$FILE_ID" \\
   -H "Content-Type: application/json" \\
   -d '{"name": "final-report.csv"}'
 
-# 删除文件，会同时移除后端 FileStore/S3 对象和列表记录。
+# 删除文件。返回 objectDeleted 与 recordDeleted；如果存储对象删除失败，记录仍会移除并返回 warning。
 curl -X DELETE "http://localhost:9222/api/sessions/$SESSION_ID/files/$FILE_ID" \\
   -H "Authorization: Bearer $TOKEN"
 \`\`\`
@@ -141,7 +141,7 @@ curl -X POST http://localhost:9222/api/browser/type \\
 | | \`POST /api/sessions/{id}/files\` | 上传 Session 文件 |
 | | \`GET /api/sessions/{id}/files/{fileId}\` | 查看单个文件元数据 |
 | | \`PATCH /api/sessions/{id}/files/{fileId}\` | 重命名 Session 文件 |
-| | \`DELETE /api/sessions/{id}/files/{fileId}\` | 删除 Session 文件 |
+| | \`DELETE /api/sessions/{id}/files/{fileId}\` | 删除 Session 文件，返回对象删除和记录删除状态 |
 | | \`GET /api/files/{fileId}.{ext}\` | 读取已完成文件内容 |
 
 其余接口（会话列表、创建/删除会话、用户管理等）需要使用 **用户级 Token**。
@@ -289,7 +289,7 @@ Session-scoped tokens can only call the following endpoints, and the \`sessionId
 | | \`POST /api/sessions/{id}/files\` | Upload a session file |
 | | \`GET /api/sessions/{id}/files/{fileId}\` | Get one file DTO |
 | | \`PATCH /api/sessions/{id}/files/{fileId}\` | Rename a session file |
-| | \`DELETE /api/sessions/{id}/files/{fileId}\` | Delete a session file |
+| | \`DELETE /api/sessions/{id}/files/{fileId}\` | Delete a session file and return object/record delete status |
 | | \`GET /api/files/{fileId}.{ext}\` | Read completed file content |
 
 All other endpoints (session list, create/delete sessions, user management, etc.) require a **user-level token**.

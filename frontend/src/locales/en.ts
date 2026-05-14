@@ -108,8 +108,9 @@ export default {
     renameFailed: 'Failed to rename file',
     delete: 'Delete',
     deleteTitle: 'Delete file',
-    deleteConfirm: 'Delete "{name}"? This removes it from backend file storage.',
+    deleteConfirm: 'Delete "{name}"? The backend will try to delete the stored object first, then remove the list record. If object deletion fails, the record is still removed with a warning.',
     deleted: 'File deleted',
+    deleteObjectWarning: 'The file list record was deleted, but the backend storage object was not confirmed deleted. If S3 storage was changed recently, check the previous bucket.',
     deleteFailed: 'Failed to delete file',
   },
   vnc: {

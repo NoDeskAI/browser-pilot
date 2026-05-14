@@ -327,7 +327,7 @@ async def rename_session_file(session_id: str, file_id: str, name: str) -> dict[
     return _file_dto(row)
 
 
-async def delete_session_file(session_id: str, file_id: str) -> None:
+async def delete_session_file(session_id: str, file_id: str) -> dict[str, Any]:
     pool = get_pool()
     row = await pool.fetchrow(
         "SELECT * FROM session_files WHERE session_id = $1 AND id = $2",
@@ -337,12 +337,21 @@ async def delete_session_file(session_id: str, file_id: str) -> None:
     if not row:
         raise HTTPException(404, "File not found")
 
+    warning: str | None = None
+    object_deleted = True
     store = await get_store()
     try:
         await store.delete_by_key(row["object_key"])
     except Exception as exc:
-        logger.warning("File object delete failed session=%s file=%s: %s", session_id, file_id, exc)
-        raise HTTPException(502, "Failed to delete file object") from exc
+        object_deleted = False
+        warning = "file_object_delete_failed"
+        logger.warning(
+            "File object delete failed; removing DB record only session=%s file=%s key=%s: %s",
+            session_id,
+            file_id,
+            row["object_key"],
+            exc,
+        )
 
     result = await pool.execute(
         "DELETE FROM session_files WHERE session_id = $1 AND id = $2",
@@ -352,6 +361,13 @@ async def delete_session_file(session_id: str, file_id: str) -> None:
     if result != "DELETE 1":
         logger.error("File row delete failed session=%s file=%s result=%s", session_id, file_id, result)
         raise HTTPException(500, "Failed to delete file record")
+
+    return {
+        "ok": True,
+        "objectDeleted": object_deleted,
+        "recordDeleted": True,
+        "warning": warning,
+    }
 
 
 async def get_file_payload(file_id: str, user: CurrentUser) -> tuple[bytes, str] | None:
