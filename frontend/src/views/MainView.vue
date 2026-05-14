@@ -5,7 +5,7 @@ import { useI18n } from 'vue-i18n'
 import { useSessions } from '../composables/useSessions'
 import { useNotify } from '../composables/useNotify'
 import { api } from '../lib/api'
-import { Play, Pause, Trash2, ChevronRight, Monitor, Key, Loader2, Copy, Check, CornerDownLeft } from 'lucide-vue-next'
+import { Play, Pause, Trash2, ChevronRight, Monitor, Key, Loader2, Copy, Check, CornerDownLeft, FolderOpen } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -13,6 +13,7 @@ import { Badge } from '@/components/ui/badge'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import NoVNCViewer from '../components/NoVNCViewer.vue'
 import BrowserLogPanel from '../components/BrowserLogPanel.vue'
+import SessionFilesDialog from '../components/SessionFilesDialog.vue'
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog'
@@ -40,6 +41,7 @@ const deleteDialogOpen = ref(false)
 const deleting = ref(false)
 const containerActionLoading = ref(false)
 const deleteButtonRef = ref<Element | ComponentPublicInstance | null>(null)
+const filesDialogOpen = ref(false)
 
 // Session Token
 const tokenDialogOpen = ref(false)
@@ -251,6 +253,19 @@ async function onPauseContainer() {
           <TooltipTrigger as-child>
             <Button
               variant="outline" size="sm" class="h-8 gap-1.5 text-muted-foreground hover:text-foreground"
+              @click="filesDialogOpen = true"
+            >
+              <FolderOpen class="size-3.5" />
+              {{ t('sessionFiles.button') }}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>{{ t('sessionFiles.buttonHint') }}</TooltipContent>
+        </Tooltip>
+
+        <Tooltip>
+          <TooltipTrigger as-child>
+            <Button
+              variant="outline" size="sm" class="h-8 gap-1.5 text-muted-foreground hover:text-foreground"
               @click="tokenDialogOpen = true"
             >
               <Key class="size-3.5" />
@@ -331,6 +346,8 @@ async function onPauseContainer() {
         </template>
       </DialogContent>
     </Dialog>
+
+    <SessionFilesDialog v-model:open="filesDialogOpen" :session-id="sessions.activeId" />
 
     <div class="flex-1 relative overflow-hidden min-h-0 bg-muted/10">
       <NoVNCViewer v-if="vncUrl && sessions.activeId" :key="vncUrl" :ws-url="vncUrl" :session-id="sessions.activeId" />

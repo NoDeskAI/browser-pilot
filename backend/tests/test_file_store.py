@@ -30,6 +30,10 @@ class FakeS3Client:
         body, content_type = self.objects[(Bucket, Key)]
         return {"Body": FakeBody(body), "ContentType": content_type}
 
+    def delete_object(self, Bucket, Key):
+        self.objects.pop((Bucket, Key), None)
+        return {}
+
 
 def test_s3_store_returns_backend_file_url_and_can_read(monkeypatch):
     client = FakeS3Client()
@@ -57,10 +61,13 @@ def test_s3_store_returns_backend_file_url_and_can_read(monkeypatch):
     saved = asyncio.run(store.save(b64, "session-1"))
     file_id = saved["url"].removeprefix("http://localhost:8000/api/files/").removesuffix(".png")
     loaded = asyncio.run(store.get(file_id))
+    key = next(iter(client.objects))[1]
+    asyncio.run(store.delete_by_key(key))
 
     assert saved["url"].startswith("http://localhost:8000/api/files/")
     assert "object-storage:9000" not in saved["url"]
     assert loaded == (b"png-bytes", "image/png")
+    assert client.objects == {}
 
 
 def test_builtin_store_serves_cached_file():
@@ -70,5 +77,8 @@ def test_builtin_store_serves_cached_file():
     saved = asyncio.run(store.save(b64, "session-1"))
     file_id = saved["url"].removeprefix("http://localhost:8000/api/files/").removesuffix(".png")
     loaded = asyncio.run(store.get(file_id))
+    key = next(iter(store._cache))
+    asyncio.run(store.delete_by_key(key))
 
     assert loaded == (b"png-bytes", "image/png")
+    assert store._cache == {}

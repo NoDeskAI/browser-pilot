@@ -59,10 +59,14 @@ bpilot observe                    # see page elements with coordinates
 bpilot click 640 380              # click at coordinates
 bpilot type "hello world"         # type into focused input
 bpilot screenshot --output page.png # stored in FileStore, then exported locally
-bpilot files list --json          # list session files with downloading/completed status
+bpilot files list --json          # list session files with status
+bpilot files upload ./input.csv   # upload a local file into the session
+bpilot files get <file-id> -o out.csv # save a completed session file locally
+bpilot files rename <file-id> final.csv
+bpilot files delete <file-id>
 ```
 
-Add `--json` for machine-readable output (for AI Agents). Use `bpilot files list --json` to inspect session files; each item includes `status` so agents can distinguish `downloading` from `completed`.
+Add `--json` for machine-readable output (for AI Agents). Use `bpilot files list --json` to inspect session files; each item includes `status` so agents can distinguish in-progress files from `completed` files.
 
 ## Architecture
 
@@ -146,6 +150,8 @@ This starts PostgreSQL and bundled S3-compatible object storage in Docker, initi
 Docker Compose starts a bundled S3-compatible object storage service and preconfigures it as regular S3 storage on first backend startup. The storage settings page still only exposes two modes: **S3 Storage** and **Built-in Storage**. To use AWS S3, Cloudflare R2, OSS, or another S3-compatible provider, edit the S3 fields in the settings page; existing database settings are never overwritten by the Compose defaults.
 
 Browser downloads are captured inside the Selenium/Chrome runtime by `file-capture-agent`. The agent listens to Chrome download completion events and uploads finished files to the backend ingest API; storage provider credentials stay only in the backend. The older backend Docker watcher is disabled by default and should only be enabled temporarily for old browser images that do not contain the runtime agent.
+
+Session files are managed through the backend FileStore. Users and session-scoped API tokens can list, upload, read, rename, and delete session files through `/api/sessions/{sessionId}/files`; file content URLs continue to use the backend `/api/files/...` proxy and never expose internal S3 endpoints.
 
 ### Database migrations
 

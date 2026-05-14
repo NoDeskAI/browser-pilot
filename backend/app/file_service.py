@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import mimetypes
 import re
 import uuid
@@ -13,6 +14,8 @@ from app.auth.dependencies import CurrentUser
 from app.config import API_BASE_URL
 from app.db import get_pool
 from app.file_store import get_store
+
+logger = logging.getLogger("file_service")
 
 
 def _safe_filename(name: str, default: str = "file") -> str:
@@ -291,6 +294,64 @@ async def list_session_files(session_id: str) -> list[dict[str, Any]]:
         if item.get("id") not in completed_source_ids
     ]
     return [*downloading, *completed]
+
+
+async def get_session_file(session_id: str, file_id: str) -> dict[str, Any]:
+    pool = get_pool()
+    row = await pool.fetchrow(
+        "SELECT * FROM session_files WHERE session_id = $1 AND id = $2",
+        session_id,
+        file_id,
+    )
+    if not row:
+        raise HTTPException(404, "File not found")
+    return _file_dto(row)
+
+
+async def rename_session_file(session_id: str, file_id: str, name: str) -> dict[str, Any]:
+    filename = _safe_filename(name, "file")
+    pool = get_pool()
+    row = await pool.fetchrow(
+        """
+        UPDATE session_files
+        SET original_name = $3
+        WHERE session_id = $1 AND id = $2
+        RETURNING *
+        """,
+        session_id,
+        file_id,
+        filename,
+    )
+    if not row:
+        raise HTTPException(404, "File not found")
+    return _file_dto(row)
+
+
+async def delete_session_file(session_id: str, file_id: str) -> None:
+    pool = get_pool()
+    row = await pool.fetchrow(
+        "SELECT * FROM session_files WHERE session_id = $1 AND id = $2",
+        session_id,
+        file_id,
+    )
+    if not row:
+        raise HTTPException(404, "File not found")
+
+    store = await get_store()
+    try:
+        await store.delete_by_key(row["object_key"])
+    except Exception as exc:
+        logger.warning("File object delete failed session=%s file=%s: %s", session_id, file_id, exc)
+        raise HTTPException(502, "Failed to delete file object") from exc
+
+    result = await pool.execute(
+        "DELETE FROM session_files WHERE session_id = $1 AND id = $2",
+        session_id,
+        file_id,
+    )
+    if result != "DELETE 1":
+        logger.error("File row delete failed session=%s file=%s result=%s", session_id, file_id, result)
+        raise HTTPException(500, "Failed to delete file record")
 
 
 async def get_file_payload(file_id: str, user: CurrentUser) -> tuple[bytes, str] | None:

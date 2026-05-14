@@ -56,10 +56,14 @@ bpilot observe                    # 查看页面元素及坐标
 bpilot click 640 380              # 按坐标点击
 bpilot type "hello world"         # 向当前焦点输入框输入文字
 bpilot screenshot --output page.png # 先存入 FileStore，再导出本地副本
-bpilot files list --json          # 列出当前 session 文件及 downloading/completed 状态
+bpilot files list --json          # 列出当前 session 文件及状态
+bpilot files upload ./input.csv   # 上传本地文件到当前 session
+bpilot files get <file-id> -o out.csv # 保存已完成的 session 文件到本地
+bpilot files rename <file-id> final.csv
+bpilot files delete <file-id>
 ```
 
-加 `--json` 可输出机器可读格式（供 AI Agent 使用）。Agent 通过 `bpilot files list --json` 查看当前 session 文件；每个 item 都有 `status`，用于区分 `downloading` 和 `completed`。
+加 `--json` 可输出机器可读格式（供 AI Agent 使用）。Agent 通过 `bpilot files list --json` 查看当前 session 文件；每个 item 都有 `status`，用于区分进行中的文件和 `completed` 文件。
 
 ## 架构
 
@@ -137,6 +141,8 @@ cp .env.example .env
 Docker Compose 会启动内置 MinIO，并在后端首次启动时把它作为普通 S3 兼容存储写入设置。设置页仍只展示 **S3 存储** 和 **内置存储** 两种方式。要切换 AWS S3、Cloudflare R2、OSS 或其他 S3 兼容服务，直接在同一个 S3 表单中修改配置；已有数据库配置不会被 Compose 默认值覆盖。
 
 浏览器下载由 Selenium/Chrome runtime 内的 `file-capture-agent` 捕获。agent 监听 Chrome 下载完成事件，把完成后的文件上传到后端 ingest API；S3/Builtin 存储凭据只保留在后端。旧版后端 Docker watcher 默认关闭，只应在旧浏览器镜像没有 runtime agent 时临时启用。
+
+Session 文件统一由后端 FileStore 管理。用户和会话级 API Token 可以通过 `/api/sessions/{sessionId}/files` 列出、上传、读取元数据、重命名和删除文件；文件内容 URL 继续走后端 `/api/files/...` 代理，不暴露 S3 内部 endpoint。
 
 ### 数据库迁移
 

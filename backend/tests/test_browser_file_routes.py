@@ -120,6 +120,113 @@ def test_session_files_route_verifies_access_and_lists_files(monkeypatch):
     assert calls == {"verify": ("session-1", "user-1"), "list": "session-1"}
 
 
+def test_upload_session_file_verifies_access_and_saves_user_upload(monkeypatch):
+    captured = {}
+
+    async def fake_verify(session_id, user):
+        captured["verify"] = (session_id, user.id, user.session_scope)
+
+    async def fake_save_file(**kwargs):
+        captured["save"] = kwargs
+        captured["bytes"] = kwargs["path"].read_bytes()
+        return {
+            "id": "file-1",
+            "name": kwargs["filename"],
+            "status": "completed",
+            "source": "user_upload",
+            "url": "http://localhost:8000/api/files/file-1.txt",
+        }
+
+    monkeypatch.setattr(files, "verify_session_access", fake_verify)
+    monkeypatch.setattr(file_service, "save_file", fake_save_file)
+
+    upload = UploadFile(filename="ignored.txt", file=io.BytesIO(b"uploaded"))
+    result = asyncio.run(
+        files.upload_session_file(
+            "session-1",
+            file=upload,
+            originalName="report.txt",
+            user=_user(session_scope="session-1"),
+        )
+    )
+
+    assert result["ok"] is True
+    assert result["file"]["source"] == "user_upload"
+    assert captured["verify"] == ("session-1", "user-1", "session-1")
+    assert captured["save"]["session_id"] == "session-1"
+    assert captured["save"]["source"] == "user_upload"
+    assert captured["save"]["filename"] == "report.txt"
+    assert captured["save"].get("source_id") is None
+    assert captured["save"].get("source_path") is None
+    assert captured["bytes"] == b"uploaded"
+
+
+def test_session_file_management_routes_verify_access(monkeypatch):
+    captured = {}
+
+    async def fake_verify(session_id, user):
+        captured.setdefault("verify", []).append((session_id, user.id))
+
+    async def fake_get(session_id, file_id):
+        captured["get"] = (session_id, file_id)
+        return {"id": file_id, "name": "a.txt"}
+
+    async def fake_rename(session_id, file_id, name):
+        captured["rename"] = (session_id, file_id, name)
+        return {"id": file_id, "name": name}
+
+    async def fake_delete(session_id, file_id):
+        captured["delete"] = (session_id, file_id)
+
+    monkeypatch.setattr(files, "verify_session_access", fake_verify)
+    monkeypatch.setattr(file_service, "get_session_file", fake_get)
+    monkeypatch.setattr(file_service, "rename_session_file", fake_rename)
+    monkeypatch.setattr(file_service, "delete_session_file", fake_delete)
+
+    user = _user(session_scope="session-1")
+    get_result = asyncio.run(files.get_session_file_route("session-1", "file-1", user=user))
+    rename_result = asyncio.run(
+        files.rename_session_file_route(
+            "session-1",
+            "file-1",
+            files.RenameSessionFileBody(name="renamed.txt"),
+            user=user,
+        )
+    )
+    delete_result = asyncio.run(files.delete_session_file_route("session-1", "file-1", user=user))
+
+    assert get_result == {"file": {"id": "file-1", "name": "a.txt"}}
+    assert rename_result == {"ok": True, "file": {"id": "file-1", "name": "renamed.txt"}}
+    assert delete_result == {"ok": True}
+    assert captured["verify"] == [
+        ("session-1", "user-1"),
+        ("session-1", "user-1"),
+        ("session-1", "user-1"),
+    ]
+    assert captured["get"] == ("session-1", "file-1")
+    assert captured["rename"] == ("session-1", "file-1", "renamed.txt")
+    assert captured["delete"] == ("session-1", "file-1")
+
+
+def test_session_file_upload_rejects_cross_session_token(monkeypatch):
+    async def fake_verify(_session_id, _user):
+        raise files.HTTPException(403, "Token not authorized for this session")
+
+    monkeypatch.setattr(files, "verify_session_access", fake_verify)
+
+    upload = UploadFile(filename="report.txt", file=io.BytesIO(b"uploaded"))
+    with pytest.raises(files.HTTPException) as exc:
+        asyncio.run(
+            files.upload_session_file(
+                "session-1",
+                file=upload,
+                user=_user(session_scope="session-2"),
+            )
+        )
+
+    assert exc.value.status_code == 403
+
+
 def test_ingest_route_verifies_runtime_token_and_saves_file(monkeypatch):
     captured = {}
 

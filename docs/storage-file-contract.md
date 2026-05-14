@@ -87,17 +87,17 @@ CLI 输出应能区分：
 
 用户在 noVNC/Chrome 内点击下载时，文件不能只停留在 `/home/seluser/Downloads`。
 
-这里的 `download watcher` 指后端为每个运行中的 session 启动的后台同步任务。它只负责观察 Chrome 下载目录，判断文件是否已经下载完成，然后把完成后的文件交给 FileStore 保存。它不是一个新的存储系统，也不直接依赖某个 S3 vendor。
+这里的主链路是 runtime 内的 `file-capture-agent`。它和 Chrome 共享下载目录，监听 Chrome 下载完成事件，然后把完成后的文件上传到后端 ingest API。它不是一个新的存储系统，也不持有 S3/Builtin 存储凭据。
 
 目标流程：
 
 1. Chrome 下载到 session-local download staging 目录。
-2. 后端 download watcher 发现下载完成。
-3. 上传到 FileStore/S3。
+2. runtime `file-capture-agent` 发现下载完成。
+3. agent 上传到后端 ingest API，由后端写入 FileStore/S3。
 4. 在 session 文件列表或 API 中暴露文件记录。
 5. 如需保留容器内文件，只能作为缓存副本，并需要清理策略。
 
-下载完成判断必须避开未完成文件：
+下载完成判断必须避开未完成文件；目录轮询、`.crdownload` 过滤、size/mtime 稳定只能作为 agent 内部 fallback：
 
 - `.crdownload` 不可上传。
 - 文件大小稳定后才可上传。
@@ -130,17 +130,17 @@ files/{sessionId}/{fileId}/{filename}
 
 ## UI / API 要求
 
-需要提供 session 文件列表能力，至少覆盖浏览器下载文件：
+需要提供 session 文件管理能力，至少覆盖浏览器生成文件和用户上传文件：
 
 - 文件名
 - 文件类型
 - 大小
-- 来源：`screenshot` / `browser_download` / `recording` / `export` / `artifact`
+- 来源：`screenshot` / `browser_download` / `user_upload` / `recording` / `export` / `artifact`
 - 创建时间
 - 下载链接
 - 存储模式：`s3` / `builtin`
 
-API 可以后续设计，但不应要求用户进入容器查找文件。
+API 不应要求用户进入容器查找文件；文件内容 URL 统一走后端代理。
 
 ## 验收标准
 
@@ -150,7 +150,7 @@ API 可以后续设计，但不应要求用户进入容器查找文件。
 - CLI 截图即使写了 `-o /tmp/a.png`，S3 中也存在对象；`/tmp/a.png` 只是 local copy。
 - 浏览器内下载文件后，S3 中存在对象。
 - 容器 `/home/seluser/Downloads` 中的文件不能是唯一副本。
-- 前端或 API 能看到下载文件记录。
+- 前端或 API 能看到 session 文件记录，并能上传、读取、重命名和删除已完成文件。
 - 文件 URL 统一走后端 `/api/files/...`，不能暴露 S3 provider 的内部 endpoint。
 - Builtin 模式也走同一套 FileStore 抽象，只是底层存储不同。
 
@@ -167,13 +167,14 @@ API 可以后续设计，但不应要求用户进入容器查找文件。
 - 截图 API 默认写入 FileStore，并继续用 `screenshot` base64 字段兼容旧客户端。
 - `includeBase64=false` 可以只返回文件记录。
 - CLI `-o` 先让后端写入 FileStore，再通过 `file.url` 下载一个本地副本。
-- 浏览器下载通过 session download watcher 上传到 FileStore，并写入 `session_files`。
+- 浏览器下载通过 runtime `file-capture-agent` 上传到 FileStore，并写入 `session_files`。
 - `GET /api/sessions/{sessionId}/files` 返回当前 session 的统一文件列表，每个 item 通过 `status` 表示 `downloading` 或 `completed`。
+- 用户侧 `POST/GET/PATCH/DELETE /api/sessions/{sessionId}/files...` 支持上传、读取元数据、重命名和删除已完成文件。
 - `bpilot files list --json` 对外暴露同一个统一文件列表，不做 cursor、未读状态或动作级下载推理。
+- `bpilot files upload/get/rename/delete` 只处理明确的文件管理动作。
 - 文件下载 URL 统一通过后端 `/api/files/...` 代理，不暴露 S3 provider 内部地址。
 
 后续仍需单独设计：
 
 - 文件保留时长、配额和清理策略。
-- 前端完整文件管理页。
 - 录屏、导出、AI 产物等更多文件来源接入。

@@ -69,6 +69,30 @@ curl "http://localhost:9222/api/browser/screenshot?sessionId=$SESSION_ID&include
   -H "Authorization: Bearer $TOKEN"
 \`\`\`
 
+### Session 文件管理
+
+\`\`\`bash
+# 列出当前 Session 文件。status 为 completed 的文件可以使用 url 获取内容。
+curl "http://localhost:9222/api/sessions/$SESSION_ID/files" \\
+  -H "Authorization: Bearer $TOKEN"
+
+# 上传本地文件到 Session 文件列表。
+curl -X POST "http://localhost:9222/api/sessions/$SESSION_ID/files" \\
+  -H "Authorization: Bearer $TOKEN" \\
+  -F "file=@./report.csv" \\
+  -F "originalName=report.csv"
+
+# 重命名文件展示名。
+curl -X PATCH "http://localhost:9222/api/sessions/$SESSION_ID/files/$FILE_ID" \\
+  -H "Authorization: Bearer $TOKEN" \\
+  -H "Content-Type: application/json" \\
+  -d '{"name": "final-report.csv"}'
+
+# 删除文件，会同时移除后端 FileStore/S3 对象和列表记录。
+curl -X DELETE "http://localhost:9222/api/sessions/$SESSION_ID/files/$FILE_ID" \\
+  -H "Authorization: Bearer $TOKEN"
+\`\`\`
+
 ### 点击元素
 
 \`\`\`bash
@@ -113,6 +137,12 @@ curl -X POST http://localhost:9222/api/browser/type \\
 | | \`POST /api/sessions/{id}/container/pause\` | 休眠容器 |
 | | \`POST /api/sessions/{id}/container/unpause\` | 恢复容器 |
 | | \`GET /api/sessions/{id}/logs\` | 查看运行日志 |
+| 文件 | \`GET /api/sessions/{id}/files\` | 查看 Session 文件列表 |
+| | \`POST /api/sessions/{id}/files\` | 上传 Session 文件 |
+| | \`GET /api/sessions/{id}/files/{fileId}\` | 查看单个文件元数据 |
+| | \`PATCH /api/sessions/{id}/files/{fileId}\` | 重命名 Session 文件 |
+| | \`DELETE /api/sessions/{id}/files/{fileId}\` | 删除 Session 文件 |
+| | \`GET /api/files/{fileId}.{ext}\` | 读取已完成文件内容 |
 
 其余接口（会话列表、创建/删除会话、用户管理等）需要使用 **用户级 Token**。
 
@@ -187,6 +217,30 @@ curl "http://localhost:9222/api/browser/screenshot?sessionId=$SESSION_ID&include
   -H "Authorization: Bearer $TOKEN"
 \`\`\`
 
+### Session File Management
+
+\`\`\`bash
+# List files for the current session. Completed files include a content URL.
+curl "http://localhost:9222/api/sessions/$SESSION_ID/files" \\
+  -H "Authorization: Bearer $TOKEN"
+
+# Upload a local file into the session file list.
+curl -X POST "http://localhost:9222/api/sessions/$SESSION_ID/files" \\
+  -H "Authorization: Bearer $TOKEN" \\
+  -F "file=@./report.csv" \\
+  -F "originalName=report.csv"
+
+# Rename the display name.
+curl -X PATCH "http://localhost:9222/api/sessions/$SESSION_ID/files/$FILE_ID" \\
+  -H "Authorization: Bearer $TOKEN" \\
+  -H "Content-Type: application/json" \\
+  -d '{"name": "final-report.csv"}'
+
+# Delete the file from backend FileStore/S3 and the session file list.
+curl -X DELETE "http://localhost:9222/api/sessions/$SESSION_ID/files/$FILE_ID" \\
+  -H "Authorization: Bearer $TOKEN"
+\`\`\`
+
 ### Click at Coordinates
 
 \`\`\`bash
@@ -231,6 +285,12 @@ Session-scoped tokens can only call the following endpoints, and the \`sessionId
 | | \`POST /api/sessions/{id}/container/pause\` | Hibernate container |
 | | \`POST /api/sessions/{id}/container/unpause\` | Resume container |
 | | \`GET /api/sessions/{id}/logs\` | View runtime logs |
+| Files | \`GET /api/sessions/{id}/files\` | List session files |
+| | \`POST /api/sessions/{id}/files\` | Upload a session file |
+| | \`GET /api/sessions/{id}/files/{fileId}\` | Get one file DTO |
+| | \`PATCH /api/sessions/{id}/files/{fileId}\` | Rename a session file |
+| | \`DELETE /api/sessions/{id}/files/{fileId}\` | Delete a session file |
+| | \`GET /api/files/{fileId}.{ext}\` | Read completed file content |
 
 All other endpoints (session list, create/delete sessions, user management, etc.) require a **user-level token**.
 

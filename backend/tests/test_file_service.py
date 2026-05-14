@@ -25,6 +25,7 @@ class FakeStore:
 
     def __init__(self):
         self.objects = {}
+        self.fail_delete = False
 
     async def save_bytes(self, data, *, key, content_type):
         self.objects[key] = (data, content_type)
@@ -35,6 +36,11 @@ class FakeStore:
     async def get_by_key(self, key):
         return self.objects.get(key)
 
+    async def delete_by_key(self, key):
+        if self.fail_delete:
+            raise RuntimeError("delete failed")
+        self.objects.pop(key, None)
+
 
 class FakePool:
     def __init__(self):
@@ -43,11 +49,24 @@ class FakePool:
         self._created_count = 0
 
     async def fetchrow(self, query, *args):
+        if "UPDATE session_files" in query and "SET original_name" in query:
+            session_id, file_id, filename = args
+            row = self.rows.get(file_id)
+            if row and row["session_id"] == session_id:
+                row["original_name"] = filename
+                return row
+            return None
         if "SELECT tenant_id FROM sessions" in query:
             tenant = self.session_tenants.get(args[0])
             return {"tenant_id": tenant} if tenant else None
         if "SELECT * FROM session_files WHERE id" in query:
             return self.rows.get(args[0])
+        if "SELECT * FROM session_files WHERE session_id = $1 AND id = $2" in query:
+            session_id, file_id = args
+            row = self.rows.get(file_id)
+            if row and row["session_id"] == session_id:
+                return row
+            return None
         if "SELECT * FROM session_files" in query and "source_id = $3" in query:
             session_id, source, source_id = args
             for row in self.rows.values():
@@ -73,6 +92,13 @@ class FakePool:
         return None
 
     async def execute(self, query, *args):
+        if "DELETE FROM session_files" in query:
+            session_id, file_id = args
+            row = self.rows.get(file_id)
+            if row and row["session_id"] == session_id:
+                del self.rows[file_id]
+                return "DELETE 1"
+            return "DELETE 0"
         if "INSERT INTO session_files" not in query:
             return "OK"
         (
@@ -329,3 +355,86 @@ def test_list_session_files_skips_active_download_that_already_completed(monkeyp
 
     assert files == [completed]
     assert files[0]["status"] == "completed"
+
+
+def test_session_file_metadata_rename_and_delete(monkeypatch):
+    store = FakeStore()
+    pool = FakePool()
+    monkeypatch.setattr(file_service, "get_store", lambda: asyncio.sleep(0, store))
+    monkeypatch.setattr(file_service, "get_pool", lambda: pool)
+    monkeypatch.setattr(file_service, "API_BASE_URL", "http://localhost:8000")
+
+    saved = asyncio.run(
+        file_service.save_bytes(
+            session_id="session-1",
+            source="user_upload",
+            data=b"csv-bytes",
+            filename="report.csv",
+            content_type="text/csv",
+        )
+    )
+    object_key = pool.rows[saved["id"]]["object_key"]
+
+    loaded = asyncio.run(file_service.get_session_file("session-1", saved["id"]))
+    renamed = asyncio.run(file_service.rename_session_file("session-1", saved["id"], "../final report.txt"))
+
+    assert loaded["id"] == saved["id"]
+    assert renamed["name"] == "final report.txt"
+    assert renamed["url"] == f"http://localhost:8000/api/files/{saved['id']}.txt"
+    assert pool.rows[saved["id"]]["object_key"] == object_key
+
+    asyncio.run(file_service.delete_session_file("session-1", saved["id"]))
+
+    assert saved["id"] not in pool.rows
+    assert object_key not in store.objects
+
+
+def test_session_file_operations_require_matching_session(monkeypatch):
+    store = FakeStore()
+    pool = FakePool()
+    monkeypatch.setattr(file_service, "get_store", lambda: asyncio.sleep(0, store))
+    monkeypatch.setattr(file_service, "get_pool", lambda: pool)
+
+    saved = asyncio.run(
+        file_service.save_bytes(
+            session_id="session-1",
+            source="user_upload",
+            data=b"data",
+            filename="a.txt",
+        )
+    )
+
+    with pytest.raises(file_service.HTTPException) as get_exc:
+        asyncio.run(file_service.get_session_file("session-2", saved["id"]))
+    with pytest.raises(file_service.HTTPException) as rename_exc:
+        asyncio.run(file_service.rename_session_file("session-2", saved["id"], "b.txt"))
+    with pytest.raises(file_service.HTTPException) as delete_exc:
+        asyncio.run(file_service.delete_session_file("session-2", saved["id"]))
+
+    assert get_exc.value.status_code == 404
+    assert rename_exc.value.status_code == 404
+    assert delete_exc.value.status_code == 404
+    assert saved["id"] in pool.rows
+
+
+def test_delete_session_file_keeps_record_when_object_delete_fails(monkeypatch):
+    store = FakeStore()
+    pool = FakePool()
+    monkeypatch.setattr(file_service, "get_store", lambda: asyncio.sleep(0, store))
+    monkeypatch.setattr(file_service, "get_pool", lambda: pool)
+
+    saved = asyncio.run(
+        file_service.save_bytes(
+            session_id="session-1",
+            source="user_upload",
+            data=b"data",
+            filename="a.txt",
+        )
+    )
+    store.fail_delete = True
+
+    with pytest.raises(file_service.HTTPException) as exc:
+        asyncio.run(file_service.delete_session_file("session-1", saved["id"]))
+
+    assert exc.value.status_code == 502
+    assert saved["id"] in pool.rows

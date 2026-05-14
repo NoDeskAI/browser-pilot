@@ -113,6 +113,15 @@ _download_url() {
   fi
 }
 
+_abs_url() {
+  local url="$1"
+  case "$url" in
+    http://*|https://*) printf '%s' "$url" ;;
+    /*) printf '%s%s' "$(_resolve_url)" "$url" ;;
+    *) printf '%s' "$url" ;;
+  esac
+}
+
 _api_post() {
   local path="$1" body="${2:-{\}}"
   local token
@@ -127,6 +136,20 @@ _api_post() {
   fi
 }
 
+_api_patch() {
+  local path="$1" body="${2:-{\}}"
+  local token
+  token="$(_config_get api_token)"
+  if [[ -n "$token" ]]; then
+    curl -sfS -X PATCH "$(_resolve_url)${path}" \
+      -H "Authorization: Bearer $token" \
+      -H "Content-Type: application/json" -d "$body"
+  else
+    curl -sfS -X PATCH "$(_resolve_url)${path}" \
+      -H "Content-Type: application/json" -d "$body"
+  fi
+}
+
 _api_delete() {
   local path="$1"
   local token
@@ -136,6 +159,20 @@ _api_delete() {
   else
     curl -sfS -X DELETE "$(_resolve_url)${path}"
   fi
+}
+
+_api_upload_file() {
+  local path="$1" file_path="$2" original_name="${3:-}"
+  local token
+  token="$(_config_get api_token)"
+  local args=(-sfS -X POST "$(_resolve_url)${path}" -F "file=@${file_path}")
+  if [[ -n "$original_name" ]]; then
+    args+=(-F "originalName=${original_name}")
+  fi
+  if [[ -n "$token" ]]; then
+    args=(-H "Authorization: Bearer $token" "${args[@]}")
+  fi
+  curl "${args[@]}"
 }
 
 _out() {
@@ -375,6 +412,55 @@ cmd_files_list() {
   _api_get "/api/sessions/$(_sid)/files" | _out
 }
 
+cmd_files_upload() {
+  local file_path="" original_name=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --name) original_name="$2"; shift 2 ;;
+      *) file_path="$1"; shift ;;
+    esac
+  done
+  [[ -n "$file_path" ]] || { echo "Usage: $CLI_NAME files upload <path> [--name <name>]"; exit 1; }
+  [[ -f "$file_path" ]] || { echo "Error: file not found: $file_path" >&2; exit 1; }
+  _api_upload_file "/api/sessions/$(_sid)/files" "$file_path" "$original_name" | _out
+}
+
+cmd_files_get() {
+  local file_id="${1:-}" output=""
+  [[ -n "$file_id" ]] || { echo "Usage: $CLI_NAME files get <file-id> -o <path>"; exit 1; }
+  shift || true
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -o|--output) output="$2"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  [[ -n "$output" ]] || { echo "Usage: $CLI_NAME files get <file-id> -o <path>"; exit 1; }
+  local resp file_url
+  resp=$(_api_get "/api/sessions/$(_sid)/files/$file_id")
+  file_url=$(echo "$resp" | grep -o '"url" *: *"[^"]*"' | head -1 | sed 's/.*: *"//;s/"//')
+  [[ -n "$file_url" ]] || { echo "$resp" | _out; exit 1; }
+  _download_url "$(_abs_url "$file_url")" "$output"
+  local sz; sz=$(wc -c < "$output" | tr -d ' ')
+  if $JSON_OUT; then
+    echo "$resp" | sed "s|}$|,\"localCopy\":\"$(_esc "$output")\",\"size\":$sz}|"
+  else
+    _green "File saved to $output ($sz bytes)"
+  fi
+}
+
+cmd_files_rename() {
+  local file_id="${1:-}" name="${2:-}"
+  [[ -n "$file_id" && -n "$name" ]] || { echo "Usage: $CLI_NAME files rename <file-id> <name>"; exit 1; }
+  _api_patch "/api/sessions/$(_sid)/files/$file_id" "{\"name\":\"$(_esc "$name")\"}" | _out
+}
+
+cmd_files_delete() {
+  local file_id="${1:-}"
+  [[ -n "$file_id" ]] || { echo "Usage: $CLI_NAME files delete <file-id>"; exit 1; }
+  _api_delete "/api/sessions/$(_sid)/files/$file_id" | _out
+}
+
 # ── Option parser ─────────────────────────────────────────────────────
 
 _parse_globals() {
@@ -434,7 +520,11 @@ case "${1:-}" in
     shift
     case "${1:-}" in
       list|ls)   shift; cmd_files_list "$@" ;;
-      *)         echo "Usage: $CLI_NAME files list" ;;
+      upload)    shift; cmd_files_upload "$@" ;;
+      get)       shift; cmd_files_get "$@" ;;
+      rename)    shift; cmd_files_rename "$@" ;;
+      delete|rm) shift; cmd_files_delete "$@" ;;
+      *)         echo "Usage: $CLI_NAME files {list|upload|get|rename|delete}" ;;
     esac
     ;;
   version|--version|-v)
@@ -483,6 +573,10 @@ Browser (require active session):
 
 Files:
   files list                   List session files with status
+  files upload <path> [--name <n>] Upload a local file into the session
+  files get <id> -o <path>     Save a completed session file locally
+  files rename <id> <name>     Rename a completed session file
+  files delete <id>            Delete a completed session file
 
 Global options:
   --json, -j                   Machine-readable JSON output

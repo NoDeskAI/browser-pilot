@@ -44,6 +44,8 @@ class FileStore(Protocol):
 
     async def get_by_key(self, key: str) -> tuple[bytes, str] | None: ...
 
+    async def delete_by_key(self, key: str) -> None: ...
+
 
 def _encode_file_id(key: str) -> str:
     return base64.urlsafe_b64encode(key.encode()).decode().rstrip("=")
@@ -150,6 +152,13 @@ class S3Store:
             logger.warning("S3 file fetch failed key=%s: %s", key, exc)
             return None
 
+    async def delete_by_key(self, key: str) -> None:
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(
+            None,
+            lambda: self._client.delete_object(Bucket=self._bucket, Key=key),
+        )
+
 
 class BuiltinStore:
     def __init__(self, base_url: str, ttl: int = 3600):
@@ -201,6 +210,9 @@ class BuiltinStore:
             return item[0], item[1]
         self._cache.pop(key, None)
         return None
+
+    async def delete_by_key(self, key: str) -> None:
+        self._cache.pop(key, None)
 
     def _cleanup(self):
         now = time.time()
