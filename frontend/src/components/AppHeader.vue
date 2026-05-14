@@ -6,7 +6,7 @@ import { setLocale, getLocale } from '../i18n'
 import { useSessions } from '../composables/useSessions'
 import { useAuth } from '../composables/useAuth'
 import {
-  LayoutGrid, Settings, Users, SquareTerminal, LogOut, Languages, User as UserIcon,
+  LayoutGrid, Settings, Users, SquareTerminal, LogOut, Languages, User as UserIcon, FolderOpen,
   Sun, Moon
 } from 'lucide-vue-next'
 import { useDark, useToggle } from '@vueuse/core'
@@ -63,6 +63,15 @@ function toggleLocale() {
         >
           <LayoutGrid class="size-4 shrink-0" />
           <span class="hidden md:inline">{{ t('session.sessions') }}</span>
+        </button>
+        <button
+          @click="router.push('/files')"
+          class="flex items-center gap-2 px-2 md:px-3 py-1.5 rounded-md text-sm transition-colors"
+          :class="route.path === '/files' ? 'bg-accent text-accent-foreground font-medium' : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'"
+          :title="t('files.title')"
+        >
+          <FolderOpen class="size-4 shrink-0" />
+          <span class="hidden md:inline">{{ t('files.nav') }}</span>
         </button>
         <button
           v-if="showUsersLink"

@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Uploa
 from fastapi.responses import Response
 from pydantic import BaseModel
 
-from app.auth.dependencies import CurrentUser, get_session_aware_user, verify_session_access
+from app.auth.dependencies import CurrentUser, get_current_user, get_session_aware_user, verify_session_access
 
 router = APIRouter()
 
@@ -48,6 +48,31 @@ async def serve_file(file_id: str, ext: str, user: CurrentUser = Depends(get_ses
         raise HTTPException(404, "File not found or expired")
     data, content_type = result
     return Response(content=data, media_type=content_type)
+
+
+@router.get("/api/files")
+async def list_files_route(user: CurrentUser = Depends(get_current_user)):
+    from app.file_service import list_global_files
+
+    return {"files": await list_global_files(user)}
+
+
+@router.patch("/api/files/{file_id}")
+async def rename_file_route(
+    file_id: str,
+    body: RenameSessionFileBody,
+    user: CurrentUser = Depends(get_current_user),
+):
+    from app.file_service import rename_global_file
+
+    return {"ok": True, "file": await rename_global_file(file_id, user, body.name)}
+
+
+@router.delete("/api/files/{file_id}")
+async def delete_file_route(file_id: str, user: CurrentUser = Depends(get_current_user)):
+    from app.file_service import delete_global_file
+
+    return await delete_global_file(file_id, user)
 
 
 @router.post("/api/sessions/{session_id}/files/heartbeat")

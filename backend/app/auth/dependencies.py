@@ -14,6 +14,13 @@ from app.db import get_pool
 logger = logging.getLogger("auth")
 
 
+def _row_value(row, key: str, default=None):
+    try:
+        return row[key]
+    except (KeyError, IndexError, TypeError):
+        return default
+
+
 @dataclass
 class CurrentUser:
     id: str
@@ -147,8 +154,10 @@ async def verify_session_access(session_id: str, user: CurrentUser) -> None:
         return
 
     pool = get_pool()
-    row = await pool.fetchrow("SELECT tenant_id FROM sessions WHERE id = $1", session_id)
+    row = await pool.fetchrow("SELECT tenant_id, user_id FROM sessions WHERE id = $1", session_id)
     if not row:
         raise HTTPException(status_code=404, detail="Session not found")
     if row["tenant_id"] and row["tenant_id"] != user.tenant_id:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if user.role == "member" and _row_value(row, "user_id") != user.id:
         raise HTTPException(status_code=404, detail="Session not found")

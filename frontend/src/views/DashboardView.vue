@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { ref, watch, nextTick, onMounted, onUnmounted, type ComponentPublicInstance } from 'vue'
+import { ref, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useSessions } from '../composables/useSessions'
 import { useNetworkEgress } from '../composables/useNetworkEgress'
 import { useNotify } from '../composables/useNotify'
-import { Plus, Play, Pause, Trash2, Monitor, Globe, Hash, Clock, RefreshCw, Loader2, Network, CornerDownLeft, ArrowUpRight } from 'lucide-vue-next'
+import type { DeleteSessionFileOptions } from '../types'
+import { Plus, Play, Pause, Trash2, Monitor, Globe, Hash, Clock, RefreshCw, Loader2, Network, ArrowUpRight } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
@@ -13,16 +14,13 @@ import { Card } from '@/components/ui/card'
 import { Switch } from '@/components/ui/switch'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import SessionDeleteDialog from '../components/SessionDeleteDialog.vue'
 import {
   Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog'
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select'
-import {
-  AlertDialog, AlertDialogCancel, AlertDialogContent,
-  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
-} from '@/components/ui/alert-dialog'
 
 const { t } = useI18n()
 const router = useRouter()
@@ -124,7 +122,6 @@ const inputRefs = ref<Record<string, HTMLInputElement>>({})
 const copiedId = ref<string | null>(null)
 const deleteDialogOpen = ref<Record<string, boolean>>({})
 const deleting = ref<Record<string, boolean>>({})
-const deleteButtonRefs = ref<Record<string, Element | ComponentPublicInstance>>({})
 const creating = ref(false)
 const starting = ref<Record<string, boolean>>({})
 const pausing = ref<Record<string, boolean>>({})
@@ -203,43 +200,17 @@ function commitEdit(id: string, oldName: string) {
   }
 }
 
-async function onDeleteSession(id: string) {
+async function onDeleteSession(id: string, options: DeleteSessionFileOptions) {
   if (deleting.value[id]) return
   deleting.value[id] = true
   try {
-    await deleteSession(id)
+    await deleteSession(id, options)
     notify.success(t('app.sessionDeleted'))
     deleteDialogOpen.value[id] = false
   } catch {
     notify.error(t('app.sessionDeleteError'))
   } finally {
     deleting.value[id] = false
-  }
-}
-
-function setDeleteButtonRef(id: string, el: Element | ComponentPublicInstance | null) {
-  if (el) {
-    deleteButtonRefs.value[id] = el
-  } else {
-    delete deleteButtonRefs.value[id]
-  }
-}
-
-function focusDeleteButton(id: string) {
-  const focus = () => {
-    const target = deleteButtonRefs.value[id]
-    const el = target instanceof HTMLElement
-      ? target
-      : target && '$el' in target
-        ? target.$el
-        : null
-    if (el instanceof HTMLElement) el.focus()
-  }
-
-  if (typeof requestAnimationFrame === 'function') {
-    requestAnimationFrame(focus)
-  } else {
-    setTimeout(focus, 0)
   }
 }
 
@@ -437,43 +408,24 @@ async function onPauseContainer(id: string) {
                 <TooltipContent>{{ s.containerStatus === 'starting' ? t('session.starting') : s.containerStatus === 'paused' ? t('session.resumeFromHibernate') : t('session.startContainer') }}</TooltipContent>
               </Tooltip>
 
-              <AlertDialog :open="deleteDialogOpen[s.id]" @update:open="v => { if (v || !deleting[s.id]) deleteDialogOpen[s.id] = v }">
-                <AlertDialogTrigger as-child>
-                  <Button variant="ghost" size="sm" class="size-7 p-0 text-muted-foreground hover:text-destructive" @click.stop>
-                    <Trash2 class="size-3.5" />
-                  </Button>
-                </AlertDialogTrigger>
-                <AlertDialogContent
-                  @click.stop
-                  @open-auto-focus.prevent="focusDeleteButton(s.id)"
-                >
-                  <AlertDialogHeader>
-                    <AlertDialogTitle>{{ t('session.deleteConfirm') }}</AlertDialogTitle>
-                    <AlertDialogDescription>{{ t('session.deleteDescription') }}</AlertDialogDescription>
-                  </AlertDialogHeader>
-                  <AlertDialogFooter>
-                    <AlertDialogCancel :disabled="deleting[s.id]">
-                      {{ t('session.cancel') }}
-                      <kbd v-if="!deleting[s.id]" data-slot="kbd">
-                        {{ t('session.shortcutEscape') }}
-                      </kbd>
-                    </AlertDialogCancel>
-                    <Button
-                      :ref="el => setDeleteButtonRef(s.id, el)"
-                      variant="destructive"
-                      :disabled="deleting[s.id]"
-                      @click="onDeleteSession(s.id)"
-                    >
-                      <Loader2 v-if="deleting[s.id]" class="size-4 animate-spin" />
-                      {{ deleting[s.id] ? t('session.deleting') : t('session.confirmDelete') }}
-                      <kbd v-if="!deleting[s.id]" data-slot="kbd" data-icon="true">
-                        <CornerDownLeft aria-hidden="true" />
-                        <span class="sr-only">{{ t('session.shortcutEnter') }}</span>
-                      </kbd>
-                    </Button>
-                  </AlertDialogFooter>
-                </AlertDialogContent>
-              </AlertDialog>
+              <Button
+                variant="ghost"
+                size="sm"
+                class="size-7 p-0 text-muted-foreground hover:text-destructive"
+                :title="t('session.deleteSession')"
+                :aria-label="t('session.deleteSession')"
+                @click.stop="deleteDialogOpen[s.id] = true"
+              >
+                <Trash2 class="size-3.5" />
+              </Button>
+              <SessionDeleteDialog
+                :open="!!deleteDialogOpen[s.id]"
+                :session-id="s.id"
+                :session-name="s.name"
+                :deleting="!!deleting[s.id]"
+                @update:open="v => { if (v || !deleting[s.id]) deleteDialogOpen[s.id] = v }"
+                @confirm="options => onDeleteSession(s.id, options)"
+              />
             </div>
           </div>
         </Card>

@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed, watch, ref, nextTick, type ComponentPublicInstance } from 'vue'
+import { computed, watch, ref, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useSessions } from '../composables/useSessions'
 import { useNotify } from '../composables/useNotify'
 import { api } from '../lib/api'
-import { Play, Pause, Trash2, ChevronRight, Monitor, Key, Loader2, Copy, Check, CornerDownLeft, FolderOpen } from 'lucide-vue-next'
+import type { DeleteSessionFileOptions } from '../types'
+import { Play, Pause, Trash2, ChevronRight, Monitor, Key, Loader2, Copy, Check, FolderOpen } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -14,13 +15,10 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import NoVNCViewer from '../components/NoVNCViewer.vue'
 import BrowserLogPanel from '../components/BrowserLogPanel.vue'
 import SessionFilesDialog from '../components/SessionFilesDialog.vue'
+import SessionDeleteDialog from '../components/SessionDeleteDialog.vue'
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog'
-import {
-  AlertDialog, AlertDialogCancel, AlertDialogContent,
-  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
-} from '@/components/ui/alert-dialog'
 
 const route = useRoute()
 const router = useRouter()
@@ -40,7 +38,6 @@ const inputRef = ref<HTMLInputElement>()
 const deleteDialogOpen = ref(false)
 const deleting = ref(false)
 const containerActionLoading = ref(false)
-const deleteButtonRef = ref<Element | ComponentPublicInstance | null>(null)
 const filesDialogOpen = ref(false)
 
 // Session Token
@@ -118,11 +115,11 @@ function commitEdit() {
   }
 }
 
-async function onDeleteSession() {
+async function onDeleteSession(options: DeleteSessionFileOptions) {
   if (!activeSession.value || deleting.value) return
   deleting.value = true
   try {
-    await deleteSession(activeSession.value.id)
+    await deleteSession(activeSession.value.id, options)
     notify.success(t('app.sessionDeleted'))
     deleteDialogOpen.value = false
     router.replace('/')
@@ -130,24 +127,6 @@ async function onDeleteSession() {
     notify.error(t('app.sessionDeleteError'))
   } finally {
     deleting.value = false
-  }
-}
-
-function focusDeleteButton() {
-  const focus = () => {
-    const target = deleteButtonRef.value
-    const el = target instanceof HTMLElement
-      ? target
-      : target && '$el' in target
-        ? target.$el
-        : null
-    if (el instanceof HTMLElement) el.focus()
-  }
-
-  if (typeof requestAnimationFrame === 'function') {
-    requestAnimationFrame(focus)
-  } else {
-    setTimeout(focus, 0)
   }
 }
 
@@ -275,37 +254,27 @@ async function onPauseContainer() {
           <TooltipContent>{{ t('session.generateTokenHint') }}</TooltipContent>
         </Tooltip>
 
-        <AlertDialog :open="deleteDialogOpen" @update:open="v => { if (v || !deleting) deleteDialogOpen = v }">
-          <AlertDialogTrigger as-child>
-            <Button variant="outline" size="sm" class="h-8 px-2.5 text-muted-foreground hover:text-destructive hover:bg-destructive/10 hover:border-destructive/20 transition-colors">
-              <Trash2 class="size-3.5" />
-            </Button>
-          </AlertDialogTrigger>
-          <AlertDialogContent @open-auto-focus.prevent="focusDeleteButton">
-            <AlertDialogHeader>
-              <AlertDialogTitle>{{ t('session.deleteConfirm') }}</AlertDialogTitle>
-              <AlertDialogDescription>{{ t('session.deleteDescription') }}</AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel :disabled="deleting">
-                {{ t('session.cancel') }}
-                <kbd v-if="!deleting" data-slot="kbd">
-                  {{ t('session.shortcutEscape') }}
-                </kbd>
-              </AlertDialogCancel>
-              <Button ref="deleteButtonRef" variant="destructive" :disabled="deleting" @click="onDeleteSession">
-                <Loader2 v-if="deleting" class="size-4 animate-spin" />
-                {{ deleting ? t('session.deleting') : t('session.confirmDelete') }}
-                <kbd v-if="!deleting" data-slot="kbd" data-icon="true">
-                  <CornerDownLeft aria-hidden="true" />
-                  <span class="sr-only">{{ t('session.shortcutEnter') }}</span>
-                </kbd>
-              </Button>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
+        <Button
+          variant="outline"
+          size="sm"
+          class="h-8 px-2.5 text-muted-foreground hover:text-destructive hover:bg-destructive/10 hover:border-destructive/20 transition-colors"
+          :title="t('session.deleteSession')"
+          :aria-label="t('session.deleteSession')"
+          @click="deleteDialogOpen = true"
+        >
+          <Trash2 class="size-3.5" />
+        </Button>
       </div>
     </header>
+
+    <SessionDeleteDialog
+      v-if="activeSession"
+      v-model:open="deleteDialogOpen"
+      :session-id="activeSession.id"
+      :session-name="activeSession.name"
+      :deleting="deleting"
+      @confirm="onDeleteSession"
+    />
 
     <!-- Session Token Dialog -->
     <Dialog :open="tokenDialogOpen" @update:open="(v: boolean) => { if (!v) closeTokenDialog() }">

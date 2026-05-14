@@ -97,8 +97,11 @@ class SessionFile(Base):
     __tablename__ = "session_files"
 
     id: Mapped[str] = mapped_column(Text, primary_key=True)
-    session_id: Mapped[str] = mapped_column(Text, ForeignKey("sessions.id"), nullable=False)
+    session_id: Mapped[str | None] = mapped_column(
+        Text, ForeignKey("sessions.id", ondelete="SET NULL"), nullable=True
+    )
     tenant_id: Mapped[str | None] = mapped_column(Text)
+    user_id: Mapped[str | None] = mapped_column(Text)
     source: Mapped[str] = mapped_column(Text, nullable=False)
     original_name: Mapped[str] = mapped_column(Text, nullable=False)
     content_type: Mapped[str] = mapped_column(Text, nullable=False)
@@ -110,6 +113,9 @@ class SessionFile(Base):
     source_path: Mapped[str | None] = mapped_column(Text)
     source_mtime: Mapped[float | None] = mapped_column(Float)
     uploaded_at: Mapped[datetime | None] = mapped_column()
+    archived_at: Mapped[datetime | None] = mapped_column()
+    archived_session_id: Mapped[str | None] = mapped_column(Text)
+    archived_session_name: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
         nullable=False, server_default=func.now()
     )

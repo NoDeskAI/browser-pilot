@@ -151,14 +151,19 @@ _api_patch() {
 }
 
 _api_delete() {
-  local path="$1"
+  local path="$1" body="${2:-}"
   local token
   token="$(_config_get api_token)"
-  if [[ -n "$token" ]]; then
-    curl -sfS -X DELETE -H "Authorization: Bearer $token" "$(_resolve_url)${path}"
-  else
-    curl -sfS -X DELETE "$(_resolve_url)${path}"
+  local args=(-sfS -X DELETE)
+  if [[ -n "$body" ]]; then
+    args+=(-H "Content-Type: application/json" -d "$body")
   fi
+  if [[ -n "$token" ]]; then
+    args+=(-H "Authorization: Bearer $token")
+  else
+    :
+  fi
+  curl "${args[@]}" "$(_resolve_url)${path}"
 }
 
 _api_upload_file() {
@@ -276,9 +281,20 @@ cmd_session_stop() {
 }
 
 cmd_session_delete() {
-  local sid="${1:-${SESSION_OPT:-}}"
-  [[ -n "$sid" ]] || { echo "Usage: $CLI_NAME session delete <session-id>"; exit 1; }
-  _api_delete "/api/sessions/$sid" | _out
+  local sid="" delete_files=false
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --delete-files) delete_files=true; shift ;;
+      *) sid="${sid:-$1}"; shift ;;
+    esac
+  done
+  sid="${sid:-${SESSION_OPT:-}}"
+  [[ -n "$sid" ]] || { echo "Usage: $CLI_NAME session delete <session-id> [--delete-files]"; exit 1; }
+  if $delete_files; then
+    _api_delete "/api/sessions/$sid" '{"fileDeleteMode":"all"}' | _out
+  else
+    _api_delete "/api/sessions/$sid" | _out
+  fi
 }
 
 # ── Browser commands ──────────────────────────────────────────────────
@@ -552,7 +568,9 @@ Sessions:
   session use <id>             Set active session
   session start <id>           Start browser container
   session stop <id>            Stop browser container
-  session delete <id>          Delete session and container
+  session delete <id>          Delete session and container; completed files are kept in Files
+  session delete <id> --delete-files
+                               Also delete all completed files for that session
 
 Session target:
   Commands may omit <id> after 'session use <id>', or use --session/-s.

@@ -209,6 +209,87 @@ def test_session_file_management_routes_verify_access(monkeypatch):
     assert captured["delete"] == ("session-1", "file-1")
 
 
+def test_global_file_routes_use_user_level_file_service(monkeypatch):
+    captured = {}
+
+    async def fake_list(user):
+        captured["list"] = (user.id, user.session_scope)
+        return [{"id": "file-1"}]
+
+    async def fake_rename(file_id, user, name):
+        captured["rename"] = (file_id, user.id, name)
+        return {"id": file_id, "name": name}
+
+    async def fake_delete(file_id, user):
+        captured["delete"] = (file_id, user.id)
+        return {"ok": True, "objectDeleted": True, "recordDeleted": True, "warning": None}
+
+    monkeypatch.setattr(file_service, "list_global_files", fake_list)
+    monkeypatch.setattr(file_service, "rename_global_file", fake_rename)
+    monkeypatch.setattr(file_service, "delete_global_file", fake_delete)
+
+    user = _user()
+    list_result = asyncio.run(files.list_files_route(user=user))
+    rename_result = asyncio.run(
+        files.rename_file_route("file-1", files.RenameSessionFileBody(name="renamed.txt"), user=user)
+    )
+    delete_result = asyncio.run(files.delete_file_route("file-1", user=user))
+
+    assert list_result == {"files": [{"id": "file-1"}]}
+    assert rename_result == {"ok": True, "file": {"id": "file-1", "name": "renamed.txt"}}
+    assert delete_result == {"ok": True, "objectDeleted": True, "recordDeleted": True, "warning": None}
+    assert captured == {
+        "list": ("user-1", None),
+        "rename": ("file-1", "user-1", "renamed.txt"),
+        "delete": ("file-1", "user-1"),
+    }
+
+
+def test_delete_session_passes_file_selection_and_hard_deletes(monkeypatch):
+    calls = []
+
+    class FakePool:
+        async def fetchrow(self, query, *args):
+            if "FROM sessions WHERE id = $1" in query:
+                return {"tenant_id": "tenant-1", "user_id": "user-1"}
+            return None
+
+        async def execute(self, query, *args):
+            calls.append(("execute", query.strip(), args))
+            return "DELETE 1"
+
+    async def fake_handle(session_id, user, *, file_delete_mode, delete_file_ids):
+        calls.append(("files", session_id, user.id, file_delete_mode, delete_file_ids))
+        return {"mode": file_delete_mode, "deletedFileIds": delete_file_ids}
+
+    async def fake_stop(session_id):
+        calls.append(("stop_watcher", session_id))
+
+    async def fake_remove(session_id):
+        calls.append(("remove_container", session_id))
+
+    monkeypatch.setattr(sessions, "get_pool", lambda: FakePool())
+    monkeypatch.setattr(file_service, "handle_session_delete_files", fake_handle)
+    monkeypatch.setattr(sessions, "stop_download_watcher", fake_stop)
+    monkeypatch.setattr(sessions, "remove_container", fake_remove)
+
+    result = asyncio.run(
+        sessions.delete_session(
+            "session-1",
+            body=sessions.DeleteSessionBody(fileDeleteMode="selected", deleteFileIds=["file-1"]),
+            user=_user(),
+        )
+    )
+
+    assert result == {"ok": True, "files": {"mode": "selected", "deletedFileIds": ["file-1"]}}
+    assert calls[0] == ("files", "session-1", "user-1", "selected", ["file-1"])
+    assert calls[1:] == [
+        ("stop_watcher", "session-1"),
+        ("remove_container", "session-1"),
+        ("execute", "DELETE FROM sessions WHERE id = $1", ("session-1",)),
+    ]
+
+
 def test_session_file_upload_rejects_cross_session_token(monkeypatch):
     async def fake_verify(_session_id, _user):
         raise files.HTTPException(403, "Token not authorized for this session")

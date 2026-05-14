@@ -78,7 +78,8 @@ ${c} session create --name "Task"    # Create session
 ${c} session use <session-id>        # Activate session
 ${c} session start <session-id>      # Start browser container
 ${c} session stop <session-id>       # Stop browser container
-${c} session delete <session-id>     # Delete session
+${c} session delete <session-id>     # Delete session; completed files are kept in Files
+${c} session delete <session-id> --delete-files # Also delete all completed files
 
 ## Browser Commands (use active session or --session)
 
@@ -140,7 +141,8 @@ ${c} session create --name "任务"    # 创建会话
 ${c} session use <session-id>        # 激活会话
 ${c} session start <session-id>      # 启动浏览器容器
 ${c} session stop <session-id>       # 停止浏览器容器
-${c} session delete <session-id>     # 删除会话
+${c} session delete <session-id>     # 删除会话，已完成文件保留到文件页
+${c} session delete <session-id> --delete-files # 同时删除全部已完成文件
 
 ## 浏览器命令（使用 active session 或 --session）
 
@@ -231,7 +233,8 @@ ${c} session list --json                         # List all sessions
 ${c} session create --name "Task" --json         # Create session and read returned id
 ${c} --session "<session-id>" session start      # Start browser container
 ${c} --session "<session-id>" session stop       # Stop browser container
-${c} --session "<session-id>" session delete     # Delete session
+${c} --session "<session-id>" session delete     # Delete session; completed files are kept in Files
+${c} --session "<session-id>" session delete --delete-files # Also delete all completed files
 
 ## Browser Commands (always pass --session)
 
@@ -287,7 +290,8 @@ ${c} session list --json                         # 列出所有会话
 ${c} session create --name "任务" --json         # 创建会话并读取返回的 id
 ${c} --session "<session-id>" session start      # 启动浏览器容器
 ${c} --session "<session-id>" session stop       # 停止浏览器容器
-${c} --session "<session-id>" session delete     # 删除会话
+${c} --session "<session-id>" session delete     # 删除会话，已完成文件保留到文件页
+${c} --session "<session-id>" session delete --delete-files # 同时删除全部已完成文件
 
 ## 浏览器命令（始终传 --session）
 

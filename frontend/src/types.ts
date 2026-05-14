@@ -39,3 +39,29 @@ export interface NetworkEgressProfile {
   lastCheckedAt?: string
   managed?: boolean
 }
+
+export interface SessionFile {
+  id: string
+  sessionId?: string | null
+  archivedSessionId?: string | null
+  archivedSessionName?: string | null
+  name: string
+  status: 'downloading' | 'completed' | string
+  source?: string
+  sourceId?: string | null
+  contentType?: string | null
+  size?: number | null
+  receivedBytes?: number | null
+  totalBytes?: number | null
+  percent?: number | null
+  url?: string | null
+  uploadedAt?: string | null
+  archivedAt?: string | null
+  createdAt?: string | null
+  updatedAt?: string | null
+}
+
+export interface DeleteSessionFileOptions {
+  fileDeleteMode: 'none' | 'selected' | 'all'
+  deleteFileIds?: string[]
+}

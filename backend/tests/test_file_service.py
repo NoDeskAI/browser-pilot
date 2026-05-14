@@ -8,13 +8,13 @@ from app import file_capture
 from app import file_service
 
 
-def _user(*, tenant_id="tenant-1", session_scope=None):
+def _user(*, user_id="user-1", tenant_id="tenant-1", role="admin", session_scope=None):
     return CurrentUser(
-        id="user-1",
+        id=user_id,
         tenant_id=tenant_id,
         email="user@example.com",
         name="User",
-        role="admin",
+        role=role,
         created_at="2026-05-12T00:00:00Z",
         session_scope=session_scope,
     )
@@ -45,10 +45,21 @@ class FakeStore:
 class FakePool:
     def __init__(self):
         self.rows = {}
-        self.session_tenants = {"session-1": "tenant-1", "session-2": "tenant-2"}
+        self.sessions = {
+            "session-1": {"tenant_id": "tenant-1", "user_id": "user-1", "name": "Session 1"},
+            "session-2": {"tenant_id": "tenant-2", "user_id": "user-2", "name": "Session 2"},
+            "session-3": {"tenant_id": "tenant-1", "user_id": "user-2", "name": "Session 3"},
+        }
         self._created_count = 0
 
     async def fetchrow(self, query, *args):
+        if "UPDATE session_files" in query and "SET original_name = $2" in query:
+            file_id, filename = args
+            row = self.rows.get(file_id)
+            if row:
+                row["original_name"] = filename
+                return row
+            return None
         if "UPDATE session_files" in query and "SET original_name" in query:
             session_id, file_id, filename = args
             row = self.rows.get(file_id)
@@ -56,17 +67,23 @@ class FakePool:
                 row["original_name"] = filename
                 return row
             return None
-        if "SELECT tenant_id FROM sessions" in query:
-            tenant = self.session_tenants.get(args[0])
-            return {"tenant_id": tenant} if tenant else None
-        if "SELECT * FROM session_files WHERE id" in query:
-            return self.rows.get(args[0])
+        if "FROM sessions WHERE id = $1" in query:
+            session = self.sessions.get(args[0])
+            if not session:
+                return None
+            if "name" in query:
+                return session
+            if "user_id" in query:
+                return {"tenant_id": session["tenant_id"], "user_id": session["user_id"]}
+            return {"tenant_id": session["tenant_id"]}
         if "SELECT * FROM session_files WHERE session_id = $1 AND id = $2" in query:
             session_id, file_id = args
             row = self.rows.get(file_id)
             if row and row["session_id"] == session_id:
                 return row
             return None
+        if "SELECT * FROM session_files WHERE id" in query:
+            return self.rows.get(args[0])
         if "SELECT * FROM session_files" in query and "source_id = $3" in query:
             session_id, source, source_id = args
             for row in self.rows.values():
@@ -92,6 +109,27 @@ class FakePool:
         return None
 
     async def execute(self, query, *args):
+        if "UPDATE session_files" in query and "archived_session_id" in query:
+            session_id, session_name, tenant_id, user_id, archive_ids = args
+            now = datetime(2026, 5, 13, tzinfo=timezone.utc)
+            count = 0
+            for file_id in archive_ids:
+                row = self.rows.get(file_id)
+                if row and row["session_id"] == session_id:
+                    row["session_id"] = None
+                    row["archived_at"] = now
+                    row["archived_session_id"] = session_id
+                    row["archived_session_name"] = session_name
+                    row["tenant_id"] = row.get("tenant_id") or tenant_id
+                    row["user_id"] = row.get("user_id") or user_id
+                    count += 1
+            return f"UPDATE {count}"
+        if "DELETE FROM session_files WHERE id = $1" in query:
+            file_id = args[0]
+            if file_id in self.rows:
+                del self.rows[file_id]
+                return "DELETE 1"
+            return "DELETE 0"
         if "DELETE FROM session_files" in query:
             session_id, file_id = args
             row = self.rows.get(file_id)
@@ -105,6 +143,7 @@ class FakePool:
             file_id,
             session_id,
             tenant_id,
+            user_id,
             source,
             filename,
             content_type,
@@ -122,6 +161,7 @@ class FakePool:
             "id": file_id,
             "session_id": session_id,
             "tenant_id": tenant_id,
+            "user_id": user_id,
             "source": source,
             "original_name": filename,
             "content_type": content_type,
@@ -133,6 +173,9 @@ class FakePool:
             "source_mtime": source_mtime,
             "sha256": sha256,
             "uploaded_at": created_at,
+            "archived_at": None,
+            "archived_session_id": None,
+            "archived_session_name": None,
             "created_at": created_at,
         }
         return "INSERT 0 1"
@@ -140,7 +183,12 @@ class FakePool:
     async def fetch(self, query, *args):
         if "FROM session_files" not in query:
             return []
-        rows = [row for row in self.rows.values() if row["session_id"] == args[0]]
+        if "WHERE tenant_id = $1 AND user_id = $2" in query:
+            rows = [row for row in self.rows.values() if row.get("tenant_id") == args[0] and row.get("user_id") == args[1]]
+        elif "WHERE tenant_id = $1" in query:
+            rows = [row for row in self.rows.values() if row.get("tenant_id") == args[0]]
+        else:
+            rows = [row for row in self.rows.values() if row["session_id"] == args[0]]
         rows.sort(key=lambda row: (row["created_at"], row["id"]), reverse="DESC" in query)
         return rows
 
@@ -262,6 +310,153 @@ def test_get_file_payload_enforces_tenant_and_session_scope(monkeypatch):
     with pytest.raises(file_service.HTTPException) as scope_exc:
         asyncio.run(file_service.get_file_payload(result["id"], _user(session_scope="session-2")))
     assert scope_exc.value.status_code == 403
+
+
+def test_get_file_payload_rejects_archived_file_for_session_scoped_token(monkeypatch):
+    store = FakeStore()
+    pool = FakePool()
+    monkeypatch.setattr(file_service, "get_store", lambda: asyncio.sleep(0, store))
+    monkeypatch.setattr(file_service, "get_pool", lambda: pool)
+
+    saved = asyncio.run(
+        file_service.save_bytes(
+            session_id="session-1",
+            source="screenshot",
+            data=b"png-bytes",
+            filename="screenshot.png",
+        )
+    )
+    result = asyncio.run(
+        file_service.handle_session_delete_files(
+            "session-1",
+            _user(),
+            file_delete_mode="none",
+        )
+    )
+
+    row = pool.rows[saved["id"]]
+    assert result["archivedFileIds"] == [saved["id"]]
+    assert row["session_id"] is None
+    assert row["archived_session_id"] == "session-1"
+    assert row["archived_session_name"] == "Session 1"
+    assert asyncio.run(file_service.get_file_payload(saved["id"], _user())) == (b"png-bytes", "image/png")
+
+    with pytest.raises(file_service.HTTPException) as scope_exc:
+        asyncio.run(file_service.get_file_payload(saved["id"], _user(session_scope="session-1")))
+    assert scope_exc.value.status_code == 403
+
+
+def test_handle_session_delete_files_selected_archives_unselected_and_warns_on_object_delete(monkeypatch):
+    store = FakeStore()
+    pool = FakePool()
+    monkeypatch.setattr(file_service, "get_store", lambda: asyncio.sleep(0, store))
+    monkeypatch.setattr(file_service, "get_pool", lambda: pool)
+
+    keep = asyncio.run(
+        file_service.save_bytes(
+            session_id="session-1",
+            source="user_upload",
+            data=b"keep",
+            filename="keep.txt",
+        )
+    )
+    remove = asyncio.run(
+        file_service.save_bytes(
+            session_id="session-1",
+            source="user_upload",
+            data=b"remove",
+            filename="remove.txt",
+        )
+    )
+    remove_key = pool.rows[remove["id"]]["object_key"]
+    store.fail_delete = True
+
+    result = asyncio.run(
+        file_service.handle_session_delete_files(
+            "session-1",
+            _user(),
+            file_delete_mode="selected",
+            delete_file_ids=[remove["id"]],
+        )
+    )
+
+    assert result["deletedFileIds"] == [remove["id"]]
+    assert result["archivedFileIds"] == [keep["id"]]
+    assert result["objectDeleteFailedFileIds"] == [remove["id"]]
+    assert result["warning"] == "file_object_delete_failed"
+    assert remove["id"] not in pool.rows
+    assert remove_key in store.objects
+    assert pool.rows[keep["id"]]["session_id"] is None
+
+
+def test_handle_session_delete_files_all_deletes_completed_files(monkeypatch):
+    store = FakeStore()
+    pool = FakePool()
+    monkeypatch.setattr(file_service, "get_store", lambda: asyncio.sleep(0, store))
+    monkeypatch.setattr(file_service, "get_pool", lambda: pool)
+
+    first = asyncio.run(
+        file_service.save_bytes(
+            session_id="session-1",
+            source="user_upload",
+            data=b"first",
+            filename="first.txt",
+        )
+    )
+    second = asyncio.run(
+        file_service.save_bytes(
+            session_id="session-1",
+            source="user_upload",
+            data=b"second",
+            filename="second.txt",
+        )
+    )
+
+    result = asyncio.run(
+        file_service.handle_session_delete_files(
+            "session-1",
+            _user(),
+            file_delete_mode="all",
+        )
+    )
+
+    assert result["deletedFileIds"] == sorted([first["id"], second["id"]])
+    assert result["archivedFileIds"] == []
+    assert pool.rows == {}
+    assert store.objects == {}
+
+
+def test_global_files_enforce_member_owner_and_admin_tenant(monkeypatch):
+    store = FakeStore()
+    pool = FakePool()
+    monkeypatch.setattr(file_service, "get_store", lambda: asyncio.sleep(0, store))
+    monkeypatch.setattr(file_service, "get_pool", lambda: pool)
+
+    own = asyncio.run(
+        file_service.save_bytes(
+            session_id="session-1",
+            source="user_upload",
+            data=b"own",
+            filename="own.txt",
+        )
+    )
+    other = asyncio.run(
+        file_service.save_bytes(
+            session_id="session-3",
+            source="user_upload",
+            data=b"other",
+            filename="other.txt",
+        )
+    )
+
+    member_files = asyncio.run(file_service.list_global_files(_user(role="member")))
+    admin_files = asyncio.run(file_service.list_global_files(_user(role="admin")))
+
+    assert [item["id"] for item in member_files] == [own["id"]]
+    assert {item["id"] for item in admin_files} == {own["id"], other["id"]}
+    with pytest.raises(file_service.HTTPException) as member_exc:
+        asyncio.run(file_service.get_file_payload(other["id"], _user(role="member")))
+    assert member_exc.value.status_code == 404
 
 
 def test_list_session_files_returns_file_dtos(monkeypatch):

@@ -6,11 +6,11 @@ import re
 import uuid
 import asyncio
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app import db
 from app.auth.dependencies import CurrentUser, get_current_user, get_session_aware_user, require_role, verify_session_access
@@ -47,6 +47,13 @@ logger = logging.getLogger("routes.sessions")
 router = APIRouter()
 
 
+def _row_value(row, key: str, default=None):
+    try:
+        return row[key]
+    except (KeyError, IndexError, TypeError):
+        return default
+
+
 async def _activate_file_capture(session_id: str) -> None:
     start_download_watcher(session_id)
     try:
@@ -71,11 +78,13 @@ async def _verify_session_tenant(session_id: str, user: CurrentUser) -> None:
     """Raise 404 if session doesn't belong to the user's tenant."""
     pool = get_pool()
     row = await pool.fetchrow(
-        "SELECT tenant_id FROM sessions WHERE id = $1", session_id,
+        "SELECT tenant_id, user_id FROM sessions WHERE id = $1", session_id,
     )
     if not row:
         raise HTTPException(status_code=404, detail="Session not found")
     if row["tenant_id"] and row["tenant_id"] != user.tenant_id:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if user.role == "member" and _row_value(row, "user_id") != user.id:
         raise HTTPException(status_code=404, detail="Session not found")
 
 
@@ -90,6 +99,11 @@ class CreateSessionBody(BaseModel):
 
 class UpdateSessionBody(BaseModel):
     name: str
+
+
+class DeleteSessionBody(BaseModel):
+    fileDeleteMode: Literal["none", "selected", "all"] = "none"
+    deleteFileIds: list[str] = Field(default_factory=list)
 
 
 class DevicePresetBody(BaseModel):
@@ -657,14 +671,27 @@ async def update_session(session_id: str, body: UpdateSessionBody, user: Current
 
 
 @router.delete("/api/sessions/{session_id}")
-async def delete_session(session_id: str, user: CurrentUser = Depends(get_current_user)):
+async def delete_session(
+    session_id: str,
+    body: DeleteSessionBody | None = Body(None),
+    user: CurrentUser = Depends(get_current_user),
+):
     await _verify_session_tenant(session_id, user)
     pool = get_pool()
+    from app.file_service import handle_session_delete_files
+
+    delete_body = body or DeleteSessionBody()
+    file_result = await handle_session_delete_files(
+        session_id,
+        user,
+        file_delete_mode=delete_body.fileDeleteMode,
+        delete_file_ids=delete_body.deleteFileIds,
+    )
     await stop_download_watcher(session_id)
     await remove_container(session_id)
     await pool.execute("DELETE FROM sessions WHERE id = $1", session_id)
     logger.info("Session deleted: %s", session_id)
-    return {"ok": True}
+    return {"ok": True, "files": file_result}
 
 
 # -----------------------------------------------------------------------

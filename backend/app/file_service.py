@@ -47,8 +47,12 @@ def _row_value(row: Any, key: str, default: Any = None) -> Any:
 def _file_dto(row: Any) -> dict[str, Any]:
     name = row["original_name"]
     uploaded_at = _row_value(row, "uploaded_at")
+    archived_at = _row_value(row, "archived_at")
     return {
         "id": row["id"],
+        "sessionId": _row_value(row, "session_id"),
+        "archivedSessionId": _row_value(row, "archived_session_id"),
+        "archivedSessionName": _row_value(row, "archived_session_name"),
         "name": name,
         "status": "completed",
         "source": row["source"],
@@ -59,16 +63,36 @@ def _file_dto(row: Any) -> dict[str, Any]:
         "storage": row["storage"],
         "sha256": _row_value(row, "sha256"),
         "uploadedAt": uploaded_at.isoformat() if uploaded_at else None,
+        "archivedAt": archived_at.isoformat() if archived_at else None,
         "createdAt": row["created_at"].isoformat() if row["created_at"] else "",
     }
 
 
-async def _session_tenant_id(session_id: str) -> str | None:
+async def _session_context(session_id: str) -> Any:
     pool = get_pool()
-    row = await pool.fetchrow("SELECT tenant_id FROM sessions WHERE id = $1", session_id)
+    row = await pool.fetchrow("SELECT tenant_id, user_id, name FROM sessions WHERE id = $1", session_id)
     if not row:
         raise HTTPException(404, "Session not found")
-    return row["tenant_id"]
+    return row
+
+
+def _assert_file_access(row: Any, user: CurrentUser) -> None:
+    if user.session_scope:
+        if _row_value(row, "session_id") != user.session_scope:
+            raise HTTPException(403, "Token not authorized for this file")
+        return
+
+    tenant_id = _row_value(row, "tenant_id")
+    if tenant_id and tenant_id != user.tenant_id:
+        raise HTTPException(404, "File not found")
+    if user.role == "member" and _row_value(row, "user_id") != user.id:
+        raise HTTPException(404, "File not found")
+
+
+def _assert_global_file_access(row: Any, user: CurrentUser) -> None:
+    if user.session_scope:
+        raise HTTPException(403, "Session-scoped tokens cannot access this endpoint")
+    _assert_file_access(row, user)
 
 
 async def _existing_download(
@@ -146,7 +170,7 @@ async def save_bytes(
     if existing:
         return existing
 
-    tenant_id = await _session_tenant_id(session_id)
+    session = await _session_context(session_id)
     file_id = uuid.uuid4().hex
     object_key = f"files/{session_id}/{file_id}/{filename}"
     store = await get_store()
@@ -154,7 +178,8 @@ async def save_bytes(
     return await _insert_file_record(
         file_id=file_id,
         session_id=session_id,
-        tenant_id=tenant_id,
+        tenant_id=_row_value(session, "tenant_id"),
+        user_id=_row_value(session, "user_id"),
         source=source,
         filename=filename,
         content_type=content_type,
@@ -195,7 +220,7 @@ async def save_file(
     if existing:
         return existing
 
-    tenant_id = await _session_tenant_id(session_id)
+    session = await _session_context(session_id)
     file_id = uuid.uuid4().hex
     object_key = f"files/{session_id}/{file_id}/{filename}"
     store = await get_store()
@@ -203,7 +228,8 @@ async def save_file(
     return await _insert_file_record(
         file_id=file_id,
         session_id=session_id,
-        tenant_id=tenant_id,
+        tenant_id=_row_value(session, "tenant_id"),
+        user_id=_row_value(session, "user_id"),
         source=source,
         filename=filename,
         content_type=content_type,
@@ -222,6 +248,7 @@ async def _insert_file_record(
     file_id: str,
     session_id: str,
     tenant_id: str | None,
+    user_id: str | None,
     source: str,
     filename: str,
     content_type: str,
@@ -237,15 +264,16 @@ async def _insert_file_record(
     await pool.execute(
         """
         INSERT INTO session_files (
-            id, session_id, tenant_id, source, original_name, content_type,
+            id, session_id, tenant_id, user_id, source, original_name, content_type,
             size_bytes, storage, object_key, source_id, source_path, source_mtime, sha256, uploaded_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW())
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW())
         ON CONFLICT DO NOTHING
         """,
         file_id,
         session_id,
         tenant_id,
+        user_id,
         source,
         filename,
         content_type,
@@ -337,6 +365,21 @@ async def delete_session_file(session_id: str, file_id: str) -> dict[str, Any]:
     if not row:
         raise HTTPException(404, "File not found")
 
+    return await _delete_file_row(
+        row,
+        delete_sql="DELETE FROM session_files WHERE session_id = $1 AND id = $2",
+        delete_args=(session_id, file_id),
+        log_context=f"session={session_id} file={file_id}",
+    )
+
+
+async def _delete_file_row(
+    row: Any,
+    *,
+    delete_sql: str,
+    delete_args: tuple[Any, ...],
+    log_context: str,
+) -> dict[str, Any]:
     warning: str | None = None
     object_deleted = True
     store = await get_store()
@@ -346,20 +389,16 @@ async def delete_session_file(session_id: str, file_id: str) -> dict[str, Any]:
         object_deleted = False
         warning = "file_object_delete_failed"
         logger.warning(
-            "File object delete failed; removing DB record only session=%s file=%s key=%s: %s",
-            session_id,
-            file_id,
+            "File object delete failed; removing DB record only %s key=%s: %s",
+            log_context,
             row["object_key"],
             exc,
         )
 
-    result = await pool.execute(
-        "DELETE FROM session_files WHERE session_id = $1 AND id = $2",
-        session_id,
-        file_id,
-    )
+    pool = get_pool()
+    result = await pool.execute(delete_sql, *delete_args)
     if result != "DELETE 1":
-        logger.error("File row delete failed session=%s file=%s result=%s", session_id, file_id, result)
+        logger.error("File row delete failed %s result=%s", log_context, result)
         raise HTTPException(500, "Failed to delete file record")
 
     return {
@@ -370,16 +409,159 @@ async def delete_session_file(session_id: str, file_id: str) -> dict[str, Any]:
     }
 
 
+async def list_global_files(user: CurrentUser) -> list[dict[str, Any]]:
+    if user.session_scope:
+        raise HTTPException(403, "Session-scoped tokens cannot access this endpoint")
+    pool = get_pool()
+    if user.role in ("superadmin", "admin"):
+        rows = await pool.fetch(
+            """
+            SELECT * FROM session_files
+            WHERE tenant_id = $1
+            ORDER BY created_at DESC
+            """,
+            user.tenant_id,
+        )
+    else:
+        rows = await pool.fetch(
+            """
+            SELECT * FROM session_files
+            WHERE tenant_id = $1 AND user_id = $2
+            ORDER BY created_at DESC
+            """,
+            user.tenant_id,
+            user.id,
+        )
+    return [_file_dto(row) for row in rows]
+
+
+async def get_global_file(file_id: str, user: CurrentUser) -> dict[str, Any]:
+    row = await get_pool().fetchrow("SELECT * FROM session_files WHERE id = $1", file_id)
+    if not row:
+        raise HTTPException(404, "File not found")
+    _assert_global_file_access(row, user)
+    return _file_dto(row)
+
+
+async def rename_global_file(file_id: str, user: CurrentUser, name: str) -> dict[str, Any]:
+    await get_global_file(file_id, user)
+    filename = _safe_filename(name, "file")
+    row = await get_pool().fetchrow(
+        """
+        UPDATE session_files
+        SET original_name = $2
+        WHERE id = $1
+        RETURNING *
+        """,
+        file_id,
+        filename,
+    )
+    if not row:
+        raise HTTPException(404, "File not found")
+    _assert_global_file_access(row, user)
+    return _file_dto(row)
+
+
+async def delete_global_file(file_id: str, user: CurrentUser) -> dict[str, Any]:
+    row = await get_pool().fetchrow("SELECT * FROM session_files WHERE id = $1", file_id)
+    if not row:
+        raise HTTPException(404, "File not found")
+    _assert_global_file_access(row, user)
+    return await _delete_file_row(
+        row,
+        delete_sql="DELETE FROM session_files WHERE id = $1",
+        delete_args=(file_id,),
+        log_context=f"file={file_id}",
+    )
+
+
+async def handle_session_delete_files(
+    session_id: str,
+    user: CurrentUser,
+    *,
+    file_delete_mode: str = "none",
+    delete_file_ids: list[str] | None = None,
+) -> dict[str, Any]:
+    if user.session_scope:
+        raise HTTPException(403, "Session-scoped tokens cannot delete sessions")
+    session = await _session_context(session_id)
+    if _row_value(session, "tenant_id") and _row_value(session, "tenant_id") != user.tenant_id:
+        raise HTTPException(404, "Session not found")
+    if user.role == "member" and _row_value(session, "user_id") != user.id:
+        raise HTTPException(404, "Session not found")
+
+    pool = get_pool()
+    rows = await pool.fetch(
+        """
+        SELECT * FROM session_files
+        WHERE session_id = $1
+        ORDER BY created_at DESC
+        """,
+        session_id,
+    )
+    row_by_id = {row["id"]: row for row in rows}
+    requested_ids = {str(file_id) for file_id in (delete_file_ids or []) if str(file_id).strip()}
+    if file_delete_mode == "all":
+        delete_ids = set(row_by_id)
+    elif file_delete_mode == "selected":
+        unknown_ids = requested_ids - set(row_by_id)
+        if unknown_ids:
+            raise HTTPException(422, "deleteFileIds contains files not owned by this session")
+        delete_ids = requested_ids
+    elif file_delete_mode == "none":
+        delete_ids = set()
+    else:
+        raise HTTPException(422, "Unsupported fileDeleteMode")
+
+    deleted_file_ids: list[str] = []
+    object_delete_failed_file_ids: list[str] = []
+    for file_id in delete_ids:
+        result = await _delete_file_row(
+            row_by_id[file_id],
+            delete_sql="DELETE FROM session_files WHERE id = $1",
+            delete_args=(file_id,),
+            log_context=f"session={session_id} file={file_id}",
+        )
+        deleted_file_ids.append(file_id)
+        if result.get("warning") == "file_object_delete_failed":
+            object_delete_failed_file_ids.append(file_id)
+
+    archive_ids = [file_id for file_id in row_by_id if file_id not in delete_ids]
+    if archive_ids:
+        await pool.execute(
+            """
+            UPDATE session_files
+            SET session_id = NULL,
+                archived_at = NOW(),
+                archived_session_id = $1,
+                archived_session_name = $2,
+                tenant_id = COALESCE(tenant_id, $3),
+                user_id = COALESCE(user_id, $4)
+            WHERE session_id = $1 AND id = ANY($5::text[])
+            """,
+            session_id,
+            _row_value(session, "name") or session_id,
+            _row_value(session, "tenant_id"),
+            _row_value(session, "user_id") or user.id,
+            archive_ids,
+        )
+
+    return {
+        "mode": file_delete_mode,
+        "completedFileCount": len(rows),
+        "deletedFileIds": sorted(deleted_file_ids),
+        "archivedFileIds": archive_ids,
+        "objectDeleteFailedFileIds": sorted(object_delete_failed_file_ids),
+        "warning": "file_object_delete_failed" if object_delete_failed_file_ids else None,
+    }
+
+
 async def get_file_payload(file_id: str, user: CurrentUser) -> tuple[bytes, str] | None:
     pool = get_pool()
     row = await pool.fetchrow("SELECT * FROM session_files WHERE id = $1", file_id)
     if not row:
         return None
-    if user.session_scope:
-        if row["session_id"] != user.session_scope:
-            raise HTTPException(403, "Token not authorized for this file")
-    elif row["tenant_id"] and row["tenant_id"] != user.tenant_id:
-        raise HTTPException(404, "File not found")
+    _assert_file_access(row, user)
 
     store = await get_store()
     return await store.get_by_key(row["object_key"])
