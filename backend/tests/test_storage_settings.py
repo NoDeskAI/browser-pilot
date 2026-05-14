@@ -28,6 +28,7 @@ def test_get_storage_settings_masks_secret(monkeypatch):
             "s3AccessKey": "browserpilot",
             "s3SecretKey": "secret",
             "s3Endpoint": "http://object-storage:9000",
+            "s3PublicEndpoint": "http://localhost:9000",
             "s3Presign": True,
             "s3PresignExpires": 3600,
         }
@@ -49,6 +50,7 @@ def test_save_storage_settings_reuses_existing_secret(monkeypatch):
             "s3AccessKey": "old-access",
             "s3SecretKey": "old-secret",
             "s3Endpoint": "http://object-storage:9000",
+            "s3PublicEndpoint": "http://localhost:9000",
             "s3Presign": True,
             "s3PresignExpires": 3600,
         }
@@ -72,6 +74,7 @@ def test_save_storage_settings_reuses_existing_secret(monkeypatch):
         s3AccessKey="new-access",
         s3SecretKey="",
         s3Endpoint="https://s3.example.com",
+        s3PublicEndpoint="https://files.example.com",
     )
 
     result = asyncio.run(settings.save_storage_settings(body))
@@ -79,4 +82,5 @@ def test_save_storage_settings_reuses_existing_secret(monkeypatch):
     assert result == {"ok": True}
     assert verified["secret"] == "old-secret"
     assert pool.saved["s3SecretKey"] == "old-secret"
+    assert pool.saved["s3PublicEndpoint"] == "https://files.example.com"
     assert "s3SecretConfigured" not in pool.saved

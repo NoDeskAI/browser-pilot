@@ -34,6 +34,7 @@ Token 以 \`bp_\` 开头，例如 \`bp_a1b2c3d4e5f6...\`
 - 拥有当前用户的完整 API 权限
 - 适合个人使用的自动化工具、CLI 脚本
 - 可通过 \`GET /api/files\`、\`PATCH /api/files/{fileId}\`、\`DELETE /api/files/{fileId}\` 管理全局文件
+- 文件 DTO 中的 \`url\` 是 15 分钟有效的签名下载链接；Builtin 返回后端签名 URL，S3 返回后端生成的 S3 预签名 URL
 
 ### 会话级 Token
 
@@ -67,14 +68,16 @@ curl -X POST http://localhost:9222/api/browser/observe \\
 ### 截图
 
 \`\`\`bash
-curl "http://localhost:9222/api/browser/screenshot?sessionId=$SESSION_ID&includeBase64=false" \\
+curl "http://localhost:9222/api/browser/screenshot?sessionId=$SESSION_ID" \\
   -H "Authorization: Bearer $TOKEN"
+# 默认返回 {"ok": true, "file": {..., "url": "..."}, "screenshot": null}
+# 只有旧客户端需要 base64 时才追加 includeBase64=true；store 参数已废弃且无效果。
 \`\`\`
 
 ### Session 文件管理
 
 \`\`\`bash
-# 列出当前 Session 文件。status 为 completed 的文件可以使用 url 获取内容。
+# 列出当前 Session 文件。status 为 completed 的文件会带 15 分钟有效的签名下载 url。
 curl "http://localhost:9222/api/sessions/$SESSION_ID/files" \\
   -H "Authorization: Bearer $TOKEN"
 
@@ -162,9 +165,9 @@ curl -X POST http://localhost:9222/api/browser/type \\
 | | \`GET /api/sessions/{id}/files/{fileId}\` | 查看单个文件元数据 |
 | | \`PATCH /api/sessions/{id}/files/{fileId}\` | 重命名 Session 文件 |
 | | \`DELETE /api/sessions/{id}/files/{fileId}\` | 删除 Session 文件，返回对象删除和记录删除状态 |
-| | \`GET /api/files/{fileId}.{ext}\` | 读取绑定活跃 Session 下的已完成文件内容 |
+| | \`GET /api/files/{fileId}.{ext}\` | 使用 Bearer Token 读取绑定活跃 Session 下的已完成文件内容 |
 
-会话级 Token 不能调用全局 Files API（\`GET /api/files\`、\`PATCH /api/files/{fileId}\`、\`DELETE /api/files/{fileId}\`），也不能读取已归档文件 URL。
+会话级 Token 不能调用全局 Files API（\`GET /api/files\`、\`PATCH /api/files/{fileId}\`、\`DELETE /api/files/{fileId}\`），也不能重新读取已归档文件 URL。文件 DTO 中已经签发的能力型下载 URL 在 15 分钟内可能仍可访问。
 
 其余接口（会话列表、创建/删除会话、全局文件管理、用户管理等）需要使用 **用户级 Token**。
 
@@ -204,6 +207,7 @@ Tokens are prefixed with \`bp_\`, e.g. \`bp_a1b2c3d4e5f6...\`
 - Has full API access for the current user
 - Ideal for personal automation tools and CLI scripts
 - Can manage global files through \`GET /api/files\`, \`PATCH /api/files/{fileId}\`, and \`DELETE /api/files/{fileId}\`
+- File DTO \`url\` values are signed download links valid for 15 minutes; Built-in storage returns a signed backend URL, and S3 returns a backend-generated S3 presigned URL
 
 ### Session-scoped Token
 
@@ -237,14 +241,16 @@ curl -X POST http://localhost:9222/api/browser/observe \\
 ### Take a Screenshot
 
 \`\`\`bash
-curl "http://localhost:9222/api/browser/screenshot?sessionId=$SESSION_ID&includeBase64=false" \\
+curl "http://localhost:9222/api/browser/screenshot?sessionId=$SESSION_ID" \\
   -H "Authorization: Bearer $TOKEN"
+# Default response: {"ok": true, "file": {..., "url": "..."}, "screenshot": null}
+# Only append includeBase64=true for legacy clients that need base64; store is deprecated and has no effect.
 \`\`\`
 
 ### Session File Management
 
 \`\`\`bash
-# List files for the current session. Completed files include a content URL.
+# List files for the current session. Completed files include a signed download URL valid for 15 minutes.
 curl "http://localhost:9222/api/sessions/$SESSION_ID/files" \\
   -H "Authorization: Bearer $TOKEN"
 
@@ -332,9 +338,9 @@ Session-scoped tokens can only call the following endpoints, and the \`sessionId
 | | \`GET /api/sessions/{id}/files/{fileId}\` | Get one file DTO |
 | | \`PATCH /api/sessions/{id}/files/{fileId}\` | Rename a session file |
 | | \`DELETE /api/sessions/{id}/files/{fileId}\` | Delete a session file and return object/record delete status |
-| | \`GET /api/files/{fileId}.{ext}\` | Read completed file content from the bound active session |
+| | \`GET /api/files/{fileId}.{ext}\` | Read completed file content from the bound active session with Bearer Token |
 
-Session-scoped tokens cannot call the global Files API (\`GET /api/files\`, \`PATCH /api/files/{fileId}\`, \`DELETE /api/files/{fileId}\`) or read archived file URLs.
+Session-scoped tokens cannot call the global Files API (\`GET /api/files\`, \`PATCH /api/files/{fileId}\`, \`DELETE /api/files/{fileId}\`) or re-read archived file URLs. Already issued capability download URLs may remain accessible until their 15-minute expiry.
 
 All other endpoints (session list, create/delete sessions, global file management, user management, etc.) require a **user-level token**.
 

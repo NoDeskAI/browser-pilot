@@ -133,6 +133,17 @@ async def get_optional_user(request: Request) -> CurrentUser | None:
         return None
 
 
+async def get_optional_session_aware_user(request: Request) -> CurrentUser | None:
+    """Like get_session_aware_user but returns None when no usable token exists."""
+    raw = _extract_token(request)
+    if not raw:
+        return None
+    try:
+        return await _resolve_user(request)
+    except HTTPException:
+        return None
+
+
 def require_role(allowed: Sequence[str]):
     """Return a dependency that checks the user has one of the allowed roles."""
     async def _check(user: CurrentUser = Depends(get_current_user)) -> CurrentUser:

@@ -31,6 +31,7 @@ class StorageConfig(BaseModel):
     s3AccessKey: str = ""
     s3SecretKey: str = ""
     s3Endpoint: str = ""
+    s3PublicEndpoint: str = ""
     s3Presign: bool = True
     s3PresignExpires: int = 3600
     s3SecretConfigured: bool = False

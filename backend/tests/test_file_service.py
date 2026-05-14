@@ -6,6 +6,7 @@ import pytest
 from app.auth.dependencies import CurrentUser
 from app import file_capture
 from app import file_service
+from app.file_urls import verify_file_download_signature
 
 
 def _user(*, user_id="user-1", tenant_id="tenant-1", role="admin", session_scope=None):
@@ -21,7 +22,7 @@ def _user(*, user_id="user-1", tenant_id="tenant-1", role="admin", session_scope
 
 
 class FakeStore:
-    storage_name = "s3"
+    storage_name = "builtin"
 
     def __init__(self):
         self.objects = {}
@@ -40,6 +41,18 @@ class FakeStore:
         if self.fail_delete:
             raise RuntimeError("delete failed")
         self.objects.pop(key, None)
+
+
+class FakePresignedStore(FakeStore):
+    storage_name = "s3"
+
+    def __init__(self):
+        super().__init__()
+        self.download_call = None
+
+    async def download_url(self, **kwargs):
+        self.download_call = kwargs
+        return f"http://public-storage:9000/{kwargs['key']}?ttl={kwargs['expires_in']}"
 
 
 class FakePool:
@@ -193,12 +206,11 @@ class FakePool:
         return rows
 
 
-def test_save_bytes_creates_file_record_and_backend_url(monkeypatch):
+def test_save_bytes_creates_file_record_and_signed_backend_url(monkeypatch):
     store = FakeStore()
     pool = FakePool()
     monkeypatch.setattr(file_service, "get_store", lambda: asyncio.sleep(0, store))
     monkeypatch.setattr(file_service, "get_pool", lambda: pool)
-    monkeypatch.setattr(file_service, "API_BASE_URL", "http://localhost:8000")
 
     result = asyncio.run(
         file_service.save_bytes(
@@ -211,10 +223,45 @@ def test_save_bytes_creates_file_record_and_backend_url(monkeypatch):
     )
 
     row = pool.rows[result["id"]]
-    assert result["url"] == f"http://localhost:8000/api/files/{result['id']}.png"
+    prefix = f"http://localhost:8000/api/files/{result['id']}.png?"
+    assert result["url"].startswith(prefix)
+    query = result["url"].split("?", 1)[1]
+    parts = dict(item.split("=", 1) for item in query.split("&"))
+    assert verify_file_download_signature(
+        result["id"],
+        "png",
+        int(parts["expires"]),
+        parts["signature"],
+    )
     assert "object-storage:9000" not in result["url"]
     assert row["object_key"] == f"files/session-1/{result['id']}/screenshot.png"
     assert store.objects[row["object_key"]] == (b"png-bytes", "image/png")
+
+
+def test_save_bytes_returns_s3_presigned_public_url(monkeypatch):
+    store = FakePresignedStore()
+    pool = FakePool()
+    monkeypatch.setattr(file_service, "get_store", lambda: asyncio.sleep(0, store))
+    monkeypatch.setattr(file_service, "get_pool", lambda: pool)
+
+    result = asyncio.run(
+        file_service.save_bytes(
+            session_id="session-1",
+            source="screenshot",
+            data=b"png-bytes",
+            filename="screenshot.png",
+            content_type="image/png",
+        )
+    )
+
+    row = pool.rows[result["id"]]
+    assert result["url"] == f"http://public-storage:9000/{row['object_key']}?ttl=900"
+    assert store.download_call == {
+        "key": row["object_key"],
+        "file_id": result["id"],
+        "filename": "screenshot.png",
+        "expires_in": 900,
+    }
 
 
 def test_save_file_dedupes_browser_download_by_source_metadata(monkeypatch, tmp_path):
@@ -557,7 +604,6 @@ def test_session_file_metadata_rename_and_delete(monkeypatch):
     pool = FakePool()
     monkeypatch.setattr(file_service, "get_store", lambda: asyncio.sleep(0, store))
     monkeypatch.setattr(file_service, "get_pool", lambda: pool)
-    monkeypatch.setattr(file_service, "API_BASE_URL", "http://localhost:8000")
 
     saved = asyncio.run(
         file_service.save_bytes(
@@ -575,7 +621,7 @@ def test_session_file_metadata_rename_and_delete(monkeypatch):
 
     assert loaded["id"] == saved["id"]
     assert renamed["name"] == "final report.txt"
-    assert renamed["url"] == f"http://localhost:8000/api/files/{saved['id']}.txt"
+    assert renamed["url"].startswith(f"http://localhost:8000/api/files/{saved['id']}.txt?")
     assert pool.rows[saved["id"]]["object_key"] == object_key
 
     deleted = asyncio.run(file_service.delete_session_file("session-1", saved["id"]))

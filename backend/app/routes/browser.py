@@ -369,8 +369,7 @@ async def api_switch_tab(body: SwitchTabBody, user: CurrentUser = Depends(get_se
 @router.get("/api/browser/screenshot")
 async def api_screenshot(
     sessionId: str = Query(...),
-    store: bool = Query(False),
-    includeBase64: bool = Query(True),
+    includeBase64: bool = Query(False),
     user: CurrentUser = Depends(get_session_aware_user),
 ):
     await verify_session_access(sessionId, user)
@@ -386,6 +385,6 @@ async def api_screenshot(
             filename="screenshot.png",
             content_type="image/png",
         )
-        return {"ok": True, "file": file, "screenshot": b64 if includeBase64 else None}
+        return {"ok": True, "file": file, "screenshot": b64 if includeBase64 is True else None}
     except Exception as exc:
         return {"ok": False, "error": str(exc)}

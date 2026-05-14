@@ -312,6 +312,7 @@ export default {
     s3SecretPlaceholder: '留空表示不修改',
     s3SecretHint: '保存后不会回显明文 Secret Key；留空会沿用当前值。',
     s3Endpoint: 'Endpoint（可选）',
+    s3PublicEndpoint: '公开下载 Endpoint（可选）',
     s3Presign: '使用预签名 URL',
     save: '保存',
     saved: '已保存',

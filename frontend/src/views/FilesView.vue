@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Download, FileText, Loader2, Pencil, RefreshCw, Trash2, Check, X } from 'lucide-vue-next'
 import { api } from '../lib/api'
+import { downloadSignedFile } from '../lib/fileDownload'
 import { useNotify } from '../composables/useNotify'
 import type { SessionFile } from '../types'
 import { Button } from '@/components/ui/button'
@@ -89,17 +90,7 @@ async function saveFile(file: SessionFile) {
   if (!file.url) return
   actionId.value = file.id
   try {
-    const res = await api(file.url)
-    if (!res.ok) throw new Error(await res.text())
-    const blob = await res.blob()
-    const href = URL.createObjectURL(blob)
-    const anchor = document.createElement('a')
-    anchor.href = href
-    anchor.download = file.name || file.id
-    document.body.appendChild(anchor)
-    anchor.click()
-    anchor.remove()
-    URL.revokeObjectURL(href)
+    await downloadSignedFile(file.url, file.name || file.id)
   } catch {
     notify.error(t('sessionFiles.saveFailed'))
   } finally {

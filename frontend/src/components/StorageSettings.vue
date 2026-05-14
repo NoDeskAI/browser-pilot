@@ -22,6 +22,7 @@ const form = reactive({
   s3AccessKey: '',
   s3SecretKey: '',
   s3Endpoint: '',
+  s3PublicEndpoint: '',
   s3Presign: true,
   s3PresignExpires: 3600,
   s3SecretConfigured: false,
@@ -143,6 +144,10 @@ async function saveSettings() {
         <div class="md:col-span-2 space-y-2">
           <Label for="s3Endpoint">{{ t('settings.s3Endpoint') }}</Label>
           <Input id="s3Endpoint" v-model="form.s3Endpoint" placeholder="https://s3.example.com" />
+        </div>
+        <div class="md:col-span-2 space-y-2">
+          <Label for="s3PublicEndpoint">{{ t('settings.s3PublicEndpoint') }}</Label>
+          <Input id="s3PublicEndpoint" v-model="form.s3PublicEndpoint" placeholder="https://files.example.com" />
         </div>
       </div>
 

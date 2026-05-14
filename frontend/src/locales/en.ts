@@ -312,6 +312,7 @@ export default {
     s3SecretPlaceholder: 'Leave blank to keep unchanged',
     s3SecretHint: 'Secret Key is not shown after saving. Leave blank to keep the current value.',
     s3Endpoint: 'Endpoint (optional)',
+    s3PublicEndpoint: 'Public Download Endpoint (optional)',
     s3Presign: 'Use pre-signed URL',
     save: 'Save',
     saved: 'Saved',

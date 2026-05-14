@@ -325,6 +325,7 @@ def _default_s3_storage_config() -> dict[str, Any] | None:
         "s3AccessKey": config.BUNDLED_S3_ACCESS_KEY,
         "s3SecretKey": config.BUNDLED_S3_SECRET_KEY,
         "s3Endpoint": config.BUNDLED_S3_ENDPOINT,
+        "s3PublicEndpoint": config.BUNDLED_S3_PUBLIC_ENDPOINT,
         "s3Presign": True,
         "s3PresignExpires": 3600,
     }

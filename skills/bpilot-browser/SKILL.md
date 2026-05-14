@@ -43,7 +43,10 @@ bpilot --session "<session-id>" key Enter
 # 6. Verify result.
 bpilot --session "<session-id>" observe --json
 
-# 7. Screenshot for visual confirmation.
+# 7. Screenshot for visual confirmation. Without --output, the JSON response
+# contains a signed file.url and no base64 screenshot payload.
+bpilot --session "<session-id>" screenshot --json
+# Use --output when you also need a local copy.
 bpilot --session "<session-id>" screenshot --output result.png
 
 # 8. Inspect files captured by the browser session.
@@ -81,7 +84,7 @@ Add `--json` / `-j` to state-reading commands for machine-readable output.
 | `bpilot --session "<session-id>" tabs --json` | List browser tabs |
 | `bpilot --session "<session-id>" switch-tab [--handle H \| --index I]` | Switch tab |
 | `bpilot --session "<session-id>" page-info --json` | Get current URL and title |
-| `bpilot --session "<session-id>" screenshot [--output FILE]` | Capture screenshot |
+| `bpilot --session "<session-id>" screenshot [--output FILE]` | Store screenshot in FileStore and return a signed file URL; `--output` also exports a local copy |
 | `bpilot --session "<session-id>" logs [--tail N]` | View container diagnostic logs |
 
 ### Session Files

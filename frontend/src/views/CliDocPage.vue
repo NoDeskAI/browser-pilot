@@ -93,6 +93,7 @@ ${c} scroll <delta_y>                # Scroll page (positive = down)
 ${c} tabs                            # List browser tabs
 ${c} switch-tab --index <n>          # Switch tab
 ${c} page-info                       # Current URL and title
+${c} screenshot                      # Store screenshot and print signed file URL
 ${c} screenshot -o page.png          # Store screenshot and export local copy
 ${c} logs                            # View CDP event logs
 
@@ -126,9 +127,10 @@ ${c} observe --json
 ${c} click 320 200
 ${c} type "search query"
 ${c} key Enter
-${c} screenshot -o result.png
+${c} screenshot --json
 ${c} files list --json
-# → {"files": [{"id": "guid-1", "status": "downloading", ...}, {"id": "file-1", "status": "completed", "url": "/api/files/...", ...}]}
+# → {"ok": true, "file": {"id": "file-1", "url": "http://localhost:8000/api/files/file-1.png?expires=...&signature=..."}, "screenshot": null}
+# → {"files": [{"id": "guid-1", "status": "downloading", ...}, {"id": "file-1", "status": "completed", "url": "http://localhost:8000/api/files/file-1.csv?expires=...&signature=...", ...}]}
 ${c} files upload ./input.csv --name input.csv
 ${c} files get file-1 -o result.csv`
 }
@@ -156,6 +158,7 @@ ${c} scroll <delta_y>                # 滚动页面（正数 = 向下）
 ${c} tabs                            # 列出浏览器标签页
 ${c} switch-tab --index <n>          # 切换标签页
 ${c} page-info                       # 获取当前页面 URL 和标题
+${c} screenshot                      # 存入文件存储并输出签名 file.url
 ${c} screenshot -o page.png          # 存入文件存储并导出本地副本
 ${c} logs                            # 查看 CDP 事件日志
 
@@ -189,9 +192,10 @@ ${c} observe --json
 ${c} click 320 200
 ${c} type "搜索内容"
 ${c} key Enter
-${c} screenshot -o result.png
+${c} screenshot --json
 ${c} files list --json
-# → {"files": [{"id": "guid-1", "status": "downloading", ...}, {"id": "file-1", "status": "completed", "url": "/api/files/...", ...}]}
+# → {"ok": true, "file": {"id": "file-1", "url": "http://localhost:8000/api/files/file-1.png?expires=...&signature=..."}, "screenshot": null}
+# → {"files": [{"id": "guid-1", "status": "downloading", ...}, {"id": "file-1", "status": "completed", "url": "http://localhost:8000/api/files/file-1.csv?expires=...&signature=...", ...}]}
 ${c} files upload ./input.csv --name input.csv
 ${c} files get file-1 -o result.csv`
 }
@@ -248,6 +252,7 @@ ${c} --session "<session-id>" scroll <delta_y>                # Scroll page (pos
 ${c} --session "<session-id>" tabs --json                     # List browser tabs
 ${c} --session "<session-id>" switch-tab --index <n>          # Switch tab
 ${c} --session "<session-id>" page-info --json                # Current URL and title
+${c} --session "<session-id>" screenshot --json               # Store screenshot and print signed file URL
 ${c} --session "<session-id>" screenshot -o page.png          # Store screenshot and export local copy
 ${c} --session "<session-id>" logs                            # View CDP event logs
 
@@ -276,9 +281,10 @@ ${c} --session "abc-123-..." observe --json
 ${c} --session "abc-123-..." click 320 200
 ${c} --session "abc-123-..." type "search query"
 ${c} --session "abc-123-..." key Enter
-${c} --session "abc-123-..." screenshot -o result.png
+${c} --session "abc-123-..." screenshot --json
 ${c} --session "abc-123-..." files list --json
-# → {"files": [{"id": "guid-1", "status": "downloading", ...}, {"id": "file-1", "status": "completed", "url": "/api/files/...", ...}]}
+# → {"ok": true, "file": {"id": "file-1", "url": "http://localhost:8000/api/files/file-1.png?expires=...&signature=..."}, "screenshot": null}
+# → {"files": [{"id": "guid-1", "status": "downloading", ...}, {"id": "file-1", "status": "completed", "url": "http://localhost:8000/api/files/file-1.csv?expires=...&signature=...", ...}]}
 ${c} --session "abc-123-..." files upload ./input.csv --name input.csv
 ${c} --session "abc-123-..." files get file-1 -o result.csv`
 }
@@ -305,6 +311,7 @@ ${c} --session "<session-id>" scroll <delta_y>                # 滚动页面（�
 ${c} --session "<session-id>" tabs --json                     # 列出浏览器标签页
 ${c} --session "<session-id>" switch-tab --index <n>          # 切换标签页
 ${c} --session "<session-id>" page-info --json                # 获取当前页面 URL 和标题
+${c} --session "<session-id>" screenshot --json               # 存入文件存储并输出签名 file.url
 ${c} --session "<session-id>" screenshot -o page.png          # 存入文件存储并导出本地副本
 ${c} --session "<session-id>" logs                            # 查看 CDP 事件日志
 
@@ -333,9 +340,10 @@ ${c} --session "abc-123-..." observe --json
 ${c} --session "abc-123-..." click 320 200
 ${c} --session "abc-123-..." type "搜索内容"
 ${c} --session "abc-123-..." key Enter
-${c} --session "abc-123-..." screenshot -o result.png
+${c} --session "abc-123-..." screenshot --json
 ${c} --session "abc-123-..." files list --json
-# → {"files": [{"id": "guid-1", "status": "downloading", ...}, {"id": "file-1", "status": "completed", "url": "/api/files/...", ...}]}
+# → {"ok": true, "file": {"id": "file-1", "url": "http://localhost:8000/api/files/file-1.png?expires=...&signature=..."}, "screenshot": null}
+# → {"files": [{"id": "guid-1", "status": "downloading", ...}, {"id": "file-1", "status": "completed", "url": "http://localhost:8000/api/files/file-1.csv?expires=...&signature=...", ...}]}
 ${c} --session "abc-123-..." files upload ./input.csv --name input.csv
 ${c} --session "abc-123-..." files get file-1 -o result.csv`
 }

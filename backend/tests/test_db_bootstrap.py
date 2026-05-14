@@ -269,6 +269,7 @@ def test_default_s3_storage_config_uses_bundled_s3_config(monkeypatch):
     monkeypatch.setattr(db.config, "BUNDLED_S3_SECRET_KEY", "secret")
     monkeypatch.setattr(db.config, "BUNDLED_S3_BUCKET", "browser-pilot")
     monkeypatch.setattr(db.config, "BUNDLED_S3_ENDPOINT", "http://localhost:9000")
+    monkeypatch.setattr(db.config, "BUNDLED_S3_PUBLIC_ENDPOINT", "http://files.localhost:9000")
 
     config = db._default_s3_storage_config()
 
@@ -279,6 +280,7 @@ def test_default_s3_storage_config_uses_bundled_s3_config(monkeypatch):
         "s3AccessKey": "browserpilot",
         "s3SecretKey": "secret",
         "s3Endpoint": "http://localhost:9000",
+        "s3PublicEndpoint": "http://files.localhost:9000",
         "s3Presign": True,
         "s3PresignExpires": 3600,
     }

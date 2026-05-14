@@ -5,11 +5,17 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel
 
-from app.auth.dependencies import CurrentUser, get_current_user, get_session_aware_user, verify_session_access
+from app.auth.dependencies import (
+    CurrentUser,
+    get_current_user,
+    get_optional_session_aware_user,
+    get_session_aware_user,
+    verify_session_access,
+)
 
 router = APIRouter()
 
@@ -36,14 +42,29 @@ def _tmp_filename(name: str) -> str:
 
 
 @router.get("/api/files/{file_id}.{ext}")
-async def serve_file(file_id: str, ext: str, user: CurrentUser = Depends(get_session_aware_user)):
-    from app.file_service import get_file_payload
+async def serve_file(
+    file_id: str,
+    ext: str,
+    expires: int | None = Query(None),
+    signature: str | None = Query(None),
+    user: CurrentUser | None = Depends(get_optional_session_aware_user),
+):
+    from app.file_service import get_file_payload, get_signed_file_payload
+    from app.file_urls import verify_file_download_signature
     from app.file_store import get_store
 
-    result = await get_file_payload(file_id, user)
-    if result is None and not user.session_scope:
-        store = await get_store()
-        result = await store.get(file_id)
+    result = None
+    if user:
+        result = await get_file_payload(file_id, user)
+        if result is None and not user.session_scope:
+            store = await get_store()
+            result = await store.get(file_id)
+    else:
+        if expires is None or not signature:
+            raise HTTPException(401, "Not authenticated")
+        if not verify_file_download_signature(file_id, ext, expires, signature):
+            raise HTTPException(403, "File URL expired or invalid")
+        result = await get_signed_file_payload(file_id)
     if not result:
         raise HTTPException(404, "File not found or expired")
     data, content_type = result

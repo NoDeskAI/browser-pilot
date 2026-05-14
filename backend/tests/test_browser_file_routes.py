@@ -1,6 +1,8 @@
 import asyncio
 import base64
+import inspect
 import io
+import time
 
 from app.auth.dependencies import CurrentUser
 from fastapi import UploadFile
@@ -8,6 +10,8 @@ import pytest
 
 from app import file_service
 from app import file_capture
+from app.file_urls import sign_file_download
+from app.main import app
 from app.routes import browser, files, sessions
 
 
@@ -61,6 +65,30 @@ def test_screenshot_stores_file_and_keeps_base64_compat(monkeypatch):
     assert captured["content_type"] == "image/png"
 
 
+def test_screenshot_default_returns_file_only(monkeypatch):
+    raw = b"png-bytes"
+
+    async def fake_verify(*_args, **_kwargs):
+        return None
+
+    async def fake_wd_fetch(*_args, **_kwargs):
+        return base64.b64encode(raw).decode()
+
+    async def fake_save_bytes(**_kwargs):
+        return {"id": "file-1", "url": "http://localhost:8000/api/files/file-1.png?expires=1&signature=sig"}
+
+    monkeypatch.setattr(browser, "verify_session_access", fake_verify)
+    monkeypatch.setattr(browser, "browser_session", lambda _session_id: FakeBrowserSession())
+    monkeypatch.setattr(browser, "wd_fetch", fake_wd_fetch)
+    monkeypatch.setattr(file_service, "save_bytes", fake_save_bytes)
+
+    result = asyncio.run(browser.api_screenshot("session-1", user=_user()))
+
+    assert result["ok"] is True
+    assert result["screenshot"] is None
+    assert result["file"]["id"] == "file-1"
+
+
 def test_screenshot_include_base64_false_returns_file_only(monkeypatch):
     raw = b"png-bytes"
 
@@ -87,6 +115,15 @@ def test_screenshot_include_base64_false_returns_file_only(monkeypatch):
     }
 
 
+def test_screenshot_openapi_does_not_expose_store_parameter():
+    names = {
+        parameter["name"]
+        for parameter in app.openapi()["paths"]["/api/browser/screenshot"]["get"]["parameters"]
+    }
+    assert "store" not in names
+    assert "store" not in inspect.signature(browser.api_screenshot).parameters
+
+
 def test_files_route_serves_session_file(monkeypatch):
     async def fake_get_file_payload(file_id, user):
         assert file_id == "file-1"
@@ -95,10 +132,39 @@ def test_files_route_serves_session_file(monkeypatch):
 
     monkeypatch.setattr(file_service, "get_file_payload", fake_get_file_payload)
 
-    response = asyncio.run(files.serve_file("file-1", "txt", _user(session_scope="session-1")))
+    response = asyncio.run(files.serve_file("file-1", "txt", user=_user(session_scope="session-1")))
 
     assert response.body == b"data"
     assert response.media_type == "text/plain"
+
+
+def test_files_route_serves_signed_file_without_auth(monkeypatch):
+    expires = int(time.time()) + 900
+    signature = sign_file_download("file-1", "txt", expires)
+
+    async def fake_get_signed_file_payload(file_id):
+        assert file_id == "file-1"
+        return b"data", "text/plain"
+
+    monkeypatch.setattr(file_service, "get_signed_file_payload", fake_get_signed_file_payload)
+
+    response = asyncio.run(
+        files.serve_file("file-1", "txt", expires=expires, signature=signature, user=None)
+    )
+
+    assert response.body == b"data"
+    assert response.media_type == "text/plain"
+
+
+def test_files_route_rejects_invalid_signed_file_url(monkeypatch):
+    expires = int(time.time()) + 900
+
+    with pytest.raises(files.HTTPException) as exc:
+        asyncio.run(
+            files.serve_file("file-1", "txt", expires=expires, signature="bad", user=None)
+        )
+
+    assert exc.value.status_code == 403
 
 
 def test_session_files_route_verifies_access_and_lists_files(monkeypatch):

@@ -10,6 +10,11 @@ import uuid
 from pathlib import Path
 from typing import Protocol
 
+from app.file_urls import (
+    FILE_DOWNLOAD_URL_TTL_SECONDS,
+    attachment_content_disposition,
+)
+
 logger = logging.getLogger("file_store")
 
 
@@ -46,6 +51,15 @@ class FileStore(Protocol):
 
     async def delete_by_key(self, key: str) -> None: ...
 
+    async def download_url(
+        self,
+        *,
+        key: str,
+        file_id: str,
+        filename: str,
+        expires_in: int = FILE_DOWNLOAD_URL_TTL_SECONDS,
+    ) -> str: ...
+
 
 def _encode_file_id(key: str) -> str:
     return base64.urlsafe_b64encode(key.encode()).decode().rstrip("=")
@@ -67,6 +81,7 @@ class S3Store:
         access_key: str,
         secret_key: str,
         endpoint: str,
+        public_endpoint: str,
         presign: bool,
         presign_expires: int,
         base_url: str,
@@ -84,6 +99,12 @@ class S3Store:
             **({"endpoint_url": endpoint} if endpoint else {}),
         }
         self._client = session.client("s3", **kwargs)
+        public_endpoint = (public_endpoint or endpoint or "").strip()
+        public_kwargs = {
+            "config": Config(s3={"addressing_style": "path"}),
+            **({"endpoint_url": public_endpoint} if public_endpoint else {}),
+        }
+        self._presign_client = session.client("s3", **public_kwargs)
         self._bucket = bucket
         self._presign = presign
         self._presign_expires = presign_expires
@@ -159,6 +180,29 @@ class S3Store:
             lambda: self._client.delete_object(Bucket=self._bucket, Key=key),
         )
 
+    async def download_url(
+        self,
+        *,
+        key: str,
+        file_id: str,
+        filename: str,
+        expires_in: int = FILE_DOWNLOAD_URL_TTL_SECONDS,
+    ) -> str:
+        loop = asyncio.get_running_loop()
+
+        def presign():
+            return self._presign_client.generate_presigned_url(
+                "get_object",
+                Params={
+                    "Bucket": self._bucket,
+                    "Key": key,
+                    "ResponseContentDisposition": attachment_content_disposition(filename),
+                },
+                ExpiresIn=expires_in,
+            )
+
+        return await loop.run_in_executor(None, presign)
+
 
 class BuiltinStore:
     def __init__(self, base_url: str, ttl: int = 3600):
@@ -214,6 +258,18 @@ class BuiltinStore:
     async def delete_by_key(self, key: str) -> None:
         self._cache.pop(key, None)
 
+    async def download_url(
+        self,
+        *,
+        key: str,
+        file_id: str,
+        filename: str,
+        expires_in: int = FILE_DOWNLOAD_URL_TTL_SECONDS,
+    ) -> str:
+        from app.file_urls import backend_download_url
+
+        return backend_download_url(file_id, filename, expires_in=expires_in)
+
     def _cleanup(self):
         now = time.time()
         expired = [k for k, v in self._cache.items() if now - v[2] > self._ttl]
@@ -239,15 +295,19 @@ async def _init_store():
     global _store
     config = await _load_config_from_db()
     mode = config.get("storage", "builtin")
-    from app.config import API_BASE_URL
+    from app.config import API_BASE_URL, BUNDLED_S3_ENDPOINT, BUNDLED_S3_PUBLIC_ENDPOINT
 
     if mode == "s3" and config.get("s3Bucket"):
+        public_endpoint = config.get("s3PublicEndpoint", "")
+        if not public_endpoint and config.get("s3Endpoint", "") == BUNDLED_S3_ENDPOINT:
+            public_endpoint = BUNDLED_S3_PUBLIC_ENDPOINT
         _store = S3Store(
             bucket=config["s3Bucket"],
             region=config["s3Region"],
             access_key=config["s3AccessKey"],
             secret_key=config["s3SecretKey"],
             endpoint=config.get("s3Endpoint", ""),
+            public_endpoint=public_endpoint,
             presign=config.get("s3Presign", True),
             presign_expires=config.get("s3PresignExpires", 3600),
             base_url=API_BASE_URL,

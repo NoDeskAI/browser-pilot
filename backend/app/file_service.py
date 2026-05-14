@@ -11,8 +11,8 @@ from typing import Any
 from fastapi import HTTPException
 
 from app.auth.dependencies import CurrentUser
-from app.config import API_BASE_URL
 from app.db import get_pool
+from app.file_urls import FILE_DOWNLOAD_URL_TTL_SECONDS, backend_download_url
 from app.file_store import get_store
 
 logger = logging.getLogger("file_service")
@@ -32,9 +32,25 @@ def _content_type(filename: str, fallback: str = "application/octet-stream") -> 
     return guessed or fallback
 
 
-def _file_url(file_id: str, filename: str) -> str:
-    suffix = Path(filename).suffix or ".bin"
-    return f"{API_BASE_URL.rstrip()}/api/files/{file_id}{suffix}"
+async def _file_url(row: Any) -> str:
+    name = row["original_name"]
+    file_id = row["id"]
+    object_key = _row_value(row, "object_key")
+    if _row_value(row, "storage") == "s3" and object_key:
+        store = await get_store()
+        download_url = getattr(store, "download_url", None)
+        if getattr(store, "storage_name", "") == "s3" and download_url:
+            return await download_url(
+                key=object_key,
+                file_id=file_id,
+                filename=name,
+                expires_in=FILE_DOWNLOAD_URL_TTL_SECONDS,
+            )
+    return backend_download_url(
+        file_id,
+        name,
+        expires_in=FILE_DOWNLOAD_URL_TTL_SECONDS,
+    )
 
 
 def _row_value(row: Any, key: str, default: Any = None) -> Any:
@@ -44,7 +60,7 @@ def _row_value(row: Any, key: str, default: Any = None) -> Any:
         return default
 
 
-def _file_dto(row: Any) -> dict[str, Any]:
+async def _file_dto(row: Any) -> dict[str, Any]:
     name = row["original_name"]
     uploaded_at = _row_value(row, "uploaded_at")
     archived_at = _row_value(row, "archived_at")
@@ -59,7 +75,7 @@ def _file_dto(row: Any) -> dict[str, Any]:
         "sourceId": _row_value(row, "source_id"),
         "contentType": row["content_type"],
         "size": row["size_bytes"],
-        "url": _file_url(row["id"], name),
+        "url": await _file_url(row),
         "storage": row["storage"],
         "sha256": _row_value(row, "sha256"),
         "uploadedAt": uploaded_at.isoformat() if uploaded_at else None,
@@ -120,7 +136,7 @@ async def _existing_download(
             source_id,
         )
         if row:
-            return _file_dto(row)
+            return await _file_dto(row)
     if not source_path or source_mtime is None:
         return None
     row = await pool.fetchrow(
@@ -140,7 +156,7 @@ async def _existing_download(
         source_mtime,
         size_bytes,
     )
-    return _file_dto(row) if row else None
+    return await _file_dto(row) if row else None
 
 
 async def save_bytes(
@@ -287,7 +303,7 @@ async def _insert_file_record(
     )
     row = await pool.fetchrow("SELECT * FROM session_files WHERE id = $1", file_id)
     if row:
-        return _file_dto(row)
+        return await _file_dto(row)
     existing = await _existing_download(
         session_id=session_id,
         source=source,
@@ -311,7 +327,7 @@ async def list_session_files(session_id: str) -> list[dict[str, Any]]:
         """,
         session_id,
     )
-    completed = [_file_dto(row) for row in rows]
+    completed = [await _file_dto(row) for row in rows]
     completed_source_ids = {item.get("sourceId") for item in completed if item.get("sourceId")}
 
     from app.file_capture import list_active_downloads
@@ -333,7 +349,7 @@ async def get_session_file(session_id: str, file_id: str) -> dict[str, Any]:
     )
     if not row:
         raise HTTPException(404, "File not found")
-    return _file_dto(row)
+    return await _file_dto(row)
 
 
 async def rename_session_file(session_id: str, file_id: str, name: str) -> dict[str, Any]:
@@ -352,7 +368,7 @@ async def rename_session_file(session_id: str, file_id: str, name: str) -> dict[
     )
     if not row:
         raise HTTPException(404, "File not found")
-    return _file_dto(row)
+    return await _file_dto(row)
 
 
 async def delete_session_file(session_id: str, file_id: str) -> dict[str, Any]:
@@ -432,7 +448,7 @@ async def list_global_files(user: CurrentUser) -> list[dict[str, Any]]:
             user.tenant_id,
             user.id,
         )
-    return [_file_dto(row) for row in rows]
+    return [await _file_dto(row) for row in rows]
 
 
 async def get_global_file(file_id: str, user: CurrentUser) -> dict[str, Any]:
@@ -440,7 +456,7 @@ async def get_global_file(file_id: str, user: CurrentUser) -> dict[str, Any]:
     if not row:
         raise HTTPException(404, "File not found")
     _assert_global_file_access(row, user)
-    return _file_dto(row)
+    return await _file_dto(row)
 
 
 async def rename_global_file(file_id: str, user: CurrentUser, name: str) -> dict[str, Any]:
@@ -459,7 +475,7 @@ async def rename_global_file(file_id: str, user: CurrentUser, name: str) -> dict
     if not row:
         raise HTTPException(404, "File not found")
     _assert_global_file_access(row, user)
-    return _file_dto(row)
+    return await _file_dto(row)
 
 
 async def delete_global_file(file_id: str, user: CurrentUser) -> dict[str, Any]:
@@ -563,6 +579,14 @@ async def get_file_payload(file_id: str, user: CurrentUser) -> tuple[bytes, str]
         return None
     _assert_file_access(row, user)
 
+    store = await get_store()
+    return await store.get_by_key(row["object_key"])
+
+
+async def get_signed_file_payload(file_id: str) -> tuple[bytes, str] | None:
+    row = await get_pool().fetchrow("SELECT * FROM session_files WHERE id = $1", file_id)
+    if not row:
+        return None
     store = await get_store()
     return await store.get_by_key(row["object_key"])
 

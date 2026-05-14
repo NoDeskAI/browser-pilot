@@ -31,6 +31,7 @@ services:
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?copy .env.example to .env and set MINIO_ROOT_PASSWORD}
       MINIO_BUCKET: ${MINIO_BUCKET:?copy .env.example to .env and set MINIO_BUCKET}
       MINIO_ENDPOINT: http://minio:9000
+      MINIO_PUBLIC_ENDPOINT: ${MINIO_PUBLIC_ENDPOINT:-http://localhost:9000}
     depends_on:
       postgres:
         condition: service_healthy

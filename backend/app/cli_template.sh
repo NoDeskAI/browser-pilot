@@ -104,13 +104,7 @@ _api_get() {
 
 _download_url() {
   local url="$1" output="$2"
-  local token
-  token="$(_config_get api_token)"
-  if [[ -n "$token" ]]; then
-    curl -sfS -H "Authorization: Bearer $token" "$url" -o "$output"
-  else
-    curl -sfS "$url" -o "$output"
-  fi
+  curl -sfS "$url" -o "$output"
 }
 
 _abs_url() {
@@ -389,11 +383,7 @@ cmd_screenshot() {
     esac
   done
   local resp
-  if [[ -n "$output" ]]; then
-    resp=$(_api_get "/api/browser/screenshot?sessionId=$(_sid)&includeBase64=false")
-  else
-    resp=$(_api_get "/api/browser/screenshot?sessionId=$(_sid)")
-  fi
+  resp=$(_api_get "/api/browser/screenshot?sessionId=$(_sid)&includeBase64=false")
   if [[ -n "$output" ]]; then
     local file_url
     file_url=$(echo "$resp" | grep -o '"url" *: *"[^"]*"' | head -1 | sed 's/.*: *"//;s/"//')
@@ -401,7 +391,7 @@ cmd_screenshot() {
       echo "$resp" | _out
       exit 1
     fi
-    _download_url "$file_url" "$output"
+    _download_url "$(_abs_url "$file_url")" "$output"
     local sz; sz=$(wc -c < "$output" | tr -d ' ')
     if $JSON_OUT; then
       echo "$resp" | sed "s|}$|,\"localCopy\":\"$(_esc "$output")\",\"size\":$sz}|"
@@ -586,7 +576,7 @@ Browser (require active session):
   tabs                         List browser tabs
   switch-tab [opts]            Switch tab (--handle, --index, --close-current)
   page-info                    Current URL and title
-  screenshot [-o file]         Store screenshot; -o exports a local copy
+  screenshot [-o file]         Store screenshot and signed file URL; -o exports a local copy
   logs [--tail <n>]            View CDP event logs
 
 Files:
