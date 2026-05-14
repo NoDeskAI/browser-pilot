@@ -45,6 +45,9 @@ bpilot --session "<session-id>" observe --json
 
 # 7. Screenshot for visual confirmation.
 bpilot --session "<session-id>" screenshot --output result.png
+
+# 8. Inspect files captured by the browser session.
+bpilot --session "<session-id>" files list --json
 ```
 
 ## Commands Reference
@@ -79,6 +82,12 @@ Add `--json` / `-j` to state-reading commands for machine-readable output.
 | `bpilot --session "<session-id>" page-info --json` | Get current URL and title |
 | `bpilot --session "<session-id>" screenshot [--output FILE]` | Capture screenshot |
 | `bpilot --session "<session-id>" logs [--tail N]` | View container diagnostic logs |
+
+### Session Files
+
+| Command | Description |
+|---------|-------------|
+| `bpilot --session "<session-id>" files list --json` | List session files; each item includes `status` as `downloading` or `completed` |
 
 ### Configuration
 
@@ -123,3 +132,4 @@ bpilot --session "a1b2c3d4-..." screenshot --output qr-code.png
 - **Anti-bot stealth**: Each container runs Chrome with fingerprint spoofing, human-like click/type patterns, and timezone override (Asia/Shanghai).
 - **Per-call sessions**: Each CLI command creates and destroys a WebDriver session to minimize detection. This adds small overhead per command but prevents anti-bot triggers.
 - **Observe before click**: Always run `bpilot --session "<session-id>" observe --json` to get current element coordinates before clicking. Coordinates change when the page updates.
+- **Files**: For Agent workflows, inspect `bpilot --session "<session-id>" files list --json`. Use the file item `status` field to distinguish `downloading` from `completed`; completed items include the backend file `url`.

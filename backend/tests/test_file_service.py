@@ -1,9 +1,10 @@
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
 from app.auth.dependencies import CurrentUser
+from app import file_capture
 from app import file_service
 
 
@@ -39,6 +40,7 @@ class FakePool:
     def __init__(self):
         self.rows = {}
         self.session_tenants = {"session-1": "tenant-1", "session-2": "tenant-2"}
+        self._created_count = 0
 
     async def fetchrow(self, query, *args):
         if "SELECT tenant_id FROM sessions" in query:
@@ -88,6 +90,8 @@ class FakePool:
             source_mtime,
             sha256,
         ) = args
+        created_at = datetime(2026, 5, 12, tzinfo=timezone.utc) + timedelta(seconds=self._created_count)
+        self._created_count += 1
         self.rows[file_id] = {
             "id": file_id,
             "session_id": session_id,
@@ -102,15 +106,17 @@ class FakePool:
             "source_path": source_path,
             "source_mtime": source_mtime,
             "sha256": sha256,
-            "uploaded_at": datetime(2026, 5, 12, tzinfo=timezone.utc),
-            "created_at": datetime(2026, 5, 12, tzinfo=timezone.utc),
+            "uploaded_at": created_at,
+            "created_at": created_at,
         }
         return "INSERT 0 1"
 
     async def fetch(self, query, *args):
         if "FROM session_files" not in query:
             return []
-        return [row for row in self.rows.values() if row["session_id"] == args[0]]
+        rows = [row for row in self.rows.values() if row["session_id"] == args[0]]
+        rows.sort(key=lambda row: (row["created_at"], row["id"]), reverse="DESC" in query)
+        return rows
 
 
 def test_save_bytes_creates_file_record_and_backend_url(monkeypatch):
@@ -249,3 +255,77 @@ def test_list_session_files_returns_file_dtos(monkeypatch):
 
     files = asyncio.run(file_service.list_session_files("session-1"))
     assert files == [saved]
+    assert files[0]["status"] == "completed"
+
+
+def test_list_session_files_merges_active_downloads_and_completed_files(monkeypatch):
+    store = FakeStore()
+    pool = FakePool()
+    monkeypatch.setattr(file_service, "get_store", lambda: asyncio.sleep(0, store))
+    monkeypatch.setattr(file_service, "get_pool", lambda: pool)
+    monkeypatch.setattr(file_capture, "list_active_downloads", lambda session_id: [
+        {
+            "id": "download-guid-1",
+            "name": "report.pdf",
+            "status": "downloading",
+            "source": "browser_download",
+            "url": None,
+            "contentType": "application/pdf",
+            "size": None,
+            "receivedBytes": 100,
+            "totalBytes": 400,
+            "percent": 25.0,
+            "startedAt": "2026-05-12T00:00:00Z",
+            "updatedAt": "2026-05-12T00:00:01Z",
+        }
+    ])
+
+    completed = asyncio.run(
+        file_service.save_bytes(
+            session_id="session-1",
+            source="screenshot",
+            data=b"png-bytes",
+            filename="screenshot.png",
+        )
+    )
+
+    files = asyncio.run(file_service.list_session_files("session-1"))
+
+    assert [item["status"] for item in files] == ["downloading", "completed"]
+    assert files[0]["id"] == "download-guid-1"
+    assert files[0]["url"] is None
+    assert files[0]["percent"] == 25.0
+    assert files[1] == completed
+
+
+def test_list_session_files_skips_active_download_that_already_completed(monkeypatch, tmp_path):
+    store = FakeStore()
+    pool = FakePool()
+    downloaded = tmp_path / "report.txt"
+    downloaded.write_text("hello")
+    monkeypatch.setattr(file_service, "get_store", lambda: asyncio.sleep(0, store))
+    monkeypatch.setattr(file_service, "get_pool", lambda: pool)
+    monkeypatch.setattr(file_capture, "list_active_downloads", lambda session_id: [
+        {
+            "id": "download-guid-1",
+            "name": "report.txt",
+            "status": "downloading",
+            "source": "browser_download",
+            "url": None,
+        }
+    ])
+
+    completed = asyncio.run(
+        file_service.save_file(
+            session_id="session-1",
+            source="browser_download",
+            path=downloaded,
+            filename="report.txt",
+            source_id="download-guid-1",
+        )
+    )
+
+    files = asyncio.run(file_service.list_session_files("session-1"))
+
+    assert files == [completed]
+    assert files[0]["status"] == "completed"

@@ -170,6 +170,10 @@ class DownloadRecord:
     suggested_filename: str = ""
     url: str = ""
     file_path: str = ""
+    received_bytes: int | None = None
+    total_bytes: int | None = None
+    started_at: str = field(default_factory=_now)
+    updated_at: str = field(default_factory=_now)
     uploaded: bool = False
 
 
@@ -371,6 +375,7 @@ class FileCaptureAgent:
                 suggested_filename=str(params.get("suggestedFilename") or ""),
                 url=str(params.get("url") or ""),
             )
+            self.send_heartbeat("running")
         elif method == "Browser.downloadProgress":
             self._handle_progress(params)
 
@@ -382,6 +387,17 @@ class FileCaptureAgent:
         record = self.downloads.setdefault(guid, DownloadRecord(guid=guid))
         if params.get("filePath"):
             record.file_path = str(params["filePath"])
+        record.updated_at = _now()
+        if params.get("receivedBytes") is not None:
+            try:
+                record.received_bytes = max(0, int(params["receivedBytes"]))
+            except (TypeError, ValueError):
+                pass
+        if params.get("totalBytes") is not None:
+            try:
+                record.total_bytes = max(0, int(params["totalBytes"]))
+            except (TypeError, ValueError):
+                pass
         if state == "completed" and not record.uploaded:
             path = self._resolve_completed_path(record)
             if path is None:
@@ -390,8 +406,13 @@ class FileCaptureAgent:
             self._upload_download(path, guid)
             record.uploaded = True
             self.fallback.mark_processed(path)
+            self.downloads.pop(guid, None)
+            self.send_heartbeat("running")
         elif state == "canceled":
             self.downloads.pop(guid, None)
+            self.send_heartbeat("running")
+        else:
+            self.send_heartbeat("running")
 
     def _resolve_completed_path(self, record: DownloadRecord) -> Path | None:
         candidates: list[Path] = []
@@ -443,8 +464,30 @@ class FileCaptureAgent:
         if time.monotonic() - self.last_heartbeat_at >= HEARTBEAT_INTERVAL_SECONDS:
             self.send_heartbeat("running")
 
+    def active_downloads(self) -> list[dict[str, Any]]:
+        items: list[dict[str, Any]] = []
+        for record in self.downloads.values():
+            if record.uploaded:
+                continue
+            name = record.suggested_filename or (Path(record.file_path).name if record.file_path else "download")
+            percent = None
+            if record.received_bytes is not None and record.total_bytes:
+                percent = round(record.received_bytes / record.total_bytes * 100, 2)
+            items.append({
+                "id": record.guid,
+                "name": _safe_filename(name),
+                "sourceUrl": record.url,
+                "contentType": _content_type(Path(name)),
+                "receivedBytes": record.received_bytes,
+                "totalBytes": record.total_bytes,
+                "percent": percent,
+                "startedAt": record.started_at,
+                "updatedAt": record.updated_at,
+            })
+        return items
+
     def send_heartbeat(self, status: str, error: str = "") -> None:
-        payload = {"status": status, "error": error[:300]}
+        payload = {"status": status, "error": error[:300], "downloads": self.active_downloads()}
         try:
             self.heartbeat_func(self.heartbeat_url, self.token, payload)
             self.last_heartbeat_at = time.monotonic()

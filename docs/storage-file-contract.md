@@ -168,7 +168,8 @@ API 可以后续设计，但不应要求用户进入容器查找文件。
 - `includeBase64=false` 可以只返回文件记录。
 - CLI `-o` 先让后端写入 FileStore，再通过 `file.url` 下载一个本地副本。
 - 浏览器下载通过 session download watcher 上传到 FileStore，并写入 `session_files`。
-- `GET /api/sessions/{sessionId}/files` 返回当前 session 的文件记录。
+- `GET /api/sessions/{sessionId}/files` 返回当前 session 的统一文件列表，每个 item 通过 `status` 表示 `downloading` 或 `completed`。
+- `bpilot files list --json` 对外暴露同一个统一文件列表，不做 cursor、未读状态或动作级下载推理。
 - 文件下载 URL 统一通过后端 `/api/files/...` 代理，不暴露 S3 provider 内部地址。
 
 后续仍需单独设计：

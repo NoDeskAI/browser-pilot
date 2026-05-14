@@ -47,6 +47,7 @@ def _file_dto(row: Any) -> dict[str, Any]:
     return {
         "id": row["id"],
         "name": name,
+        "status": "completed",
         "source": row["source"],
         "sourceId": _row_value(row, "source_id"),
         "contentType": row["content_type"],
@@ -279,7 +280,17 @@ async def list_session_files(session_id: str) -> list[dict[str, Any]]:
         """,
         session_id,
     )
-    return [_file_dto(row) for row in rows]
+    completed = [_file_dto(row) for row in rows]
+    completed_source_ids = {item.get("sourceId") for item in completed if item.get("sourceId")}
+
+    from app.file_capture import list_active_downloads
+
+    downloading = [
+        item
+        for item in list_active_downloads(session_id)
+        if item.get("id") not in completed_source_ids
+    ]
+    return [*downloading, *completed]
 
 
 async def get_file_payload(file_id: str, user: CurrentUser) -> tuple[bytes, str] | None:

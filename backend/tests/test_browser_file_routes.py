@@ -114,7 +114,7 @@ def test_session_files_route_verifies_access_and_lists_files(monkeypatch):
     monkeypatch.setattr(sessions, "verify_session_access", fake_verify)
     monkeypatch.setattr(file_service, "list_session_files", fake_list)
 
-    result = asyncio.run(sessions.list_session_files_route("session-1", _user(session_scope="session-1")))
+    result = asyncio.run(sessions.list_session_files_route("session-1", user=_user(session_scope="session-1")))
 
     assert result == {"files": [{"id": "file-1"}]}
     assert calls == {"verify": ("session-1", "user-1"), "list": "session-1"}
@@ -166,6 +166,35 @@ def test_ingest_route_verifies_runtime_token_and_saves_file(monkeypatch):
     assert captured["save"]["source_mtime"] == 123.0
     assert captured["save"]["sha256"] == "b7a8a844a613be796bc1892dc480f9d92c50d32a5713a87758e5c5addc4ec814"
     assert captured["heartbeat"] == ("session-1", "running", None)
+
+
+def test_heartbeat_route_accepts_active_download_snapshot(monkeypatch):
+    captured = {}
+
+    async def fake_verify(session_id, raw_token):
+        captured["verify"] = (session_id, raw_token)
+        return {"tenant_id": "tenant-1"}
+
+    async def fake_heartbeat(session_id, status="running", error=None, downloads=None):
+        captured["heartbeat"] = (session_id, status, error, downloads)
+
+    monkeypatch.setattr(file_capture, "verify_file_capture_token", fake_verify)
+    monkeypatch.setattr(file_capture, "heartbeat_file_capture", fake_heartbeat)
+
+    result = asyncio.run(
+        files.heartbeat_file_capture_route(
+            "session-1",
+            body=files.FileCaptureHeartbeat(
+                status="running",
+                downloads=[{"id": "guid-1", "name": "report.pdf"}],
+            ),
+            authorization="Bearer bpr_token",
+        )
+    )
+
+    assert result == {"ok": True}
+    assert captured["verify"] == ("session-1", "bpr_token")
+    assert captured["heartbeat"] == ("session-1", "running", "", [{"id": "guid-1", "name": "report.pdf"}])
 
 
 def test_ingest_route_rejects_bad_runtime_token(monkeypatch):

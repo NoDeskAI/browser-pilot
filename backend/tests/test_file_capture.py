@@ -148,3 +148,58 @@ def test_file_capture_status_marks_running_heartbeat_stale_as_unavailable(monkey
 
     assert result["status"] == "unavailable"
     assert "file_capture_agent_unavailable" in result["warnings"]
+
+
+def test_heartbeat_file_capture_tracks_active_downloads(monkeypatch):
+    pool = FakePool()
+    file_capture._active_downloads.clear()
+    monkeypatch.setattr(file_capture, "get_pool", lambda: pool)
+
+    asyncio.run(
+        file_capture.heartbeat_file_capture(
+            "session-1",
+            downloads=[
+                {
+                    "id": "guid-1",
+                    "name": "report.pdf",
+                    "sourceUrl": "https://example.com/report.pdf",
+                    "contentType": "application/pdf",
+                    "receivedBytes": 100,
+                    "totalBytes": 400,
+                }
+            ],
+        )
+    )
+
+    downloads = file_capture.list_active_downloads("session-1")
+
+    assert downloads == [
+        {
+            "id": "guid-1",
+            "name": "report.pdf",
+            "status": "downloading",
+            "source": "browser_download",
+            "url": None,
+            "sourceUrl": "https://example.com/report.pdf",
+            "contentType": "application/pdf",
+            "size": None,
+            "receivedBytes": 100,
+            "totalBytes": 400,
+            "percent": 25.0,
+            "startedAt": downloads[0]["startedAt"],
+            "updatedAt": downloads[0]["updatedAt"],
+        }
+    ]
+
+    file_capture.clear_active_download("session-1", "guid-1")
+    assert file_capture.list_active_downloads("session-1") == []
+
+
+def test_active_downloads_return_empty_when_snapshot_is_stale():
+    file_capture._active_downloads.clear()
+    file_capture._active_downloads["session-1"] = {
+        "updated_at": datetime.now(timezone.utc) - timedelta(seconds=file_capture.HEARTBEAT_STALE_SECONDS + 1),
+        "items": [{"id": "guid-1", "status": "downloading"}],
+    }
+
+    assert file_capture.list_active_downloads("session-1") == []

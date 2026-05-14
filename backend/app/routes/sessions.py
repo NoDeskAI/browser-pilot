@@ -635,7 +635,10 @@ async def get_session(session_id: str, user: CurrentUser = Depends(get_session_a
 
 
 @router.get("/api/sessions/{session_id}/files")
-async def list_session_files_route(session_id: str, user: CurrentUser = Depends(get_session_aware_user)):
+async def list_session_files_route(
+    session_id: str,
+    user: CurrentUser = Depends(get_session_aware_user),
+):
     await verify_session_access(session_id, user)
     from app.file_service import list_session_files
 

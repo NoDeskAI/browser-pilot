@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import tempfile
 from pathlib import Path
+from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, UploadFile
 from fastapi.responses import Response
@@ -16,6 +17,7 @@ router = APIRouter()
 class FileCaptureHeartbeat(BaseModel):
     status: str = "running"
     error: str = ""
+    downloads: list[dict[str, Any]] | None = None
 
 
 def _runtime_token(authorization: str) -> str:
@@ -52,6 +54,7 @@ async def heartbeat_file_capture_route(
         session_id,
         status=(body.status if body else "running"),
         error=(body.error if body else ""),
+        downloads=(body.downloads if body else None),
     )
     return {"ok": True}
 
@@ -70,7 +73,7 @@ async def ingest_session_file(
     sha256: str = Form(""),
     authorization: str = Header("", alias="Authorization"),
 ):
-    from app.file_capture import heartbeat_file_capture, verify_file_capture_token
+    from app.file_capture import clear_active_download, heartbeat_file_capture, verify_file_capture_token
     from app.file_service import save_file
 
     await verify_file_capture_token(session_id, _runtime_token(authorization))
@@ -112,5 +115,6 @@ async def ingest_session_file(
             sha256=actual_sha,
         )
 
+    clear_active_download(session_id, sourceId.strip() or None)
     await heartbeat_file_capture(session_id, status="running")
     return {"ok": True, "file": saved}

@@ -59,9 +59,10 @@ bpilot observe                    # see page elements with coordinates
 bpilot click 640 380              # click at coordinates
 bpilot type "hello world"         # type into focused input
 bpilot screenshot --output page.png # stored in FileStore, then exported locally
+bpilot files list --json          # list session files with downloading/completed status
 ```
 
-Add `--json` for machine-readable output (for AI Agents).
+Add `--json` for machine-readable output (for AI Agents). Use `bpilot files list --json` to inspect session files; each item includes `status` so agents can distinguish `downloading` from `completed`.
 
 ## Architecture
 

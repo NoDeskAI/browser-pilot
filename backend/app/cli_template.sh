@@ -371,6 +371,10 @@ cmd_logs() {
   _api_get "/api/sessions/$(_sid)/logs?tail=$tail" | _out
 }
 
+cmd_files_list() {
+  _api_get "/api/sessions/$(_sid)/files" | _out
+}
+
 # ── Option parser ─────────────────────────────────────────────────────
 
 _parse_globals() {
@@ -426,6 +430,13 @@ case "${1:-}" in
   page-info)    cmd_page_info ;;
   screenshot)   shift; cmd_screenshot "$@" ;;
   logs)         shift; cmd_logs "$@" ;;
+  files)
+    shift
+    case "${1:-}" in
+      list|ls)   shift; cmd_files_list "$@" ;;
+      *)         echo "Usage: $CLI_NAME files list" ;;
+    esac
+    ;;
   version|--version|-v)
     echo "$CLI_NAME $VERSION (shell)"
     ;;
@@ -459,7 +470,7 @@ Session target:
 Browser (require active session):
   navigate <url>               Go to URL
   observe                      Get page elements with coordinates
-  click <x> <y>               Click at coordinates
+  click <x> <y>                Click at coordinates
   click-element <selector>     Click by CSS selector
   type <text>                  Type into focused input
   key <key>                    Press key (Enter, Tab, Escape, …)
@@ -469,6 +480,9 @@ Browser (require active session):
   page-info                    Current URL and title
   screenshot [-o file]         Store screenshot; -o exports a local copy
   logs [--tail <n>]            View CDP event logs
+
+Files:
+  files list                   List session files with status
 
 Global options:
   --json, -j                   Machine-readable JSON output

@@ -40,12 +40,20 @@ def test_agent_uploads_only_completed_download_progress(tmp_path):
 
     agent.handle_message({
         "method": "Browser.downloadWillBegin",
-        "params": {"guid": "guid-1", "suggestedFilename": "report.txt"},
+        "params": {"guid": "guid-1", "suggestedFilename": "report.txt", "url": "https://example.com/report.txt"},
     })
+    assert heartbeats[-1][2]["downloads"][0]["id"] == "guid-1"
+    assert heartbeats[-1][2]["downloads"][0]["name"] == "report.txt"
+    assert heartbeats[-1][2]["downloads"][0]["sourceUrl"] == "https://example.com/report.txt"
+
     agent.handle_message({
         "method": "Browser.downloadProgress",
-        "params": {"guid": "guid-1", "state": "inProgress", "receivedBytes": 1},
+        "params": {"guid": "guid-1", "state": "inProgress", "receivedBytes": 1, "totalBytes": 5},
     })
+    assert heartbeats[-1][2]["downloads"][0]["receivedBytes"] == 1
+    assert heartbeats[-1][2]["downloads"][0]["totalBytes"] == 5
+    assert heartbeats[-1][2]["downloads"][0]["percent"] == 20.0
+
     agent.handle_message({
         "method": "Browser.downloadProgress",
         "params": {"guid": "guid-2", "state": "canceled"},
@@ -69,6 +77,7 @@ def test_agent_uploads_only_completed_download_progress(tmp_path):
     assert filename == "report.txt"
     assert content_type == "text/plain"
     assert heartbeats[-1][2]["status"] == "running"
+    assert heartbeats[-1][2]["downloads"] == []
 
 
 def test_agent_directory_fallback_filters_crdownload_and_waits_for_stability(tmp_path):

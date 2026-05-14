@@ -56,9 +56,10 @@ bpilot observe                    # 查看页面元素及坐标
 bpilot click 640 380              # 按坐标点击
 bpilot type "hello world"         # 向当前焦点输入框输入文字
 bpilot screenshot --output page.png # 先存入 FileStore，再导出本地副本
+bpilot files list --json          # 列出当前 session 文件及 downloading/completed 状态
 ```
 
-加 `--json` 可输出机器可读格式（供 AI Agent 使用）。
+加 `--json` 可输出机器可读格式（供 AI Agent 使用）。Agent 通过 `bpilot files list --json` 查看当前 session 文件；每个 item 都有 `status`，用于区分 `downloading` 和 `completed`。
 
 ## 架构
 
