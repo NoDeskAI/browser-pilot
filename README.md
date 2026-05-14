@@ -172,7 +172,62 @@ Browser Pilot can route a session through a deployment-side egress profile from 
 - `OpenVPN`: run a managed OpenVPN container with an HTTP proxy wrapper. This mode requires the Docker host to allow `/dev/net/tun` and `NET_ADMIN`.
 
 Egress profiles are deployment-side. They do not automatically reuse a VPN already connected on a user's laptop unless that VPN configuration is also available to this deployment.
+| `BP_VISION_BACKEND`   | `yolo`                                                         | Vision observe backend. The default uses a YOLOv8 UI detector weight. Use `omniparser` to parse screenshots with Microsoft OmniParser. |
+| `BP_UI_DETECTOR_MODEL` | —                                                             | Optional absolute path to the YOLOv8 UI detector weight. If unset, Browser Pilot looks for `backend/models/noah-real-yolov8n-ui.pt`. |
+| `BP_OMNIPARSER_URL`   | —                                                              | Optional OmniParser server URL, for example `http://127.0.0.1:8001`. The backend calls `POST /parse/`.                             |
+| `BP_OMNIPARSER_REPO`  | —                                                              | Optional local OmniParser repo path when not using a server. Requires OmniParser requirements and weights installed separately.     |
 
+
+### Default YOLO vision backend
+
+`observe --mode vision` uses a YOLOv8 UI detector by default. Model weights are not vendored in this repository. On startup/use, Browser Pilot checks whether the weight exists locally and returns a download hint if it is missing.
+
+Recommended local install:
+
+```bash
+mkdir -p backend/models
+curl -L \
+  -o backend/models/noah-real-yolov8n-ui.pt \
+  https://huggingface.co/Noah03064515s22/yolov8-ui-detection-models/resolve/main/models/real_yolov8n.pt
+```
+
+Alternatively set:
+
+```bash
+export BP_UI_DETECTOR_MODEL=/absolute/path/to/noah-real-yolov8n-ui.pt
+```
+
+`observe --mode mix` first returns DOM results. Vision inference is only used as a fallback when DOM observe returns no elements.
+
+### OmniParser vision backend
+
+`observe --mode vision` and `observe --mode mix` can use Microsoft OmniParser V2:
+
+```bash
+export BP_VISION_BACKEND=omniparser
+
+# Option A: connect to a separate OmniParser server
+export BP_OMNIPARSER_URL=http://127.0.0.1:8001
+
+# Option B: load a local OmniParser clone and weights
+export BP_OMNIPARSER_REPO=/path/to/OmniParser
+```
+
+Example OmniParser server launch from an upstream clone:
+
+```bash
+cd /path/to/OmniParser/omnitool/omniparserserver
+python omniparserserver.py \
+  --host 127.0.0.1 \
+  --port 8001 \
+  --device cpu \
+  --som_model_path ../../weights/icon_detect/model.pt \
+  --caption_model_name florence2 \
+  --caption_model_path ../../weights/icon_caption_florence \
+  --BOX_TRESHOLD 0.05
+```
+
+OmniParser code and weights are not vendored in this repository. Check the OmniParser model licenses before redistribution; its icon detection weights inherit the YOLO license noted by the upstream project.
 
 ## Security
 

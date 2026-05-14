@@ -24,6 +24,14 @@ from app.tools.vision.ui_detector import attach_dom_hints, build_mixed_candidate
 
 logger = logging.getLogger("routes.browser")
 
+VIEWPORT_METRICS_SCRIPT = """
+return {
+  width: window.innerWidth || document.documentElement.clientWidth || 0,
+  height: window.innerHeight || document.documentElement.clientHeight || 0,
+  devicePixelRatio: window.devicePixelRatio || 1
+};
+"""
+
 
 async def _update_session_page(session_id: str, url: str | None, title: str | None) -> None:
     try:
@@ -87,6 +95,12 @@ class SwitchTabBody(BaseModel):
     closeCurrent: bool = False
 
 
+def mix_needs_vision_fallback(result: object) -> bool:
+    if not isinstance(result, dict):
+        return True
+    return not bool(result.get("elements"))
+
+
 # ---------------------------------------------------------------------------
 # Navigate
 # ---------------------------------------------------------------------------
@@ -142,6 +156,7 @@ async def api_observe(body: SessionBody, user: CurrentUser = Depends(get_session
         async with browser_session(body.sessionId) as (sid, base):
             result = {}
             screenshot_base64 = None
+            viewport_metrics = None
             vision_result = None
 
             if mode in {"dom", "mix"}:
@@ -151,8 +166,18 @@ async def api_observe(body: SessionBody, user: CurrentUser = Depends(get_session
                     base_url=base,
                 )
 
-            if mode in {"vision", "mix"} or body.includeScreenshot:
+            needs_vision = mode == "vision"
+            if mode == "mix":
+                needs_vision = mix_needs_vision_fallback(result)
+
+            if needs_vision or body.includeScreenshot:
                 screenshot_base64 = await wd_fetch(f"/session/{sid}/screenshot", base_url=base)
+                viewport_metrics = await wd_fetch(
+                    f"/session/{sid}/execute/sync", "POST",
+                    {"script": VIEWPORT_METRICS_SCRIPT, "args": []},
+                    timeout=5,
+                    base_url=base,
+                )
 
             if mode == "vision":
                 url = await wd_fetch(f"/session/{sid}/url", timeout=5, base_url=base)
@@ -163,6 +188,7 @@ async def api_observe(body: SessionBody, user: CurrentUser = Depends(get_session
                     max_candidates=body.maxCandidates,
                     threshold=body.threshold,
                     include_annotated=body.includeAnnotatedScreenshot,
+                    click_viewport=viewport_metrics,
                 )
                 result = {
                     "url": url,
@@ -171,6 +197,7 @@ async def api_observe(body: SessionBody, user: CurrentUser = Depends(get_session
                     "viewport": vision_result.viewport,
                     "visionCandidates": vision_result.candidates,
                     "visionGroups": vision_result.groups,
+                    "visionFrame": vision_result.vision_frame,
                     "trace": vision_result.trace,
                 }
                 if vision_result.annotated_screenshot:
@@ -178,30 +205,69 @@ async def api_observe(body: SessionBody, user: CurrentUser = Depends(get_session
 
             if mode == "mix":
                 elements = (result or {}).get("elements", []) if isinstance(result, dict) else []
-                vision_result = await asyncio.to_thread(
-                    ui_detector.detect_base64,
-                    screenshot_base64,
-                    max_candidates=body.maxCandidates,
-                    threshold=body.threshold,
-                    include_annotated=body.includeAnnotatedScreenshot,
-                )
-                vision_candidates = attach_dom_hints(vision_result.candidates, elements)
-                result = {
-                    **(result if isinstance(result, dict) else {}),
-                    "mode": mode,
-                    "viewport": vision_result.viewport,
-                    "visionCandidates": vision_candidates,
-                    "visionGroups": vision_result.groups,
-                    "mixedCandidates": build_mixed_candidates(
+                if needs_vision:
+                    vision_result = await asyncio.to_thread(
+                        ui_detector.detect_base64,
+                        screenshot_base64,
+                        max_candidates=body.maxCandidates,
+                        threshold=body.threshold,
+                        include_annotated=body.includeAnnotatedScreenshot,
+                        click_viewport=viewport_metrics,
+                    )
+                    vision_candidates = attach_dom_hints(vision_result.candidates, elements)
+                    mixed_candidates = build_mixed_candidates(
                         elements=elements,
                         vision_candidates=vision_candidates,
                         vision_groups=vision_result.groups,
                         max_candidates=body.maxCandidates,
-                    ),
-                    "trace": vision_result.trace,
-                }
-                if vision_result.annotated_screenshot:
-                    result["annotatedScreenshot"] = vision_result.annotated_screenshot
+                    )
+                    result = {
+                        **(result if isinstance(result, dict) else {}),
+                        "mode": mode,
+                        "viewport": vision_result.viewport,
+                        "visionCandidates": vision_candidates,
+                        "visionGroups": vision_result.groups,
+                        "visionFrame": vision_result.vision_frame,
+                        "mixedCandidates": mixed_candidates,
+                        "trace": {
+                            **vision_result.trace,
+                            "mixed_count": len(mixed_candidates),
+                            "mixed_vision_supplement_count": len(
+                                [
+                                    item
+                                    for item in mixed_candidates
+                                    if str(item.get("kind", "")).startswith("vision_supplement")
+                                ]
+                            ),
+                            "mix_strategy": "dom_then_vision_fallback",
+                            "vision_fallback_used": True,
+                            "dom_element_count": len(elements),
+                        },
+                    }
+                    if vision_result.annotated_screenshot:
+                        result["annotatedScreenshot"] = vision_result.annotated_screenshot
+                else:
+                    mixed_candidates = build_mixed_candidates(
+                        elements=elements,
+                        vision_candidates=[],
+                        vision_groups=[],
+                        max_candidates=body.maxCandidates,
+                    )
+                    result = {
+                        **(result if isinstance(result, dict) else {}),
+                        "mode": mode,
+                        "visionCandidates": [],
+                        "visionGroups": [],
+                        "mixedCandidates": mixed_candidates,
+                        "trace": {
+                            "mix_strategy": "dom_then_vision_fallback",
+                            "vision_fallback_used": False,
+                            "vision_skipped_reason": "dom_observe_succeeded",
+                            "dom_element_count": len(elements),
+                            "mixed_count": len(mixed_candidates),
+                            "mixed_vision_supplement_count": 0,
+                        },
+                    }
 
             if mode == "dom" and isinstance(result, dict):
                 result["mode"] = mode

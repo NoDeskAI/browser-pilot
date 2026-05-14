@@ -2,15 +2,23 @@ from __future__ import annotations
 
 import base64
 import io
+import json
+import math
 import os
+import sys
 import time
 from dataclasses import dataclass
-from importlib import import_module
 from pathlib import Path
 from typing import Any
+from urllib import request as urllib_request
+from urllib.error import URLError
 
-SOURCE = "uitag_yolo11s"
+SOURCE = "yolov8_ui"
+OMNIPARSER_SOURCE = "omniparser"
 DEFAULT_IMGSZ = int(os.getenv("BP_UI_DETECTOR_IMGSZ", "1280"))
+PREPROCESS_ENABLED = os.getenv("BP_VISION_PREPROCESS", "1").strip().lower() not in {"0", "false", "no", "off"}
+PREPROCESS_MAX_LONG_EDGE = int(os.getenv("BP_VISION_MAX_LONG_EDGE", "1280"))
+PREPROCESS_MAX_PIXELS = int(os.getenv("BP_VISION_MAX_PIXELS", str(1280 * 720)))
 ENABLE_TILING = os.getenv("BP_VISION_TILING", "0").strip().lower() in {"1", "true", "yes", "on"}
 ANNOTATION_MAX_CANDIDATES = int(os.getenv("BP_VISION_ANNOTATION_MAX", "160"))
 ANNOTATION_LABEL_LIMIT = int(os.getenv("BP_VISION_ANNOTATION_LABEL_LIMIT", "60"))
@@ -18,14 +26,28 @@ ANNOTATION_SHOW_GROUPS = os.getenv("BP_VISION_ANNOTATION_GROUPS", "0").strip().l
 
 LABEL_FAMILY_MAP = {
     "button": "button",
+    "field": "input",
+    "input_field": "input",
     "input_elements": "input",
+    "link": "nav_item",
     "navigation": "nav_item",
     "menu": "menu_item",
+    "heading": "text",
+    "label": "text",
+    "text": "text",
     "information_display": "text",
+    "image": "visual",
+    "iframe": "visual",
     "visual_elements": "visual",
     "others": "unknown",
     "unknown": "unknown",
 }
+
+DEFAULT_UI_MODEL_FILENAME = "noah-real-yolov8n-ui.pt"
+DEFAULT_UI_MODEL_URL = (
+    "https://huggingface.co/Noah03064515s22/yolov8-ui-detection-models/"
+    "resolve/main/models/real_yolov8n.pt"
+)
 
 
 @dataclass
@@ -35,10 +57,37 @@ class DetectionResult:
     viewport: dict[str, int]
     trace: dict[str, Any]
     annotated_screenshot: str | None = None
+    vision_frame: dict[str, Any] | None = None
+
+
+@dataclass
+class VisionFrame:
+    raw_base64: str
+    inference_base64: str
+    raw_image: Any
+    inference_image: Any
+    raw_size: dict[str, int]
+    inference_size: dict[str, int]
+    click_viewport: dict[str, int]
+    raw_to_inference_scale: dict[str, float]
+    inference_to_raw_scale: dict[str, float]
+    raw_to_click_scale: dict[str, float]
+
+    def to_public_dict(self) -> dict[str, Any]:
+        return {
+            "rawSize": self.raw_size,
+            "inferenceSize": self.inference_size,
+            "clickViewport": self.click_viewport,
+            "rawToInferenceScale": self.raw_to_inference_scale,
+            "inferenceToRawScale": self.inference_to_raw_scale,
+            "rawToClickScale": self.raw_to_click_scale,
+            "coordinateSpace": "click-viewport",
+            "preprocessEnabled": PREPROCESS_ENABLED,
+        }
 
 
 class UiDetector:
-    """Lazy YOLO11s UI detector for browser screenshots."""
+    """Lazy YOLO UI detector for browser screenshots."""
 
     def __init__(self, model_path: str | None = None) -> None:
         self._configured_model_path = model_path
@@ -51,6 +100,7 @@ class UiDetector:
         max_candidates: int = 40,
         threshold: float = 0.05,
         include_annotated: bool = False,
+        click_viewport: dict[str, Any] | None = None,
     ) -> DetectionResult:
         try:
             from PIL import Image
@@ -61,7 +111,9 @@ class UiDetector:
             ) from exc
 
         started = time.perf_counter()
-        image = Image.open(io.BytesIO(base64.b64decode(screenshot_base64))).convert("RGB")
+        raw_image = Image.open(io.BytesIO(base64.b64decode(screenshot_base64))).convert("RGB")
+        frame = build_vision_frame(raw_image, screenshot_base64, click_viewport=click_viewport)
+        image = frame.inference_image
         model = self._load_model()
         load_ms = (time.perf_counter() - started) * 1000
 
@@ -96,12 +148,15 @@ class UiDetector:
         annotated_screenshot = None
         if include_annotated:
             annotated_screenshot = render_annotated_screenshot_base64(image, candidates, groups)
+        candidates = map_items_to_click_space(candidates, frame)
+        groups = map_items_to_click_space(groups, frame)
 
         return DetectionResult(
             candidates=candidates,
             groups=groups,
-            viewport={"width": image.width, "height": image.height},
+            viewport=frame.click_viewport,
             trace={
+                "vision_backend": SOURCE,
                 "vision_load_ms": round(load_ms, 2),
                 "vision_predict_ms": round(predict_ms, 2),
                 "vision_semantics_ms": round(semantics_ms, 2),
@@ -116,6 +171,7 @@ class UiDetector:
                 **tiling_trace,
             },
             annotated_screenshot=annotated_screenshot,
+            vision_frame=frame.to_public_dict(),
         )
 
     def _load_model(self):
@@ -132,42 +188,516 @@ class UiDetector:
         return self._model
 
 
+class OmniParserDetector:
+    """Adapter for Microsoft OmniParser V2 screen parsing.
+
+    OmniParser can run as a separate FastAPI service or from a local cloned repo.
+    Keeping it behind this adapter lets Browser Pilot continue to ship without
+    vendoring OmniParser code or weights.
+    """
+
+    def __init__(self) -> None:
+        self._parser = None
+        self._repo_path: Path | None = None
+
+    def detect_base64(
+        self,
+        screenshot_base64: str,
+        *,
+        max_candidates: int = 40,
+        threshold: float = 0.05,
+        include_annotated: bool = False,
+        click_viewport: dict[str, Any] | None = None,
+    ) -> DetectionResult:
+        try:
+            from PIL import Image
+        except ImportError as exc:
+            raise RuntimeError(
+                "observe --mode vision/mix requires Pillow. "
+                "Install backend with: uv sync --extra vision"
+            ) from exc
+
+        started = time.perf_counter()
+        raw_image = Image.open(io.BytesIO(base64.b64decode(screenshot_base64))).convert("RGB")
+        frame = build_vision_frame(raw_image, screenshot_base64, click_viewport=click_viewport)
+        image = frame.inference_image
+
+        parse_started = time.perf_counter()
+        payload, mode = self._parse_with_omniparser(
+            screenshot_base64=frame.inference_base64,
+            threshold=threshold,
+        )
+        parse_ms = (time.perf_counter() - parse_started) * 1000
+
+        candidates = omniparser_items_to_candidates(
+            payload.get("parsed_content_list") or payload.get("parsedContentList") or [],
+            width=image.width,
+            height=image.height,
+            max_candidates=max_candidates,
+        )
+
+        grouping_started = time.perf_counter()
+        groups = build_vision_groups(candidates, width=image.width, height=image.height, max_groups=max_candidates)
+        grouping_ms = (time.perf_counter() - grouping_started) * 1000
+
+        ranking_started = time.perf_counter()
+        candidates = rank_vision_candidates(candidates, max_candidates=max_candidates)
+        groups = rank_vision_groups(groups, max_groups=max_candidates)
+        ranking_ms = (time.perf_counter() - ranking_started) * 1000
+
+        annotated_screenshot = None
+        if include_annotated:
+            annotated_screenshot = (
+                payload.get("som_image_base64")
+                or payload.get("annotatedScreenshot")
+                or render_annotated_screenshot_base64(image, candidates, groups)
+            )
+        candidates = map_items_to_click_space(candidates, frame)
+        groups = map_items_to_click_space(groups, frame)
+
+        return DetectionResult(
+            candidates=candidates,
+            groups=groups,
+            viewport=frame.click_viewport,
+            trace={
+                "vision_backend": OMNIPARSER_SOURCE,
+                "omniparser_mode": mode,
+                "omniparser_parse_ms": round(parse_ms, 2),
+                "omniparser_latency_s": payload.get("latency"),
+                "vision_grouping_ms": round(grouping_ms, 2),
+                "vision_ranking_ms": round(ranking_ms, 2),
+                "vision_total_ms": round((time.perf_counter() - started) * 1000, 2),
+                "vision_count": float(len(candidates)),
+                "vision_group_count": float(len(groups)),
+                "vision_unknown_ratio": round(unknown_ratio(candidates), 4),
+                "ocr_enabled": True,
+            },
+            annotated_screenshot=annotated_screenshot,
+            vision_frame=frame.to_public_dict(),
+        )
+
+    def _parse_with_omniparser(self, *, screenshot_base64: str, threshold: float) -> tuple[dict[str, Any], str]:
+        server_url = os.getenv("BP_OMNIPARSER_URL", "").strip()
+        if server_url:
+            return self._parse_with_server(server_url, screenshot_base64), "server"
+        return self._parse_with_local_repo(screenshot_base64=screenshot_base64, threshold=threshold), "local"
+
+    def _parse_with_server(self, server_url: str, screenshot_base64: str) -> dict[str, Any]:
+        endpoint = server_url.rstrip("/") + "/parse/"
+        body = json.dumps({"base64_image": screenshot_base64}).encode("utf-8")
+        req = urllib_request.Request(
+            endpoint,
+            data=body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib_request.urlopen(req, timeout=float(os.getenv("BP_OMNIPARSER_TIMEOUT", "120"))) as response:
+                data = response.read().decode("utf-8")
+        except URLError as exc:
+            raise RuntimeError(f"OmniParser server is not reachable at {endpoint}: {exc}") from exc
+        parsed = json.loads(data)
+        if not isinstance(parsed, dict):
+            raise RuntimeError("OmniParser server returned a non-object response")
+        return parsed
+
+    def _parse_with_local_repo(self, *, screenshot_base64: str, threshold: float) -> dict[str, Any]:
+        parser = self._load_local_parser(threshold=threshold)
+        parser.config["BOX_TRESHOLD"] = threshold
+        annotated, parsed_content_list = parser.parse(screenshot_base64)
+        return {
+            "som_image_base64": annotated,
+            "parsed_content_list": parsed_content_list,
+        }
+
+    def _load_local_parser(self, *, threshold: float):
+        if self._parser is not None:
+            return self._parser
+
+        repo = resolve_omniparser_repo()
+        if str(repo) not in sys.path:
+            sys.path.insert(0, str(repo))
+
+        try:
+            from util.omniparser import Omniparser  # type: ignore
+        except Exception as exc:
+            raise RuntimeError(
+                "Could not import OmniParser from BP_OMNIPARSER_REPO. "
+                "Clone https://github.com/microsoft/OmniParser and install its requirements, "
+                "or set BP_OMNIPARSER_URL to a running OmniParser server."
+            ) from exc
+
+        config = {
+            "som_model_path": str(resolve_omniparser_icon_detect_model(repo)),
+            "caption_model_name": os.getenv("BP_OMNIPARSER_CAPTION_MODEL", "florence2"),
+            "caption_model_path": str(resolve_omniparser_caption_model(repo)),
+            "device": os.getenv("BP_OMNIPARSER_DEVICE", "cpu"),
+            "BOX_TRESHOLD": threshold,
+        }
+        self._parser = Omniparser(config)
+        self._repo_path = repo
+        return self._parser
+
+
+class VisionDetector:
+    """Selects the configured screenshot parser backend."""
+
+    def __init__(self) -> None:
+        self._yolo = UiDetector()
+        self._omniparser = OmniParserDetector()
+
+    def detect_base64(
+        self,
+        screenshot_base64: str,
+        *,
+        max_candidates: int = 40,
+        threshold: float = 0.05,
+        include_annotated: bool = False,
+        click_viewport: dict[str, Any] | None = None,
+    ) -> DetectionResult:
+        backend = os.getenv("BP_VISION_BACKEND", "yolo").strip().lower()
+        if backend in {"uitag", "yolo", "yolo11s", "yolov8", "yolov8_ui"}:
+            result = self._yolo.detect_base64(
+                screenshot_base64,
+                max_candidates=max_candidates,
+                threshold=threshold,
+                include_annotated=include_annotated,
+                click_viewport=click_viewport,
+            )
+            return result
+        if backend in {"omniparser", "omni"}:
+            return self._omniparser.detect_base64(
+                screenshot_base64,
+                max_candidates=max_candidates,
+                threshold=threshold,
+                include_annotated=include_annotated,
+                click_viewport=click_viewport,
+            )
+        raise RuntimeError('BP_VISION_BACKEND must be one of: "yolo", "omniparser"')
+
+
 def resolve_model_path(configured_model_path: str | None = None) -> Path:
     env_model = os.getenv("BP_UI_DETECTOR_MODEL")
     if env_model:
         path = Path(env_model).expanduser()
         if path.exists():
             return path
-        raise RuntimeError(f"BP_UI_DETECTOR_MODEL does not exist: {path}")
+        raise RuntimeError(missing_default_model_message(f"BP_UI_DETECTOR_MODEL does not exist: {path}"))
 
     if configured_model_path:
         path = Path(configured_model_path).expanduser()
         if path.exists():
             return path
-        raise RuntimeError(f"UI detector model does not exist: {path}")
+        raise RuntimeError(missing_default_model_message(f"UI detector model does not exist: {path}"))
 
-    try:
-        uitag = import_module("uitag")
-        package_file = getattr(uitag, "__file__", None)
-        if package_file:
-            model_path = Path(package_file).resolve().parent / "models" / "yolo-ui.pt"
-            if model_path.exists():
-                return model_path
-    except Exception as exc:
-        raise RuntimeError(
-            "Could not find uitag packaged model yolo-ui.pt. "
-            "Install backend with the vision extra or set BP_UI_DETECTOR_MODEL."
-        ) from exc
+    for path in default_model_candidates():
+        if path.exists():
+            return path
 
-    raise RuntimeError(
-        "Could not find uitag packaged model yolo-ui.pt. "
-        "Set BP_UI_DETECTOR_MODEL to a local YOLO11s UI detector weight."
+    raise RuntimeError(missing_default_model_message())
+
+
+def default_model_candidates() -> list[Path]:
+    repo_root = Path(__file__).resolve().parents[4]
+    candidates = [
+        repo_root / "backend" / "models" / DEFAULT_UI_MODEL_FILENAME,
+        repo_root / "models" / DEFAULT_UI_MODEL_FILENAME,
+        Path.home() / ".cache" / "browser-pilot" / "models" / DEFAULT_UI_MODEL_FILENAME,
+        repo_root / "vision_benchmark" / "models" / DEFAULT_UI_MODEL_FILENAME,
+    ]
+    return candidates
+
+
+def missing_default_model_message(prefix: str | None = None) -> str:
+    locations = ", ".join(str(path) for path in default_model_candidates()[:3])
+    base = (
+        "YOLOv8 UI detector weight is not installed. Download it from "
+        f"{DEFAULT_UI_MODEL_URL} and save it as {DEFAULT_UI_MODEL_FILENAME} under one of: "
+        f"{locations}. You can also set BP_UI_DETECTOR_MODEL=/absolute/path/to/{DEFAULT_UI_MODEL_FILENAME}."
     )
+    return f"{prefix}. {base}" if prefix else base
+
+
+def resolve_omniparser_repo() -> Path:
+    configured = os.getenv("BP_OMNIPARSER_REPO", "").strip()
+    candidates = []
+    if configured:
+        candidates.append(Path(configured).expanduser())
+    candidates.extend(
+        [
+            Path.home() / "OmniParser",
+            Path.home() / "Downloads" / "OmniParser",
+            Path("/opt/OmniParser"),
+        ]
+    )
+    for path in candidates:
+        if (path / "util" / "omniparser.py").exists():
+            return path.resolve()
+    raise RuntimeError(
+        "BP_VISION_BACKEND=omniparser requires either BP_OMNIPARSER_URL or a local "
+        "OmniParser repo. Set BP_OMNIPARSER_REPO=/path/to/OmniParser after cloning "
+        "https://github.com/microsoft/OmniParser."
+    )
+
+
+def resolve_omniparser_icon_detect_model(repo: Path) -> Path:
+    configured = os.getenv("BP_OMNIPARSER_ICON_DETECT_MODEL", "").strip()
+    candidates = []
+    if configured:
+        candidates.append(Path(configured).expanduser())
+    candidates.append(repo / "weights" / "icon_detect" / "model.pt")
+    for path in candidates:
+        if path.exists():
+            return path.resolve()
+    raise RuntimeError(
+        "OmniParser icon detection weights not found. Download microsoft/OmniParser-v2.0 "
+        "icon_detect/* into OmniParser/weights/icon_detect, or set BP_OMNIPARSER_ICON_DETECT_MODEL."
+    )
+
+
+def resolve_omniparser_caption_model(repo: Path) -> Path:
+    configured = os.getenv("BP_OMNIPARSER_CAPTION_MODEL_PATH", "").strip()
+    candidates = []
+    if configured:
+        candidates.append(Path(configured).expanduser())
+    candidates.extend(
+        [
+            repo / "weights" / "icon_caption_florence",
+            repo / "weights" / "icon_caption",
+        ]
+    )
+    for path in candidates:
+        if path.exists():
+            return path.resolve()
+    raise RuntimeError(
+        "OmniParser caption weights not found. Download microsoft/OmniParser-v2.0 "
+        "icon_caption/* into OmniParser/weights/icon_caption_florence, or set BP_OMNIPARSER_CAPTION_MODEL_PATH."
+    )
+
+
+def build_vision_frame(raw_image: Any, raw_base64: str, *, click_viewport: dict[str, Any] | None = None) -> VisionFrame:
+    raw_width, raw_height = int(raw_image.width), int(raw_image.height)
+    inference_width, inference_height = target_inference_size(raw_width, raw_height)
+    if inference_width == raw_width and inference_height == raw_height:
+        inference_image = raw_image
+        inference_base64 = raw_base64
+    else:
+        inference_image = raw_image.resize((inference_width, inference_height), resample=get_lanczos_filter(raw_image))
+        inference_base64 = encode_png_base64(inference_image)
+
+    click_width = int((click_viewport or {}).get("width") or raw_width)
+    click_height = int((click_viewport or {}).get("height") or raw_height)
+    click_width = max(1, click_width)
+    click_height = max(1, click_height)
+
+    raw_to_inference_x = inference_width / max(raw_width, 1)
+    raw_to_inference_y = inference_height / max(raw_height, 1)
+    inference_to_raw_x = raw_width / max(inference_width, 1)
+    inference_to_raw_y = raw_height / max(inference_height, 1)
+    raw_to_click_x = click_width / max(raw_width, 1)
+    raw_to_click_y = click_height / max(raw_height, 1)
+
+    return VisionFrame(
+        raw_base64=raw_base64,
+        inference_base64=inference_base64,
+        raw_image=raw_image,
+        inference_image=inference_image,
+        raw_size={"width": raw_width, "height": raw_height},
+        inference_size={"width": inference_width, "height": inference_height},
+        click_viewport={"width": click_width, "height": click_height},
+        raw_to_inference_scale={"x": round(raw_to_inference_x, 6), "y": round(raw_to_inference_y, 6)},
+        inference_to_raw_scale={"x": round(inference_to_raw_x, 6), "y": round(inference_to_raw_y, 6)},
+        raw_to_click_scale={"x": round(raw_to_click_x, 6), "y": round(raw_to_click_y, 6)},
+    )
+
+
+def target_inference_size(width: int, height: int) -> tuple[int, int]:
+    if not PREPROCESS_ENABLED or width <= 0 or height <= 0:
+        return max(1, width), max(1, height)
+    scale = 1.0
+    if PREPROCESS_MAX_LONG_EDGE > 0:
+        scale = min(scale, PREPROCESS_MAX_LONG_EDGE / max(width, height))
+    if PREPROCESS_MAX_PIXELS > 0 and width * height > PREPROCESS_MAX_PIXELS:
+        scale = min(scale, math.sqrt(PREPROCESS_MAX_PIXELS / max(width * height, 1)))
+    if scale >= 0.999:
+        return width, height
+    return max(1, int(round(width * scale))), max(1, int(round(height * scale)))
+
+
+def get_lanczos_filter(image: Any) -> Any:
+    resampling = getattr(image, "Resampling", None)
+    if resampling is not None:
+        return resampling.LANCZOS
+    try:
+        from PIL import Image
+
+        return Image.Resampling.LANCZOS
+    except Exception:
+        return 1
+
+
+def encode_png_base64(image: Any) -> str:
+    output = io.BytesIO()
+    image.save(output, format="PNG")
+    return base64.b64encode(output.getvalue()).decode("ascii")
+
+
+def map_items_to_click_space(items: list[dict[str, Any]], frame: VisionFrame) -> list[dict[str, Any]]:
+    return [map_item_to_click_space(item, frame) for item in items]
+
+
+def map_item_to_click_space(item: dict[str, Any], frame: VisionFrame) -> dict[str, Any]:
+    mapped = dict(item)
+    bbox = mapped.get("bbox")
+    if not isinstance(bbox, dict):
+        return mapped
+    mapped["inferenceBbox"] = dict(bbox)
+    mapped["bbox"] = inference_bbox_to_click_bbox(bbox, frame)
+    mapped["center"] = bbox_center(mapped["bbox"])
+    mapped["coordinateSpace"] = "click-viewport"
+    return mapped
+
+
+def inference_bbox_to_click_bbox(bbox: dict[str, Any], frame: VisionFrame) -> dict[str, int]:
+    sx = float(frame.inference_to_raw_scale["x"]) * float(frame.raw_to_click_scale["x"])
+    sy = float(frame.inference_to_raw_scale["y"]) * float(frame.raw_to_click_scale["y"])
+    x = int(round(float(bbox.get("x", 0)) * sx))
+    y = int(round(float(bbox.get("y", 0)) * sy))
+    w = int(round(float(bbox.get("w", 0)) * sx))
+    h = int(round(float(bbox.get("h", 0)) * sy))
+    max_w = int(frame.click_viewport["width"])
+    max_h = int(frame.click_viewport["height"])
+    x = max(0, min(x, max_w))
+    y = max(0, min(y, max_h))
+    w = max(1, min(w, max_w - x if x < max_w else 1))
+    h = max(1, min(h, max_h - y if y < max_h else 1))
+    return {"x": x, "y": y, "w": w, "h": h}
 
 
 def normalize_family(label: str) -> str:
     key = label.strip().lower().replace(" ", "_")
     return LABEL_FAMILY_MAP.get(key, key or "unknown")
+
+
+def omniparser_items_to_candidates(
+    items: list[Any],
+    *,
+    width: int,
+    height: int,
+    max_candidates: int,
+) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    for index, item in enumerate(items, start=1):
+        if not isinstance(item, dict):
+            continue
+        bbox = omniparser_bbox_to_pixel_box(item.get("bbox"), width=width, height=height)
+        if bbox is None:
+            continue
+        source_type = str(item.get("type") or "unknown").lower()
+        content = str(item.get("content") or "").strip()
+        family = normalize_omniparser_family(item)
+        semantic_source = omniparser_semantic_source(item)
+        score = omniparser_score(item, family=family)
+        candidate: dict[str, Any] = {
+            "id": f"op-{index:03d}",
+            "bbox": bbox,
+            "center": bbox_center(bbox),
+            "score": score,
+            "label": content[:80] if content else family,
+            "family": family,
+            "rawLabel": source_type,
+            "modelFamily": family,
+            "semanticSource": semantic_source,
+            "semanticConfidence": "medium" if content else "weak",
+            "source": OMNIPARSER_SOURCE,
+            "interactivity": bool(item.get("interactivity")),
+        }
+        if content:
+            candidate["textHint"] = content[:180]
+        original_source = item.get("source")
+        if original_source:
+            candidate["rawSource"] = original_source
+        candidates.append(candidate)
+
+    candidates.sort(key=lambda candidate: float(candidate.get("score") or 0.0), reverse=True)
+    return candidates[:max_candidates]
+
+
+def omniparser_bbox_to_pixel_box(raw_bbox: Any, *, width: int, height: int) -> dict[str, int] | None:
+    if not isinstance(raw_bbox, (list, tuple)) or len(raw_bbox) != 4:
+        return None
+    values = [float(value) for value in raw_bbox]
+    if max(values) <= 1.5:
+        x1, y1, x2, y2 = (
+            values[0] * width,
+            values[1] * height,
+            values[2] * width,
+            values[3] * height,
+        )
+    else:
+        x1, y1, x2, y2 = values
+    x1i, y1i, x2i, y2i = clamp_xyxy([x1, y1, x2, y2], width, height)
+    if x2i <= x1i or y2i <= y1i:
+        return None
+    return {"x": x1i, "y": y1i, "w": x2i - x1i, "h": y2i - y1i}
+
+
+def normalize_omniparser_family(item: dict[str, Any]) -> str:
+    source_type = str(item.get("type") or "").lower()
+    content = str(item.get("content") or "").strip().lower()
+    source = str(item.get("source") or "").lower()
+    interactive = bool(item.get("interactivity"))
+
+    if source_type == "text":
+        if any(word in content for word in ("search", "搜索")):
+            return "input"
+        if any(word in content for word in ("login", "sign in", "subscribe", "create", "发布", "登录", "订阅", "创建")):
+            return "button"
+        return "text"
+
+    if source_type == "icon":
+        if "ocr" in source and any(word in content for word in ("search", "搜索")):
+            return "input"
+        if any(word in content for word in ("logo", "brand")):
+            return "logo"
+        if any(word in content for word in ("image", "photo", "video", "thumbnail", "picture", "poster")):
+            return "visual"
+        if any(word in content for word in ("menu", "more", "ellipsis", "hamburger")):
+            return "menu_item"
+        if any(word in content for word in ("home", "back", "next", "notification", "settings", "profile", "search", "upload", "share")):
+            return "icon"
+        return "button" if interactive else "icon"
+
+    return "unknown"
+
+
+def omniparser_semantic_source(item: dict[str, Any]) -> str:
+    source_type = str(item.get("type") or "").lower()
+    source = str(item.get("source") or "").lower()
+    content = str(item.get("content") or "").strip()
+    if source_type == "text" or "ocr" in source:
+        return "omniparser_ocr"
+    if content:
+        return "omniparser_caption"
+    return "omniparser_detector"
+
+
+def omniparser_score(item: dict[str, Any], *, family: str) -> float:
+    source_type = str(item.get("type") or "").lower()
+    content = str(item.get("content") or "").strip()
+    interactive = bool(item.get("interactivity"))
+    score = 0.72
+    if source_type == "icon":
+        score = 0.84 if interactive else 0.68
+    elif source_type == "text":
+        score = 0.74
+    if content:
+        score += 0.06
+    if family in {"button", "input", "icon", "logo", "visual"}:
+        score += 0.03
+    if family == "unknown":
+        score -= 0.15
+    return round(max(0.0, min(score, 1.0)), 4)
 
 
 def run_detection_pipeline(
@@ -299,22 +829,30 @@ def results_to_candidates(
 
 
 def refine_candidate_semantics(candidate: dict[str, Any], *, width: int, height: int) -> None:
-    """Attach conservative geometry hints to broad/unknown model labels.
+    """Attach geometry semantics to broad/unknown model labels.
 
-    Geometry is useful context, but it is not a trained semantic classifier. Keep
-    model labels stable and expose the guessed family as a hint so debugging
-    screenshots do not pretend a weak guess is a confident class.
+    Lightweight UI detectors can emit broad or low-context classes on real
+    websites. Keep the raw/model label for traceability, but promote high-signal
+    geometry into the public family. This makes vision useful as a DOM fallback
+    without pretending the model itself knew the semantic class.
     """
 
     family = str(candidate.get("family") or "unknown")
     if family not in {"unknown", "visual"}:
+        candidate.setdefault("semanticConfidence", "model")
         return
 
     refined = infer_family_from_geometry(candidate, width=width, height=height)
-    if refined and refined != family:
-        candidate["geometryHint"] = refined
     if family == "unknown":
         candidate["semanticSource"] = "model_unknown"
+    if refined and refined != "unknown" and refined != family:
+        candidate["geometryHint"] = refined
+        candidate["family"] = refined
+        candidate["label"] = refined
+        candidate["semanticSource"] = "geometry"
+        candidate["semanticConfidence"] = "weak"
+    else:
+        candidate.setdefault("semanticConfidence", "weak" if family == "unknown" else "model")
 
 
 def infer_family_from_geometry(candidate: dict[str, Any], *, width: int, height: int) -> str:
@@ -330,6 +868,8 @@ def infer_family_from_geometry(candidate: dict[str, Any], *, width: int, height:
     area_ratio = (w * h) / max(width * height, 1)
     top_band = y <= height * 0.16
     left_band = x <= width * 0.18
+    bottom_band = y + h >= height * 0.84
+    small = w <= 96 and h <= 96
 
     if left_band and top_band and 32 <= w <= 220 and 18 <= h <= 90:
         return "logo"
@@ -339,11 +879,13 @@ def infer_family_from_geometry(candidate: dict[str, Any], *, width: int, height:
         return "input"
     if 1.6 <= aspect <= 6.0 and 24 <= h <= 90 and 48 <= w <= 360:
         return "button"
+    if small and (top_band or left_band or bottom_band):
+        return "icon"
     if top_band and h <= 80 and w >= 60:
         return "nav_item"
     if left_band and h <= 76 and w <= width * 0.35:
         return "nav_item"
-    if area_ratio >= 0.025 and w >= 120 and h >= 90:
+    if area_ratio >= 0.018 and w >= 120 and h >= 90:
         return "visual"
     if h <= 52 and w >= 40:
         return "text"
@@ -352,8 +894,6 @@ def infer_family_from_geometry(candidate: dict[str, Any], *, width: int, height:
 
 def effective_family(candidate: dict[str, Any]) -> str:
     family = str(candidate.get("family") or "unknown")
-    if family == "unknown" and candidate.get("geometryHint"):
-        return str(candidate.get("geometryHint"))
     return family
 
 
@@ -412,6 +952,7 @@ def apply_ocr_hints(candidates: list[dict[str, Any]], ocr_items: list[dict[str, 
             candidate["textHint"] = text[:160]
             if str(candidate.get("semanticSource")) in {"model_unknown", "geometry"}:
                 candidate["semanticSource"] = "ocr"
+                candidate["semanticConfidence"] = "medium"
             family = str(candidate.get("family") or "")
             lowered = text.lower()
             if family in {"unknown", "text"} and any(word in lowered for word in ("search", "搜索", "login", "sign in", "订阅", "subscribe", "创建", "create")):
@@ -553,6 +1094,8 @@ def rank_vision_candidates(candidates: list[dict[str, Any]], *, max_candidates: 
         bonus = {
             "button": 0.08,
             "input": 0.08,
+            "link": 0.06,
+            "tab": 0.05,
             "icon": 0.05,
             "logo": 0.04,
             "nav_item": 0.04,
@@ -561,8 +1104,8 @@ def rank_vision_candidates(candidates: list[dict[str, Any]], *, max_candidates: 
             "text": 0.02,
             "unknown": -0.12,
         }.get(ranking_family, 0.0)
-        if family == "unknown" and item.get("geometryHint"):
-            bonus -= 0.06
+        if item.get("semanticSource") == "geometry":
+            bonus -= 0.02
         if item.get("textHint"):
             bonus += 0.05
         item["rankScore"] = round(max(0.0, min(float(item.get("score") or 0.0) + bonus, 1.0)), 4)
@@ -606,6 +1149,8 @@ def render_annotated_screenshot_base64(image: Any, candidates: list[dict[str, An
 FAMILY_COLORS = {
     "button": (255, 80, 80),
     "input": (80, 150, 255),
+    "link": (80, 190, 255),
+    "tab": (120, 170, 255),
     "nav_item": (255, 180, 60),
     "menu_item": (255, 210, 80),
     "text": (120, 220, 120),
@@ -753,8 +1298,57 @@ def attach_dom_hints(
         hint = best_dom_hint(candidate, elements)
         if hint is not None:
             item["domHint"] = hint
+            apply_dom_hint_semantics(item, hint)
         enriched.append(item)
     return enriched
+
+
+def apply_dom_hint_semantics(candidate: dict[str, Any], hint: dict[str, Any]) -> None:
+    """Use DOM only as a semantic hint for the visual box.
+
+    This is deliberately one-way: DOM text/role can clarify a visual candidate,
+    but the visual box still keeps its own bbox and source. Large media boxes
+    remain visual; small or unknown boxes can inherit the DOM control family.
+    """
+
+    dom_hint_family = dom_family(hint)
+    if dom_hint_family == "dom":
+        return
+
+    label = element_label(hint).strip()
+    if label and not candidate.get("textHint"):
+        candidate["textHint"] = label
+
+    family = str(candidate.get("family") or "unknown")
+    bbox = candidate.get("bbox") or {}
+    w = int(bbox.get("w", 0))
+    h = int(bbox.get("h", 0))
+    area = w * h
+    aspect = w / max(h, 1)
+    action_like = h <= 96 and (w <= 360 or 1.4 <= aspect <= 8.0)
+
+    if dom_hint_family == "image":
+        if family in {"unknown", "text"}:
+            candidate["family"] = "visual"
+            candidate["label"] = "visual"
+            candidate["semanticSource"] = "dom_hint"
+            candidate["semanticConfidence"] = "medium"
+        return
+
+    if family == "unknown" or (family in {"text", "icon"} and action_like):
+        promoted = "input" if dom_hint_family == "search_box" else dom_hint_family
+        candidate["family"] = promoted
+        candidate["label"] = promoted
+        candidate["semanticSource"] = "dom_hint"
+        candidate["semanticConfidence"] = "medium"
+        return
+
+    if family == "visual" and action_like and area <= 360 * 96 and dom_hint_family in {"button", "input", "search_box", "link", "tab", "menu_item"}:
+        promoted = "input" if dom_hint_family == "search_box" else dom_hint_family
+        candidate["family"] = promoted
+        candidate["label"] = promoted
+        candidate["semanticSource"] = "dom_hint"
+        candidate["semanticConfidence"] = "medium"
 
 
 def build_mixed_candidates(
@@ -768,7 +1362,7 @@ def build_mixed_candidates(
     group_entries = [
         make_vision_group_mixed_candidate(group)
         for group in (vision_groups or [])
-        if is_usable_vision_candidate(group)
+        if is_usable_vision_candidate(group) and is_vision_dom_supplement(group, elements, is_group=True)
     ]
     group_entries.sort(key=lambda item: item.get("mixScore", 0.0), reverse=True)
 
@@ -782,28 +1376,27 @@ def build_mixed_candidates(
     vision_entries = [
         make_vision_mixed_candidate(candidate)
         for candidate in vision_candidates
-        if is_usable_vision_candidate(candidate)
+        if is_usable_vision_candidate(candidate) and is_vision_dom_supplement(candidate, elements)
     ]
     vision_entries.sort(key=lambda item: item.get("mixScore", 0.0), reverse=True)
 
-    if group_entries:
-        group_slots = min(len(group_entries), max(1, round(max_candidates * 0.3)))
-    else:
-        group_slots = 0
+    supplement_entries = group_entries + vision_entries
+    supplement_entries = dedupe_mixed_entries(supplement_entries)
+    supplement_entries.sort(key=lambda item: item.get("mixScore", 0.0), reverse=True)
 
     if not dom_entries:
-        return (group_entries + vision_entries)[:max_candidates]
-    if not vision_entries:
-        return (group_entries + dom_entries)[:max_candidates]
+        return supplement_entries[:max_candidates]
+    if not supplement_entries:
+        return dom_entries[:max_candidates]
 
-    vision_slots = min(len(vision_entries), max(1, round(max_candidates * 0.35)))
-    dom_slots = max(0, max_candidates - vision_slots - group_slots)
+    supplement_slots = min(len(supplement_entries), max(1, round(max_candidates * 0.35)))
+    dom_slots = max(0, max_candidates - supplement_slots)
 
-    selected = group_entries[:group_slots] + dom_entries[:dom_slots] + vision_entries[:vision_slots]
+    selected = dom_entries[:dom_slots] + supplement_entries[:supplement_slots]
     selected_ids = {item["id"] for item in selected}
     remaining = [
         item
-        for item in group_entries[group_slots:] + dom_entries[dom_slots:] + vision_entries[vision_slots:]
+        for item in dom_entries[dom_slots:] + supplement_entries[supplement_slots:]
         if item["id"] not in selected_ids
     ]
     remaining.sort(key=lambda item: item.get("mixScore", 0.0), reverse=True)
@@ -837,27 +1430,33 @@ def make_vision_mixed_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
     item = dict(candidate)
     family = str(item.get("family") or item.get("label") or "unknown")
     raw_score = float(item.get("score") or 0.0)
-    source_bonus = 0.12 if "domHint" not in item else 0.04
+    source_bonus = 0.14 if "domHint" not in item else 0.03
     family_bonus = {
         "button": 0.08,
         "input": 0.08,
+        "link": 0.06,
+        "tab": 0.05,
         "nav_item": 0.05,
         "menu_item": 0.05,
-        "visual": 0.04,
+        "visual": 0.07,
+        "logo": 0.06,
+        "icon": 0.05,
         "text": 0.02,
-        "unknown": -0.08,
+        "unknown": -0.12,
     }.get(family, 0.0)
     item["mixScore"] = round(max(0.0, min(raw_score + source_bonus + family_bonus, 1.0)), 4)
-    item["kind"] = "vision"
+    item["kind"] = "vision_supplement"
+    item.setdefault("supplementReason", "dom_blind_spot" if "domHint" not in item else "visual_context")
     return item
 
 
 def make_vision_group_mixed_candidate(group: dict[str, Any]) -> dict[str, Any]:
     item = dict(group)
     item["source"] = "vision_group"
-    item["kind"] = "vision_group"
+    item["kind"] = "vision_supplement_group"
     item["score"] = round(float(item.get("score") or item.get("mixScore") or 0.0), 4)
     item["mixScore"] = round(min(float(item.get("mixScore") or item["score"]) + 0.08, 1.0), 4)
+    item.setdefault("supplementReason", "visual_group")
     return item
 
 
@@ -879,6 +1478,79 @@ def is_usable_vision_candidate(candidate: dict[str, Any]) -> bool:
     if not isinstance(bbox, dict):
         return False
     return int(bbox.get("w", 0)) > 0 and int(bbox.get("h", 0)) > 0
+
+
+def is_vision_dom_supplement(candidate: dict[str, Any], elements: list[dict[str, Any]], *, is_group: bool = False) -> bool:
+    """Return true when a visual candidate adds information beyond DOM.
+
+    In mix mode vision is a fallback layer, so a visual box that merely repeats
+    a known DOM button/link should not spend candidate budget. Media boxes,
+    card-like groups, icons/logos, and candidates with no meaningful DOM hit are
+    kept because those are the places DOM observe tends to be thin.
+    """
+
+    if not is_usable_vision_candidate(candidate):
+        return False
+    family = str(candidate.get("family") or candidate.get("label") or "unknown")
+    bbox = candidate.get("bbox") or {}
+    area = int(bbox.get("w", 0)) * int(bbox.get("h", 0))
+
+    if is_group:
+        if family in {"video_card", "media_item", "card", "list_item", "toolbar", "nav_cluster"}:
+            return not has_single_strong_dom_equivalent(candidate, elements)
+        return False
+
+    if family in {"visual", "logo"}:
+        return True
+    if family == "icon":
+        return not has_actionable_dom_hit(candidate, elements)
+    if family == "unknown":
+        return not has_actionable_dom_hit(candidate, elements) and area >= 900
+    if family in {"button", "input", "link", "tab", "menu_item", "nav_item", "text"}:
+        return not has_actionable_dom_hit(candidate, elements)
+    return not has_actionable_dom_hit(candidate, elements)
+
+
+def has_actionable_dom_hit(candidate: dict[str, Any], elements: list[dict[str, Any]]) -> bool:
+    bbox = candidate.get("bbox") or {}
+    for element in elements:
+        if not is_usable_dom_element(element):
+            continue
+        family = dom_family(element)
+        if family == "dom":
+            continue
+        if point_inside_bbox(int(element.get("x", -1)), int(element.get("y", -1)), bbox):
+            return True
+        element_bbox = element.get("bbox")
+        if isinstance(element_bbox, dict) and bbox_iou(bbox, element_bbox) >= 0.45:
+            return True
+    return False
+
+
+def has_single_strong_dom_equivalent(candidate: dict[str, Any], elements: list[dict[str, Any]]) -> bool:
+    bbox = candidate.get("bbox") or {}
+    for element in elements:
+        if not is_usable_dom_element(element):
+            continue
+        family = dom_family(element)
+        if family == "dom":
+            continue
+        element_bbox = element.get("bbox")
+        if not isinstance(element_bbox, dict):
+            continue
+        if bbox_iou(bbox, element_bbox) >= 0.65:
+            return True
+    return False
+
+
+def dedupe_mixed_entries(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    kept: list[dict[str, Any]] = []
+    for entry in sorted(entries, key=lambda item: item.get("mixScore", item.get("score", 0.0)), reverse=True):
+        bbox = entry.get("bbox") or {}
+        if any(bbox_iou(bbox, other.get("bbox") or {}) >= 0.72 for other in kept):
+            continue
+        kept.append(entry)
+    return kept
 
 
 def dom_mix_score(element: dict[str, Any], family: str) -> float:
@@ -975,4 +1647,4 @@ def element_label(element: dict[str, Any]) -> str:
     return str(element.get("tag") or "element")
 
 
-ui_detector = UiDetector()
+ui_detector = VisionDetector()

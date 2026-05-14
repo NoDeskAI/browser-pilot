@@ -116,6 +116,17 @@ const annotatedScreenshot = computed(() => {
   return img ? `data:image/png;base64,${img}` : ''
 })
 const observeTrace = computed(() => observeResult.value?.trace || {})
+const visionFrame = computed(() => observeResult.value?.visionFrame || null)
+const visionFrameStats = computed(() => {
+  const frame = visionFrame.value
+  if (!frame) return []
+  return [
+    { label: t('vnc.visionRawSize'), value: fmtSize(frame.rawSize) },
+    { label: t('vnc.visionInferenceSize'), value: fmtSize(frame.inferenceSize) },
+    { label: t('vnc.visionClickViewport'), value: fmtSize(frame.clickViewport) },
+    { label: t('vnc.visionCoordinateSpace'), value: frame.coordinateSpace || 'click-viewport' },
+  ].filter(item => item.value)
+})
 const unknownRatio = computed(() => {
   const ratio = observeTrace.value?.vision_unknown_ratio
   if (typeof ratio === 'number') return `${Math.round(ratio * 100)}%`
@@ -153,6 +164,13 @@ function fmtBytes(b: number): string {
   if (b < 1024) return b + ' B'
   if (b < 1048576) return (b / 1024).toFixed(1) + ' KB'
   return (b / 1048576).toFixed(1) + ' MB'
+}
+
+function fmtSize(size: any): string {
+  const width = Number(size?.width || 0)
+  const height = Number(size?.height || 0)
+  if (!width || !height) return ''
+  return `${width}×${height}`
 }
 
 function clearContainer() {
@@ -1203,6 +1221,25 @@ watch(inputBarOpen, (open) => {
           </div>
 
           <div v-else-if="observeResult" class="space-y-4">
+            <section v-if="visionFrameStats.length">
+              <div class="mb-2 flex items-center justify-between">
+                <h4 class="font-medium">{{ t('vnc.visionFrame') }}</h4>
+                <Badge variant="outline" class="text-[10px]">
+                  {{ visionFrame?.preprocessEnabled ? t('vnc.visionPreprocessOn') : t('vnc.visionPreprocessOff') }}
+                </Badge>
+              </div>
+              <div class="grid grid-cols-2 gap-2">
+                <div
+                  v-for="item in visionFrameStats"
+                  :key="item.label"
+                  class="rounded-md border border-border bg-muted/20 px-2 py-1.5"
+                >
+                  <div class="text-[10px] uppercase text-muted-foreground">{{ item.label }}</div>
+                  <div class="mt-0.5 truncate font-mono text-[11px] text-foreground">{{ item.value }}</div>
+                </div>
+              </div>
+            </section>
+
             <section v-if="annotatedScreenshot">
               <div class="mb-2 flex items-center justify-between">
                 <h4 class="font-medium">{{ t('vnc.annotatedScreenshot') }}</h4>
