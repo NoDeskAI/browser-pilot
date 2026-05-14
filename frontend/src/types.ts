@@ -65,3 +65,17 @@ export interface DeleteSessionFileOptions {
   fileDeleteMode: 'none' | 'selected' | 'all'
   deleteFileIds?: string[]
 }
+
+export interface DeleteSessionFileHandlingResult {
+  mode?: 'none' | 'selected' | 'all'
+  completedFileCount?: number
+  deletedFileIds?: string[]
+  archivedFileIds?: string[]
+  objectDeleteFailedFileIds?: string[]
+  warning?: 'file_object_delete_failed' | string | null
+}
+
+export interface DeleteSessionResult {
+  ok: boolean
+  files?: DeleteSessionFileHandlingResult
+}

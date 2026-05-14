@@ -64,7 +64,8 @@ Add `--json` / `-j` to state-reading commands for machine-readable output.
 | `bpilot session create --name NAME --json` | Create new session, returns ID |
 | `bpilot --session "<session-id>" session start` | Start container for the target session |
 | `bpilot --session "<session-id>" session stop` | Stop container for the target session |
-| `bpilot --session "<session-id>" session delete` | Delete session and container |
+| `bpilot --session "<session-id>" session delete` | Delete session and container; completed files are kept in Files |
+| `bpilot --session "<session-id>" session delete --delete-files` | Delete session, container, and all completed files for that session |
 
 ### Browser Primitives
 

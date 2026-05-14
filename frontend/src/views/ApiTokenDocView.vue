@@ -33,12 +33,14 @@ Token 以 \`bp_\` 开头，例如 \`bp_a1b2c3d4e5f6...\`
 - 在 **账号设置** 页面创建
 - 拥有当前用户的完整 API 权限
 - 适合个人使用的自动化工具、CLI 脚本
+- 可通过 \`GET /api/files\`、\`PATCH /api/files/{fileId}\`、\`DELETE /api/files/{fileId}\` 管理全局文件
 
 ### 会话级 Token
 
 - 在 **会话详情** 页面点击钥匙图标创建
 - 仅能操作绑定的那一个会话
 - 适合分发给外部服务（如 AutoTesting），实现最小权限控制
+- 不能访问全局 Files API，也不能读取已归档文件 URL
 
 ## 常用 API 示例
 
@@ -93,6 +95,24 @@ curl -X DELETE "http://localhost:9222/api/sessions/$SESSION_ID/files/$FILE_ID" \
   -H "Authorization: Bearer $TOKEN"
 \`\`\`
 
+### 全局文件管理（用户级 Token）
+
+\`\`\`bash
+# 列出已完成文件，包括来自已删除 Session 的归档文件。
+curl "http://localhost:9222/api/files" \\
+  -H "Authorization: Bearer $TOKEN"
+
+# 重命名全局文件。
+curl -X PATCH "http://localhost:9222/api/files/$FILE_ID" \\
+  -H "Authorization: Bearer $TOKEN" \\
+  -H "Content-Type: application/json" \\
+  -d '{"name": "final-report.csv"}'
+
+# 删除全局文件。
+curl -X DELETE "http://localhost:9222/api/files/$FILE_ID" \\
+  -H "Authorization: Bearer $TOKEN"
+\`\`\`
+
 ### 点击元素
 
 \`\`\`bash
@@ -142,9 +162,11 @@ curl -X POST http://localhost:9222/api/browser/type \\
 | | \`GET /api/sessions/{id}/files/{fileId}\` | 查看单个文件元数据 |
 | | \`PATCH /api/sessions/{id}/files/{fileId}\` | 重命名 Session 文件 |
 | | \`DELETE /api/sessions/{id}/files/{fileId}\` | 删除 Session 文件，返回对象删除和记录删除状态 |
-| | \`GET /api/files/{fileId}.{ext}\` | 读取已完成文件内容 |
+| | \`GET /api/files/{fileId}.{ext}\` | 读取绑定活跃 Session 下的已完成文件内容 |
 
-其余接口（会话列表、创建/删除会话、用户管理等）需要使用 **用户级 Token**。
+会话级 Token 不能调用全局 Files API（\`GET /api/files\`、\`PATCH /api/files/{fileId}\`、\`DELETE /api/files/{fileId}\`），也不能读取已归档文件 URL。
+
+其余接口（会话列表、创建/删除会话、全局文件管理、用户管理等）需要使用 **用户级 Token**。
 
 ## 创建 Token
 
@@ -181,12 +203,14 @@ Tokens are prefixed with \`bp_\`, e.g. \`bp_a1b2c3d4e5f6...\`
 - Created in **Account Settings**
 - Has full API access for the current user
 - Ideal for personal automation tools and CLI scripts
+- Can manage global files through \`GET /api/files\`, \`PATCH /api/files/{fileId}\`, and \`DELETE /api/files/{fileId}\`
 
 ### Session-scoped Token
 
 - Created via the key icon in the **session detail** page
 - Can only operate on the bound session
 - Ideal for distributing to external services (e.g. AutoTesting) with least-privilege access
+- Cannot access the global Files API or archived file URLs
 
 ## Common API Examples
 
@@ -241,6 +265,24 @@ curl -X DELETE "http://localhost:9222/api/sessions/$SESSION_ID/files/$FILE_ID" \
   -H "Authorization: Bearer $TOKEN"
 \`\`\`
 
+### Global File Management (User-level Token)
+
+\`\`\`bash
+# List completed files, including archived files from deleted sessions.
+curl "http://localhost:9222/api/files" \\
+  -H "Authorization: Bearer $TOKEN"
+
+# Rename a global file.
+curl -X PATCH "http://localhost:9222/api/files/$FILE_ID" \\
+  -H "Authorization: Bearer $TOKEN" \\
+  -H "Content-Type: application/json" \\
+  -d '{"name": "final-report.csv"}'
+
+# Delete a global file.
+curl -X DELETE "http://localhost:9222/api/files/$FILE_ID" \\
+  -H "Authorization: Bearer $TOKEN"
+\`\`\`
+
 ### Click at Coordinates
 
 \`\`\`bash
@@ -290,9 +332,11 @@ Session-scoped tokens can only call the following endpoints, and the \`sessionId
 | | \`GET /api/sessions/{id}/files/{fileId}\` | Get one file DTO |
 | | \`PATCH /api/sessions/{id}/files/{fileId}\` | Rename a session file |
 | | \`DELETE /api/sessions/{id}/files/{fileId}\` | Delete a session file and return object/record delete status |
-| | \`GET /api/files/{fileId}.{ext}\` | Read completed file content |
+| | \`GET /api/files/{fileId}.{ext}\` | Read completed file content from the bound active session |
 
-All other endpoints (session list, create/delete sessions, user management, etc.) require a **user-level token**.
+Session-scoped tokens cannot call the global Files API (\`GET /api/files\`, \`PATCH /api/files/{fileId}\`, \`DELETE /api/files/{fileId}\`) or read archived file URLs.
+
+All other endpoints (session list, create/delete sessions, global file management, user management, etc.) require a **user-level token**.
 
 ## Creating Tokens
 

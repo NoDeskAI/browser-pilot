@@ -119,8 +119,12 @@ async function onDeleteSession(options: DeleteSessionFileOptions) {
   if (!activeSession.value || deleting.value) return
   deleting.value = true
   try {
-    await deleteSession(activeSession.value.id, options)
-    notify.success(t('app.sessionDeleted'))
+    const result = await deleteSession(activeSession.value.id, options)
+    if (result.files?.warning === 'file_object_delete_failed') {
+      notify.warning(t('sessionFiles.deleteObjectWarning'))
+    } else {
+      notify.success(t('app.sessionDeleted'))
+    }
     deleteDialogOpen.value = false
     router.replace('/')
   } catch {

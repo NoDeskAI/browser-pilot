@@ -1,5 +1,5 @@
 import { reactive, readonly } from 'vue'
-import type { Session, DevicePreset, DeleteSessionFileOptions } from '../types'
+import type { Session, DevicePreset, DeleteSessionFileOptions, DeleteSessionResult } from '../types'
 import i18n from '../i18n'
 import { toast } from 'vue-sonner'
 import { api } from '../lib/api'
@@ -504,19 +504,23 @@ async function overrideNetworkProfile(id: string, network: Record<string, any>):
   }
 }
 
-async function deleteSession(id: string, options?: DeleteSessionFileOptions): Promise<void> {
+async function deleteSession(id: string, options?: DeleteSessionFileOptions): Promise<DeleteSessionResult> {
   const request: RequestInit = { method: 'DELETE' }
   if (options) {
     request.headers = { 'Content-Type': 'application/json' }
     request.body = JSON.stringify(options)
   }
-  await api(`/api/sessions/${id}`, request)
+  const res = await api(`/api/sessions/${id}`, request)
+  if (!res.ok) throw new Error(await res.text())
+  const data = await res.json().catch(() => ({ ok: true })) as DeleteSessionResult
+  if (data.ok === false) throw new Error('Session delete failed')
   startingSessionIds.delete(id)
   state.sessions = state.sessions.filter(s => s.id !== id)
   if (state.activeId === id) {
     state.activePorts = null
     state.activeId = null
   }
+  return data
 }
 
 async function renameSession(id: string, name: string): Promise<void> {
