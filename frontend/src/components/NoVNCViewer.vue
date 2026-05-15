@@ -10,8 +10,10 @@ import {
   Keyboard, Maximize, Minimize, Eye, MousePointer,
   Globe, Network, Loader2, Fingerprint,
   CornerDownLeft, ClipboardPaste, Check, RefreshCw, Save, Pencil,
+  ScanSearch, X,
 } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
 import { Slider } from '@/components/ui/slider'
 import {
@@ -84,6 +86,16 @@ const fpNetworkJson = ref('')
 const fpNetworkError = ref('')
 const localhostBridgeNotice = ref('')
 const DIRECT_EGRESS_VALUE = '__direct__'
+type ObserveMode = 'dom' | 'vision' | 'mix'
+const observeMode = ref<ObserveMode>('dom')
+const observeMaxCandidates = ref(180)
+const observeThreshold = ref(0.01)
+const observePanelOpen = ref(false)
+const observeLoading = ref(false)
+const observeError = ref('')
+const observeResult = ref<Record<string, any> | null>(null)
+
+const observeModes: ObserveMode[] = ['dom', 'vision', 'mix']
 
 const currentSession = computed(() => sessState.sessions.find(s => s.id === props.sessionId))
 const currentPreset = computed(() => currentSession.value?.devicePreset || 'desktop-1920x1080')
@@ -94,6 +106,51 @@ const currentNetworkError = computed(() => currentSession.value?.networkEgressHe
 const fpProfile = computed(() => currentSession.value?.fingerprintProfile || null)
 const desktopPresets = computed(() => sessState.devicePresets.filter(p => p.category === 'desktop'))
 const mobilePresets = computed(() => sessState.devicePresets.filter(p => p.category === 'mobile'))
+const domElements = computed(() => observeResult.value?.elements || [])
+const visionCandidates = computed(() => observeResult.value?.visionCandidates || [])
+const visionGroups = computed(() => observeResult.value?.visionGroups || [])
+const mixedCandidates = computed(() => observeResult.value?.mixedCandidates || [])
+const visibleText = computed(() => String(observeResult.value?.visibleText || '').trim())
+const annotatedScreenshot = computed(() => {
+  const img = observeResult.value?.annotatedScreenshot
+  return img ? `data:image/png;base64,${img}` : ''
+})
+const observeTrace = computed(() => observeResult.value?.trace || {})
+const visionFrame = computed(() => observeResult.value?.visionFrame || null)
+const visionFrameStats = computed(() => {
+  const frame = visionFrame.value
+  if (!frame) return []
+  return [
+    { label: t('vnc.visionRawSize'), value: fmtSize(frame.rawSize) },
+    { label: t('vnc.visionInferenceSize'), value: fmtSize(frame.inferenceSize) },
+    { label: t('vnc.visionClickViewport'), value: fmtSize(frame.clickViewport) },
+    { label: t('vnc.visionCoordinateSpace'), value: frame.coordinateSpace || 'click-viewport' },
+  ].filter(item => item.value)
+})
+const unknownRatio = computed(() => {
+  const ratio = observeTrace.value?.vision_unknown_ratio
+  if (typeof ratio === 'number') return `${Math.round(ratio * 100)}%`
+  const total = visionCandidates.value.length
+  if (!total) return ''
+  const unknown = visionCandidates.value.filter((item: any) => item?.family === 'unknown').length
+  return `${Math.round((unknown / total) * 100)}%`
+})
+const semanticSourceStats = computed(() => {
+  const counts = new Map<string, number>()
+  for (const item of visionCandidates.value) {
+    const key = String(item?.semanticSource || 'unknown')
+    counts.set(key, (counts.get(key) || 0) + 1)
+  }
+  return Array.from(counts.entries())
+    .sort((a, b) => b[1] - a[1])
+    .map(([label, value]) => ({ label, value }))
+})
+const observeSummary = computed(() => [
+  { key: 'dom', label: 'DOM', value: domElements.value.length },
+  { key: 'vision', label: 'Vision', value: visionCandidates.value.length },
+  { key: 'groups', label: 'Groups', value: visionGroups.value.length },
+  { key: 'mix', label: 'Mixed', value: mixedCandidates.value.length },
+].filter(item => item.value > 0 || observeMode.value === item.key))
 
 const totalRecv = ref(0)
 const totalSent = ref(0)
@@ -107,6 +164,13 @@ function fmtBytes(b: number): string {
   if (b < 1024) return b + ' B'
   if (b < 1048576) return (b / 1024).toFixed(1) + ' KB'
   return (b / 1048576).toFixed(1) + ' MB'
+}
+
+function fmtSize(size: any): string {
+  const width = Number(size?.width || 0)
+  const height = Number(size?.height || 0)
+  if (!width || !height) return ''
+  return `${width}×${height}`
 }
 
 function clearContainer() {
@@ -543,6 +607,71 @@ async function saveFpNetworkOverride() {
   }
 }
 
+async function runObserve() {
+  if (observeLoading.value) return
+  observePanelOpen.value = true
+  observeLoading.value = true
+  observeError.value = ''
+  try {
+    const resp = await api('/api/browser/observe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId: props.sessionId,
+        mode: observeMode.value,
+        maxCandidates: observeMaxCandidates.value,
+        threshold: observeThreshold.value,
+        includeAnnotatedScreenshot: observeMode.value !== 'dom',
+      }),
+    })
+    const data = await resp.json().catch(() => null)
+    if (!resp.ok || !data?.ok) {
+      observeError.value = data?.error || data?.detail || t('vnc.observeFailed')
+      return
+    }
+    observeResult.value = data
+  } catch {
+    observeError.value = t('vnc.networkError')
+  } finally {
+    observeLoading.value = false
+  }
+}
+
+function candidateTitle(candidate: any): string {
+  const text = candidate?.textHint || candidate?.text || candidate?.domHint?.text || candidate?.attrs?.ariaLabel || candidate?.attrs?.placeholder
+  if (text) return String(text).slice(0, 80)
+  return candidate?.label || candidate?.family || candidate?.tag || candidate?.source || 'candidate'
+}
+
+function candidateSubtitle(candidate: any): string {
+  const parts = [
+    candidate?.tag,
+    candidate?.family,
+    candidate?.label,
+    candidate?.rawLabel,
+    candidate?.geometryHint ? `hint:${candidate.geometryHint}` : '',
+    candidate?.semanticSource,
+    candidate?.source,
+  ].filter(Boolean)
+  return parts.join(' · ') || 'candidate'
+}
+
+function formatPoint(candidate: any): string {
+  const center = candidate?.center || (candidate?.x != null && candidate?.y != null ? { x: candidate.x, y: candidate.y } : null)
+  if (!center) return ''
+  return `(${Math.round(center.x)}, ${Math.round(center.y)})`
+}
+
+function formatBox(candidate: any): string {
+  const box = candidate?.bbox
+  if (!box) return ''
+  return `${Math.round(box.x)},${Math.round(box.y)} ${Math.round(box.w)}×${Math.round(box.h)}`
+}
+
+function formatScore(score: unknown): string {
+  return typeof score === 'number' ? score.toFixed(2) : ''
+}
+
 defineExpose({ navigate })
 
 onMounted(() => {
@@ -617,6 +746,46 @@ watch(inputBarOpen, (open) => {
         </span>
 
         <Separator orientation="vertical" />
+
+        <!-- Observe mode -->
+        <div class="flex items-center gap-1 shrink-0 rounded-md border border-border/80 bg-muted/30 p-0.5">
+          <Tooltip v-for="mode in observeModes" :key="mode">
+            <TooltipTrigger as-child>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                class="h-5 px-2 text-[10px] uppercase"
+                :class="observeMode === mode ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground'"
+                @click="observeMode = mode"
+              >
+                {{ mode }}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>{{ t(`vnc.observeMode_${mode}`) }}</TooltipContent>
+          </Tooltip>
+        </div>
+
+        <Tooltip>
+          <TooltipTrigger as-child>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              class="h-5 px-1.5 text-[10px] gap-1"
+              :class="observePanelOpen ? 'text-cyan-400' : ''"
+              :disabled="observeLoading"
+              @click="runObserve"
+            >
+              <Loader2 v-if="observeLoading" class="size-3 animate-spin" />
+              <ScanSearch v-else class="size-3" />
+              {{ t('vnc.observe') }}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>{{ t('vnc.observeTitle') }}</TooltipContent>
+        </Tooltip>
+
+        <Separator orientation="vertical" class="h-3.5" />
 
         <!-- Input bar toggle -->
         <Button variant="ghost" size="sm"
@@ -1015,6 +1184,194 @@ watch(inputBarOpen, (open) => {
     <!-- VNC display area -->
     <div class="flex-1 relative overflow-hidden bg-black">
       <div ref="vncContainer" class="absolute inset-0" />
+
+      <aside
+        v-if="observePanelOpen"
+        class="absolute right-3 top-3 bottom-3 z-20 w-[min(420px,calc(100%-24px))] overflow-hidden rounded-lg border border-border bg-background/95 shadow-2xl backdrop-blur"
+      >
+        <div class="flex items-center justify-between gap-3 border-b border-border px-3 py-2">
+          <div class="min-w-0">
+            <div class="flex items-center gap-2">
+              <ScanSearch class="size-4 text-cyan-400" />
+              <h3 class="text-sm font-medium">{{ t('vnc.observePanelTitle') }}</h3>
+              <Badge variant="outline" class="uppercase text-[10px]">{{ observeResult?.mode || observeMode }}</Badge>
+            </div>
+            <p class="mt-0.5 truncate text-[11px] text-muted-foreground">{{ observeResult?.title || observeResult?.url || t('vnc.observeNoResult') }}</p>
+          </div>
+          <Button variant="ghost" size="sm" class="h-7 w-7 p-0" @click="observePanelOpen = false">
+            <X class="size-4" />
+          </Button>
+        </div>
+
+        <div class="h-[calc(100%-49px)] overflow-y-auto p-3 text-xs">
+          <div class="mb-3 grid grid-cols-4 gap-2">
+            <div v-for="item in observeSummary" :key="item.label" class="rounded-md border border-border bg-muted/30 px-2 py-1.5">
+              <div class="text-[10px] uppercase text-muted-foreground">{{ item.label }}</div>
+              <div class="mt-0.5 text-lg font-semibold leading-none">{{ item.value }}</div>
+            </div>
+          </div>
+
+          <div v-if="observeLoading" class="flex items-center justify-center gap-2 rounded-md border border-border bg-muted/20 py-8 text-muted-foreground">
+            <Loader2 class="size-4 animate-spin" />
+            {{ t('vnc.observeRunning') }}
+          </div>
+
+          <div v-else-if="observeError" class="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-destructive">
+            {{ observeError }}
+          </div>
+
+          <div v-else-if="observeResult" class="space-y-4">
+            <section v-if="visionFrameStats.length">
+              <div class="mb-2 flex items-center justify-between">
+                <h4 class="font-medium">{{ t('vnc.visionFrame') }}</h4>
+                <Badge variant="outline" class="text-[10px]">
+                  {{ visionFrame?.preprocessEnabled ? t('vnc.visionPreprocessOn') : t('vnc.visionPreprocessOff') }}
+                </Badge>
+              </div>
+              <div class="grid grid-cols-2 gap-2">
+                <div
+                  v-for="item in visionFrameStats"
+                  :key="item.label"
+                  class="rounded-md border border-border bg-muted/20 px-2 py-1.5"
+                >
+                  <div class="text-[10px] uppercase text-muted-foreground">{{ item.label }}</div>
+                  <div class="mt-0.5 truncate font-mono text-[11px] text-foreground">{{ item.value }}</div>
+                </div>
+              </div>
+            </section>
+
+            <section v-if="annotatedScreenshot">
+              <div class="mb-2 flex items-center justify-between">
+                <h4 class="font-medium">{{ t('vnc.annotatedScreenshot') }}</h4>
+                <span v-if="unknownRatio" class="text-[11px] text-muted-foreground">{{ t('vnc.unknownRatio') }} {{ unknownRatio }}</span>
+              </div>
+              <img
+                :src="annotatedScreenshot"
+                class="max-h-72 w-full rounded-md border border-border object-contain bg-black"
+                :alt="t('vnc.annotatedScreenshot')"
+              />
+              <div v-if="semanticSourceStats.length" class="mt-2 flex flex-wrap gap-1.5">
+                <Badge
+                  v-for="stat in semanticSourceStats"
+                  :key="stat.label"
+                  variant="outline"
+                  class="text-[10px]"
+                >
+                  {{ stat.label }} {{ stat.value }}
+                </Badge>
+              </div>
+            </section>
+
+            <section v-if="visionGroups.length">
+              <div class="mb-2 flex items-center justify-between">
+                <h4 class="font-medium">{{ t('vnc.visionGroups') }}</h4>
+                <span class="text-[11px] text-muted-foreground">{{ t('vnc.sortedByScore') }}</span>
+              </div>
+              <div class="space-y-1.5">
+                <div
+                  v-for="candidate in visionGroups.slice(0, 12)"
+                  :key="candidate.id || `group-${candidate.family}-${formatBox(candidate)}`"
+                  class="rounded-md border border-cyan-500/30 bg-cyan-500/10 p-2"
+                >
+                  <div class="flex items-start justify-between gap-2">
+                    <div class="min-w-0">
+                      <div class="truncate font-medium">{{ candidateTitle(candidate) }}</div>
+                      <div class="mt-0.5 truncate text-[11px] text-muted-foreground">{{ candidateSubtitle(candidate) }}</div>
+                    </div>
+                    <Badge v-if="formatScore(candidate.score)" variant="outline" class="text-[10px]">{{ formatScore(candidate.score) }}</Badge>
+                  </div>
+                  <div class="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+                    <span v-if="formatPoint(candidate)">center {{ formatPoint(candidate) }}</span>
+                    <span v-if="formatBox(candidate)">bbox {{ formatBox(candidate) }}</span>
+                    <span v-if="candidate.textHint">{{ candidate.textHint }}</span>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <section v-if="visionCandidates.length">
+              <div class="mb-2 flex items-center justify-between">
+                <h4 class="font-medium">{{ t('vnc.visionCandidates') }}</h4>
+                <span class="text-[11px] text-muted-foreground">{{ t('vnc.sortedByScore') }}</span>
+              </div>
+              <div class="space-y-1.5">
+                <div
+                  v-for="candidate in visionCandidates.slice(0, 12)"
+                  :key="candidate.id || `${candidate.source}-${candidate.label}-${formatBox(candidate)}`"
+                  class="rounded-md border border-border bg-muted/20 p-2"
+                >
+                  <div class="flex items-start justify-between gap-2">
+                    <div class="min-w-0">
+                      <div class="truncate font-medium">{{ candidateTitle(candidate) }}</div>
+                      <div class="mt-0.5 truncate text-[11px] text-muted-foreground">{{ candidateSubtitle(candidate) }}</div>
+                    </div>
+                    <Badge v-if="formatScore(candidate.score)" variant="outline" class="text-[10px]">{{ formatScore(candidate.score) }}</Badge>
+                  </div>
+                  <div class="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+                    <span v-if="formatPoint(candidate)">center {{ formatPoint(candidate) }}</span>
+                    <span v-if="formatBox(candidate)">bbox {{ formatBox(candidate) }}</span>
+                    <span v-if="candidate.textHint">{{ candidate.textHint }}</span>
+                    <span v-if="candidate.domHint">DOM hint</span>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <section v-if="mixedCandidates.length">
+              <h4 class="mb-2 font-medium">{{ t('vnc.mixedCandidates') }}</h4>
+              <div class="space-y-1.5">
+                <div
+                  v-for="candidate in mixedCandidates.slice(0, 12)"
+                  :key="candidate.id || `${candidate.kind || candidate.source}-${candidateTitle(candidate)}-${formatPoint(candidate)}`"
+                  class="rounded-md border border-border bg-muted/20 p-2"
+                >
+                  <div class="flex items-start justify-between gap-2">
+                    <div class="min-w-0">
+                      <div class="truncate font-medium">{{ candidateTitle(candidate) }}</div>
+                      <div class="mt-0.5 truncate text-[11px] text-muted-foreground">{{ candidateSubtitle(candidate) }}</div>
+                    </div>
+                    <Badge variant="outline" class="text-[10px]">{{ candidate.kind || candidate.source || candidate.tag || 'item' }}</Badge>
+                  </div>
+                  <div class="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+                    <span v-if="formatPoint(candidate)">center {{ formatPoint(candidate) }}</span>
+                    <span v-if="formatBox(candidate)">bbox {{ formatBox(candidate) }}</span>
+                    <span v-if="candidate.textHint">{{ candidate.textHint }}</span>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <section v-if="domElements.length">
+              <h4 class="mb-2 font-medium">{{ t('vnc.domElements') }}</h4>
+              <div class="space-y-1.5">
+                <div
+                  v-for="element in domElements.slice(0, 10)"
+                  :key="`${element.tag}-${element.x}-${element.y}-${candidateTitle(element)}`"
+                  class="rounded-md border border-border bg-muted/20 p-2"
+                >
+                  <div class="flex items-start justify-between gap-2">
+                    <div class="min-w-0">
+                      <div class="truncate font-medium">{{ candidateTitle(element) }}</div>
+                      <div class="mt-0.5 truncate text-[11px] text-muted-foreground">{{ candidateSubtitle(element) }}</div>
+                    </div>
+                    <Badge variant="outline" class="text-[10px]">{{ element.tag || 'dom' }}</Badge>
+                  </div>
+                  <div class="mt-1 text-[11px] text-muted-foreground">center {{ formatPoint(element) }}</div>
+                </div>
+              </div>
+            </section>
+
+            <section v-if="visibleText">
+              <h4 class="mb-2 font-medium">{{ t('vnc.visibleText') }}</h4>
+              <pre class="max-h-40 overflow-auto whitespace-pre-wrap rounded-md border border-border bg-muted/20 p-2 text-[11px] leading-relaxed text-muted-foreground">{{ visibleText.slice(0, 1200) }}</pre>
+            </section>
+          </div>
+
+          <div v-else class="rounded-md border border-dashed border-border p-6 text-center text-muted-foreground">
+            {{ t('vnc.observeEmpty') }}
+          </div>
+        </div>
+      </aside>
     </div>
 
     <!-- Bottom input bar -->

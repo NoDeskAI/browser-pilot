@@ -20,8 +20,17 @@ from app.tools.browser.session import (
     quick_observe,
     wd_fetch,
 )
+from app.tools.vision.ui_detector import attach_dom_hints, build_mixed_candidates, ui_detector
 
 logger = logging.getLogger("routes.browser")
+
+VIEWPORT_METRICS_SCRIPT = """
+return {
+  width: window.innerWidth || document.documentElement.clientWidth || 0,
+  height: window.innerHeight || document.documentElement.clientHeight || 0,
+  devicePixelRatio: window.devicePixelRatio || 1
+};
+"""
 
 
 async def _update_session_page(session_id: str, url: str | None, title: str | None) -> None:
@@ -38,6 +47,11 @@ router = APIRouter()
 
 class SessionBody(BaseModel):
     sessionId: str
+    mode: str = "dom"
+    maxCandidates: int = Field(default=180, ge=1, le=500)
+    threshold: float = Field(default=0.01, ge=0.0, le=1.0)
+    includeScreenshot: bool = False
+    includeAnnotatedScreenshot: bool = False
 
 
 class NavigateBody(BaseModel):
@@ -79,6 +93,12 @@ class SwitchTabBody(BaseModel):
     handle: str | None = None
     index: int | None = None
     closeCurrent: bool = False
+
+
+def mix_needs_vision_fallback(result: object) -> bool:
+    if not isinstance(result, dict):
+        return True
+    return not bool(result.get("elements"))
 
 
 # ---------------------------------------------------------------------------
@@ -129,12 +149,131 @@ async def api_current(sessionId: str = Query(...), user: CurrentUser = Depends(g
 async def api_observe(body: SessionBody, user: CurrentUser = Depends(get_session_aware_user)):
     await verify_session_access(body.sessionId, user)
     try:
+        mode = (body.mode or "dom").strip().lower()
+        if mode not in {"dom", "vision", "mix"}:
+            return {"ok": False, "error": 'observe mode must be one of: "dom", "vision", "mix"'}
+
         async with browser_session(body.sessionId) as (sid, base):
-            result = await wd_fetch(
-                f"/session/{sid}/execute/sync", "POST",
-                {"script": OBSERVE_SCRIPT, "args": []},
-                base_url=base,
-            )
+            result = {}
+            screenshot_base64 = None
+            viewport_metrics = None
+            vision_result = None
+
+            if mode in {"dom", "mix"}:
+                result = await wd_fetch(
+                    f"/session/{sid}/execute/sync", "POST",
+                    {"script": OBSERVE_SCRIPT, "args": []},
+                    base_url=base,
+                )
+
+            needs_vision = mode == "vision"
+            if mode == "mix":
+                needs_vision = mix_needs_vision_fallback(result)
+
+            if needs_vision or body.includeScreenshot:
+                screenshot_base64 = await wd_fetch(f"/session/{sid}/screenshot", base_url=base)
+                viewport_metrics = await wd_fetch(
+                    f"/session/{sid}/execute/sync", "POST",
+                    {"script": VIEWPORT_METRICS_SCRIPT, "args": []},
+                    timeout=5,
+                    base_url=base,
+                )
+
+            if mode == "vision":
+                url = await wd_fetch(f"/session/{sid}/url", timeout=5, base_url=base)
+                title = await wd_fetch(f"/session/{sid}/title", timeout=5, base_url=base)
+                vision_result = await asyncio.to_thread(
+                    ui_detector.detect_base64,
+                    screenshot_base64,
+                    max_candidates=body.maxCandidates,
+                    threshold=body.threshold,
+                    include_annotated=body.includeAnnotatedScreenshot,
+                    click_viewport=viewport_metrics,
+                )
+                result = {
+                    "url": url,
+                    "title": title,
+                    "mode": mode,
+                    "viewport": vision_result.viewport,
+                    "visionCandidates": vision_result.candidates,
+                    "visionGroups": vision_result.groups,
+                    "visionFrame": vision_result.vision_frame,
+                    "trace": vision_result.trace,
+                }
+                if vision_result.annotated_screenshot:
+                    result["annotatedScreenshot"] = vision_result.annotated_screenshot
+
+            if mode == "mix":
+                elements = (result or {}).get("elements", []) if isinstance(result, dict) else []
+                if needs_vision:
+                    vision_result = await asyncio.to_thread(
+                        ui_detector.detect_base64,
+                        screenshot_base64,
+                        max_candidates=body.maxCandidates,
+                        threshold=body.threshold,
+                        include_annotated=body.includeAnnotatedScreenshot,
+                        click_viewport=viewport_metrics,
+                    )
+                    vision_candidates = attach_dom_hints(vision_result.candidates, elements)
+                    mixed_candidates = build_mixed_candidates(
+                        elements=elements,
+                        vision_candidates=vision_candidates,
+                        vision_groups=vision_result.groups,
+                        max_candidates=body.maxCandidates,
+                    )
+                    result = {
+                        **(result if isinstance(result, dict) else {}),
+                        "mode": mode,
+                        "viewport": vision_result.viewport,
+                        "visionCandidates": vision_candidates,
+                        "visionGroups": vision_result.groups,
+                        "visionFrame": vision_result.vision_frame,
+                        "mixedCandidates": mixed_candidates,
+                        "trace": {
+                            **vision_result.trace,
+                            "mixed_count": len(mixed_candidates),
+                            "mixed_vision_supplement_count": len(
+                                [
+                                    item
+                                    for item in mixed_candidates
+                                    if str(item.get("kind", "")).startswith("vision_supplement")
+                                ]
+                            ),
+                            "mix_strategy": "dom_then_vision_fallback",
+                            "vision_fallback_used": True,
+                            "dom_element_count": len(elements),
+                        },
+                    }
+                    if vision_result.annotated_screenshot:
+                        result["annotatedScreenshot"] = vision_result.annotated_screenshot
+                else:
+                    mixed_candidates = build_mixed_candidates(
+                        elements=elements,
+                        vision_candidates=[],
+                        vision_groups=[],
+                        max_candidates=body.maxCandidates,
+                    )
+                    result = {
+                        **(result if isinstance(result, dict) else {}),
+                        "mode": mode,
+                        "visionCandidates": [],
+                        "visionGroups": [],
+                        "mixedCandidates": mixed_candidates,
+                        "trace": {
+                            "mix_strategy": "dom_then_vision_fallback",
+                            "vision_fallback_used": False,
+                            "vision_skipped_reason": "dom_observe_succeeded",
+                            "dom_element_count": len(elements),
+                            "mixed_count": len(mixed_candidates),
+                            "mixed_vision_supplement_count": 0,
+                        },
+                    }
+
+            if mode == "dom" and isinstance(result, dict):
+                result["mode"] = mode
+
+            if body.includeScreenshot and screenshot_base64 and isinstance(result, dict):
+                result["screenshot"] = screenshot_base64
         if isinstance(result, dict):
             asyncio.create_task(_update_session_page(body.sessionId, result.get("url"), result.get("title")))
         return {"ok": True, **(result if isinstance(result, dict) else {})}

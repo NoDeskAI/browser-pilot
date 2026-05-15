@@ -20,6 +20,15 @@ dependencies = [
     "python-multipart>=0.0.9",
 ]
 
+[project.optional-dependencies]
+vision = [
+    "ultralytics>=8.4.12",
+    "Pillow>=10.4.0",
+    "numpy>=2.0.0",
+    "uitag>=0.6.0",
+]
+ocr = ["rapidocr-onnxruntime>=1.4.4"]
+
 # Dev server: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
 [tool.setuptools.packages.find]

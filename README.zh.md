@@ -163,6 +163,62 @@ Browser Pilot 可以在 **设置 > 网络出口** 中配置部署侧出口，并
 - `OpenVPN`：运行托管 OpenVPN 容器和 HTTP 代理封装。该模式要求 Docker 宿主机允许 `/dev/net/tun` 和 `NET_ADMIN`。
 
 网络出口属于部署侧能力。它不会自动复用用户笔记本上已经连接的 VPN，除非该 VPN 配置也能放到当前部署环境中。
+| `BP_VISION_BACKEND`   | `yolo`                                                         | 视觉观察后端。默认使用 YOLOv8 UI 检测权重；设为 `omniparser` 后，会使用 Microsoft OmniParser 解析截图。 |
+| `BP_UI_DETECTOR_MODEL` | —                                                             | 可选的 YOLOv8 UI 检测权重绝对路径。未设置时会查找 `backend/models/noah-real-yolov8n-ui.pt`。 |
+| `BP_OMNIPARSER_URL`   | —                                                              | 可选 OmniParser 服务地址，例如 `http://127.0.0.1:8001`，后端会调用 `POST /parse/`。       |
+| `BP_OMNIPARSER_REPO`  | —                                                              | 不使用服务时的本地 OmniParser 仓库路径。需要单独安装 OmniParser 依赖和权重。                         |
+
+### 默认 YOLO 视觉后端
+
+`observe --mode vision` 默认使用 YOLOv8 UI 检测模型。本仓库不会内置权重文件；后端在使用时会检测本地权重是否存在，如果不存在，会返回下载提示。
+
+推荐下载方式：
+
+```bash
+mkdir -p backend/models
+curl -L \
+  -o backend/models/noah-real-yolov8n-ui.pt \
+  https://huggingface.co/Noah03064515s22/yolov8-ui-detection-models/resolve/main/models/real_yolov8n.pt
+```
+
+也可以手动指定：
+
+```bash
+export BP_UI_DETECTOR_MODEL=/absolute/path/to/noah-real-yolov8n-ui.pt
+```
+
+`observe --mode mix` 会先返回 DOM 结果；只有 DOM 观察没有返回元素时，才会触发 Vision 推理作为兜底。
+
+### OmniParser 视觉后端
+
+`observe --mode vision` 和 `observe --mode mix` 可以切换到 Microsoft OmniParser V2：
+
+```bash
+export BP_VISION_BACKEND=omniparser
+
+# 方式 A：连接单独启动的 OmniParser 服务
+export BP_OMNIPARSER_URL=http://127.0.0.1:8001
+
+# 方式 B：加载本地 OmniParser 仓库和权重
+export BP_OMNIPARSER_REPO=/path/to/OmniParser
+```
+
+从上游 OmniParser 仓库启动服务的示例：
+
+```bash
+cd /path/to/OmniParser/omnitool/omniparserserver
+python omniparserserver.py \
+  --host 127.0.0.1 \
+  --port 8001 \
+  --device cpu \
+  --som_model_path ../../weights/icon_detect/model.pt \
+  --caption_model_name florence2 \
+  --caption_model_path ../../weights/icon_caption_florence \
+  --BOX_TRESHOLD 0.05
+```
+
+本仓库不会内置 OmniParser 代码和权重。分发前需要确认 OmniParser 权重许可证；上游说明里 icon detection 权重继承 YOLO 相关许可证。
+
 
 ## 安全说明
 

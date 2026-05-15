@@ -31,8 +31,8 @@ bpilot --session "<session-id>" session start
 # 3. Navigate. The container auto-starts if it is not running.
 bpilot --session "<session-id>" navigate https://example.com
 
-# 4. Observe the page.
-bpilot --session "<session-id>" observe --json
+# 4. Observe the page. Use --mode dom by default; switch to vision for visual cards/feeds.
+bpilot --session "<session-id>" observe --mode dom --json
 
 # 5. Interact.
 bpilot --session "<session-id>" click 640 380
@@ -41,7 +41,7 @@ bpilot --session "<session-id>" type "hello world"
 bpilot --session "<session-id>" key Enter
 
 # 6. Verify result.
-bpilot --session "<session-id>" observe --json
+bpilot --session "<session-id>" observe --mode dom --json
 
 # 7. Screenshot for visual confirmation. Without --output, the JSON response
 # contains a signed file.url and no base64 screenshot payload.
@@ -75,7 +75,9 @@ Add `--json` / `-j` to state-reading commands for machine-readable output.
 | Command | Description |
 |---------|-------------|
 | `bpilot --session "<session-id>" navigate <url>` | Navigate to URL |
-| `bpilot --session "<session-id>" observe --json` | Get page URL, title, visible text, and all interactive elements with coordinates |
+| `bpilot --session "<session-id>" observe --mode dom --json` | Get page URL, title, visible text, and DOM interactive elements with coordinates |
+| `bpilot --session "<session-id>" observe --mode vision --json` | Get YOLOv8 visual candidate boxes and groups with click-ready coordinates |
+| `bpilot --session "<session-id>" observe --mode mix --json` | Use DOM first and visual fallback when DOM observe returns no elements |
 | `bpilot --session "<session-id>" click <x> <y>` | Click at coordinates from observe |
 | `bpilot --session "<session-id>" click-element <selector>` | Click element by CSS selector |
 | `bpilot --session "<session-id>" type <text>` | Type into focused input |
@@ -135,5 +137,6 @@ bpilot --session "a1b2c3d4-..." screenshot --output qr-code.png
 - **Container auto-start**: Browser commands automatically start the container if it is not running. You only need `bpilot --session "<session-id>" session start` if you want the VNC port for visual monitoring.
 - **Anti-bot stealth**: Each container runs Chrome with fingerprint spoofing, human-like click/type patterns, and timezone override (Asia/Shanghai).
 - **Per-call sessions**: Each CLI command creates and destroys a WebDriver session to minimize detection. This adds small overhead per command but prevents anti-bot triggers.
-- **Observe before click**: Always run `bpilot --session "<session-id>" observe --json` to get current element coordinates before clicking. Coordinates change when the page updates.
+- **Observe before click**: Always run `bpilot --session "<session-id>" observe --json` to get current element coordinates before clicking. Coordinates change when the page updates. Use `--mode dom` for normal links/forms/buttons, `--mode vision` for image/video feeds and complex visual layouts, and `--mode mix` when you want DOM first with a visual fallback.
+- **Vision labels are weak hints**: Treat visual labels as candidate regions, not final semantic truth. Combine bbox position, nearby text, DOM hints, and task intent before clicking.
 - **Files**: For Agent workflows, inspect `bpilot --session "<session-id>" files list --json`. Use the file item `status` field to distinguish `downloading` from `completed`; completed items include the backend file `url`.
