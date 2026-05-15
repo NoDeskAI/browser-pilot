@@ -1468,7 +1468,7 @@ def is_usable_dom_element(element: dict[str, Any]) -> bool:
     family = dom_family(element)
     label = element_label(element).strip()
     bbox = element.get("bbox")
-    if isinstance(bbox, dict) and int(bbox.get("w", 0)) <= 0 and int(bbox.get("h", 0)) <= 0:
+    if isinstance(bbox, dict) and (int(bbox.get("w", 0)) <= 0 or int(bbox.get("h", 0)) <= 0):
         return False
     return family != "dom" or bool(label)
 

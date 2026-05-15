@@ -146,11 +146,11 @@ const semanticSourceStats = computed(() => {
     .map(([label, value]) => ({ label, value }))
 })
 const observeSummary = computed(() => [
-  { label: 'DOM', value: domElements.value.length },
-  { label: 'Vision', value: visionCandidates.value.length },
-  { label: 'Groups', value: visionGroups.value.length },
-  { label: 'Mixed', value: mixedCandidates.value.length },
-].filter(item => item.value > 0 || observeMode.value === item.label.toLowerCase()))
+  { key: 'dom', label: 'DOM', value: domElements.value.length },
+  { key: 'vision', label: 'Vision', value: visionCandidates.value.length },
+  { key: 'groups', label: 'Groups', value: visionGroups.value.length },
+  { key: 'mix', label: 'Mixed', value: mixedCandidates.value.length },
+].filter(item => item.value > 0 || observeMode.value === item.key))
 
 const totalRecv = ref(0)
 const totalSent = ref(0)

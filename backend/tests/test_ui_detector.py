@@ -7,6 +7,7 @@ from app.tools.vision.ui_detector import (
     apply_dom_hint_semantics,
     build_mixed_candidates,
     inference_bbox_to_click_bbox,
+    is_usable_dom_element,
     missing_default_model_message,
     normalize_family,
     omniparser_bbox_to_pixel_box,
@@ -143,6 +144,19 @@ class UiDetectorFallbackTests(unittest.TestCase):
         group = next(item for item in mixed if item["id"] == "group-001")
         self.assertEqual(group["kind"], "vision_supplement_group")
         self.assertEqual(group["supplementReason"], "visual_group")
+
+    def test_degenerate_dom_bbox_is_not_usable(self) -> None:
+        base = {
+            "tag": "button",
+            "text": "Search",
+            "attrs": {},
+            "x": 145,
+            "y": 118,
+        }
+
+        self.assertFalse(is_usable_dom_element({**base, "bbox": {"x": 100, "y": 100, "w": 0, "h": 36}}))
+        self.assertFalse(is_usable_dom_element({**base, "bbox": {"x": 100, "y": 100, "w": 90, "h": 0}}))
+        self.assertTrue(is_usable_dom_element({**base, "bbox": {"x": 100, "y": 100, "w": 90, "h": 36}}))
 
     def test_omniparser_ratio_bbox_and_semantics_convert_to_candidates(self) -> None:
         items = [
