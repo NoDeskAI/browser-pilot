@@ -95,6 +95,17 @@ _ensure_object_storage() {
     echo "[s3] ready"
 }
 
+_ensure_deps() {
+    if [[ ! -d backend/.venv ]]; then
+        echo "[backend] 安装 Python 依赖 (uv sync)..."
+        (cd backend && uv sync)
+    fi
+    if [[ ! -d frontend/node_modules ]]; then
+        echo "[frontend] 安装 Node 依赖 (npm install)..."
+        (cd frontend && npm install)
+    fi
+}
+
 _infer_postgres_env_from_database_url() {
     if [[ -z "${DATABASE_URL:-}" ]]; then
         return
@@ -161,13 +172,14 @@ _start_processes() {
     _require_database_env
     export MINIO_STORAGE_BOOTSTRAP="${MINIO_STORAGE_BOOTSTRAP:-true}"
     export MINIO_ENDPOINT="${MINIO_ENDPOINT:-http://localhost:9000}"
+    _ensure_deps
     _ensure_postgres
     _ensure_object_storage
 
     : > "$BACKEND_LOG"
     : > "$FRONTEND_LOG"
 
-    (cd backend && uvicorn app.main:app --host 0.0.0.0 --port "$BACKEND_PORT" --reload) >> "$BACKEND_LOG" 2>&1 &
+    (cd backend && uv run uvicorn app.main:app --host 0.0.0.0 --port "$BACKEND_PORT" --reload) >> "$BACKEND_LOG" 2>&1 &
     local backend_pid=$!
     echo $backend_pid > "$BACKEND_PID_FILE"
 
