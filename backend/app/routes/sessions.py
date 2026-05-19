@@ -869,12 +869,6 @@ async def change_device_preset(session_id: str, body: DevicePresetBody, user: Cu
     return {"ok": True, "ports": ports, "devicePreset": body.preset, "fingerprintProfile": fp_response}
 
 
-@router.post("/api/sessions/{session_id}/proxy")
-async def change_proxy(session_id: str, user: CurrentUser = Depends(get_current_user)):
-    await _verify_session_tenant(session_id, user)
-    raise HTTPException(410, "Manual HTTP/SOCKS proxy has been removed. Use Clash or OpenVPN network egress.")
-
-
 @router.post("/api/sessions/{session_id}/network-egress")
 async def change_network_egress(
     session_id: str,

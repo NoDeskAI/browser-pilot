@@ -45,13 +45,14 @@ curl -fsSL http://localhost:8000/api/cli/install | bash
 ```bash
 bpilot config set api-url http://localhost:8000
 
-bpilot session create --name "My Task"
-bpilot session create --name "Mobile" --device iphone-16
+bpilot network-egress list --json
+bpilot network-egress create --name "Office" --type clash --config-file ./clash.yaml
+
+bpilot session create --name "My Task" --network-egress direct
 bpilot session use <session-id>
+bpilot --session <session-id> session set-network <egress-id|direct>
 bpilot session delete <session-id>  # 删除会话；已完成文件默认保留到文件页
 bpilot session delete <session-id> --delete-files # 同时删除全部已完成文件
-
-bpilot session set-device iphone-16    # 切换设备（会重启容器）
 
 bpilot navigate https://example.com
 bpilot observe                    # 查看页面元素及坐标
@@ -66,7 +67,7 @@ bpilot files rename <file-id> final.csv
 bpilot files delete <file-id>
 ```
 
-加 `--json` 可输出机器可读格式（供 AI Agent 使用）。Agent 通过 `bpilot files list --json` 查看当前 session 文件；每个 item 都有 `status`，用于区分进行中的文件和 `completed` 文件。
+加 `--json` 可输出机器可读格式（供 AI Agent 使用）。Agent 通过 `bpilot session list --json` 查看每个 session 的 `networkEgress*` 字段；通过 `bpilot files list --json` 查看当前 session 文件，每个 item 都有 `status`，用于区分进行中的文件和 `completed` 文件。
 
 ## 架构
 

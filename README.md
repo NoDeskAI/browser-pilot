@@ -48,13 +48,14 @@ Configure and use:
 ```bash
 bpilot config set api-url http://localhost:8000
 
-bpilot session create --name "My Task"
-bpilot session create --name "Mobile" --device iphone-16
+bpilot network-egress list --json
+bpilot network-egress create --name "Office" --type clash --config-file ./clash.yaml
+
+bpilot session create --name "My Task" --network-egress direct
 bpilot session use <session-id>
+bpilot --session <session-id> session set-network <egress-id|direct>
 bpilot session delete <session-id>  # delete session; completed files are kept in Files by default
 bpilot session delete <session-id> --delete-files # also delete all completed files
-
-bpilot session set-device iphone-16    # switch device (restarts container)
 
 bpilot navigate https://example.com
 bpilot observe                    # see page elements with coordinates
@@ -69,7 +70,7 @@ bpilot files rename <file-id> final.csv
 bpilot files delete <file-id>
 ```
 
-Add `--json` for machine-readable output (for AI Agents). Use `bpilot files list --json` to inspect session files; each item includes `status` so agents can distinguish in-progress files from `completed` files.
+Add `--json` for machine-readable output (for AI Agents). Use `bpilot session list --json` to inspect each session's `networkEgress*` fields. Use `bpilot files list --json` to inspect session files; each item includes `status` so agents can distinguish in-progress files from `completed` files.
 
 ## Architecture
 

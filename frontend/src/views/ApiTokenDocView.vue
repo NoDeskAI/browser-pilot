@@ -34,6 +34,7 @@ Token 以 \`bp_\` 开头，例如 \`bp_a1b2c3d4e5f6...\`
 - 拥有当前用户的完整 API 权限
 - 适合个人使用的自动化工具、CLI 脚本
 - 可通过 \`GET /api/files\`、\`PATCH /api/files/{fileId}\`、\`DELETE /api/files/{fileId}\` 管理全局文件
+- 可调用 Network Egress API；创建、更新、删除出口仍需要当前用户是 admin/superadmin
 - 文件 DTO 中的 \`url\` 是 15 分钟有效的签名下载链接；Builtin 返回后端签名 URL，S3 返回后端生成的 S3 预签名 URL
 
 ### 会话级 Token
@@ -42,6 +43,7 @@ Token 以 \`bp_\` 开头，例如 \`bp_a1b2c3d4e5f6...\`
 - 仅能操作绑定的那一个会话
 - 适合分发给外部服务（如 AutoTesting），实现最小权限控制
 - 不能访问全局 Files API，也不能读取已归档文件 URL
+- 不能管理 Network Egress，也不能切换 Session 网络出口
 
 ## 常用 API 示例
 
@@ -116,6 +118,26 @@ curl -X DELETE "http://localhost:9222/api/files/$FILE_ID" \\
   -H "Authorization: Bearer $TOKEN"
 \`\`\`
 
+### Network Egress（用户级 Token）
+
+\`\`\`bash
+# 列出 Direct 和托管 Clash/OpenVPN 出口。
+curl "http://localhost:9222/api/network-egress" \\
+  -H "Authorization: Bearer $TOKEN"
+
+# 创建托管 Clash/OpenVPN 出口。create/update/delete 需要 admin/superadmin。
+curl -X POST "http://localhost:9222/api/network-egress" \\
+  -H "Authorization: Bearer $TOKEN" \\
+  -H "Content-Type: application/json" \\
+  -d '{"name": "Office", "type": "clash", "configText": "..."}'
+
+# 切换一个 Session 的网络出口；传 null 表示 Direct。
+curl -X POST "http://localhost:9222/api/sessions/$SESSION_ID/network-egress" \\
+  -H "Authorization: Bearer $TOKEN" \\
+  -H "Content-Type: application/json" \\
+  -d '{"networkEgressId": null}'
+\`\`\`
+
 ### 点击元素
 
 \`\`\`bash
@@ -167,9 +189,9 @@ curl -X POST http://localhost:9222/api/browser/type \\
 | | \`DELETE /api/sessions/{id}/files/{fileId}\` | 删除 Session 文件，返回对象删除和记录删除状态 |
 | | \`GET /api/files/{fileId}.{ext}\` | 使用 Bearer Token 读取绑定活跃 Session 下的已完成文件内容 |
 
-会话级 Token 不能调用全局 Files API（\`GET /api/files\`、\`PATCH /api/files/{fileId}\`、\`DELETE /api/files/{fileId}\`），也不能重新读取已归档文件 URL。文件 DTO 中已经签发的能力型下载 URL 在 15 分钟内可能仍可访问。
+会话级 Token 不能调用全局 Files API（\`GET /api/files\`、\`PATCH /api/files/{fileId}\`、\`DELETE /api/files/{fileId}\`），不能调用 Network Egress API（\`GET /api/network-egress\`、\`POST /api/network-egress\`、\`PATCH /api/network-egress/{id}\`、\`DELETE /api/network-egress/{id}\`、\`POST /api/network-egress/{id}/check\`），也不能通过 \`POST /api/sessions/{id}/network-egress\` 切换网络出口。它也不能重新读取已归档文件 URL。文件 DTO 中已经签发的能力型下载 URL 在 15 分钟内可能仍可访问。
 
-其余接口（会话列表、创建/删除会话、全局文件管理、用户管理等）需要使用 **用户级 Token**。
+其余接口（会话列表、创建/删除会话、全局文件管理、Network Egress 管理、用户管理等）需要使用 **用户级 Token**。
 
 ## 创建 Token
 
@@ -207,6 +229,7 @@ Tokens are prefixed with \`bp_\`, e.g. \`bp_a1b2c3d4e5f6...\`
 - Has full API access for the current user
 - Ideal for personal automation tools and CLI scripts
 - Can manage global files through \`GET /api/files\`, \`PATCH /api/files/{fileId}\`, and \`DELETE /api/files/{fileId}\`
+- Can call Network Egress APIs; creating, updating, and deleting egress profiles still requires the current user to be admin/superadmin
 - File DTO \`url\` values are signed download links valid for 15 minutes; Built-in storage returns a signed backend URL, and S3 returns a backend-generated S3 presigned URL
 
 ### Session-scoped Token
@@ -215,6 +238,7 @@ Tokens are prefixed with \`bp_\`, e.g. \`bp_a1b2c3d4e5f6...\`
 - Can only operate on the bound session
 - Ideal for distributing to external services (e.g. AutoTesting) with least-privilege access
 - Cannot access the global Files API or archived file URLs
+- Cannot manage Network Egress or switch a session network egress
 
 ## Common API Examples
 
@@ -289,6 +313,26 @@ curl -X DELETE "http://localhost:9222/api/files/$FILE_ID" \\
   -H "Authorization: Bearer $TOKEN"
 \`\`\`
 
+### Network Egress (User-level Token)
+
+\`\`\`bash
+# List Direct plus managed Clash/OpenVPN profiles.
+curl "http://localhost:9222/api/network-egress" \\
+  -H "Authorization: Bearer $TOKEN"
+
+# Create a managed Clash/OpenVPN egress profile. create/update/delete require admin/superadmin.
+curl -X POST "http://localhost:9222/api/network-egress" \\
+  -H "Authorization: Bearer $TOKEN" \\
+  -H "Content-Type: application/json" \\
+  -d '{"name": "Office", "type": "clash", "configText": "..."}'
+
+# Switch a session network egress; pass null for Direct.
+curl -X POST "http://localhost:9222/api/sessions/$SESSION_ID/network-egress" \\
+  -H "Authorization: Bearer $TOKEN" \\
+  -H "Content-Type: application/json" \\
+  -d '{"networkEgressId": null}'
+\`\`\`
+
 ### Click at Coordinates
 
 \`\`\`bash
@@ -340,9 +384,9 @@ Session-scoped tokens can only call the following endpoints, and the \`sessionId
 | | \`DELETE /api/sessions/{id}/files/{fileId}\` | Delete a session file and return object/record delete status |
 | | \`GET /api/files/{fileId}.{ext}\` | Read completed file content from the bound active session with Bearer Token |
 
-Session-scoped tokens cannot call the global Files API (\`GET /api/files\`, \`PATCH /api/files/{fileId}\`, \`DELETE /api/files/{fileId}\`) or re-read archived file URLs. Already issued capability download URLs may remain accessible until their 15-minute expiry.
+Session-scoped tokens cannot call the global Files API (\`GET /api/files\`, \`PATCH /api/files/{fileId}\`, \`DELETE /api/files/{fileId}\`), cannot call Network Egress APIs (\`GET /api/network-egress\`, \`POST /api/network-egress\`, \`PATCH /api/network-egress/{id}\`, \`DELETE /api/network-egress/{id}\`, \`POST /api/network-egress/{id}/check\`), and cannot switch network egress through \`POST /api/sessions/{id}/network-egress\`. They also cannot re-read archived file URLs. Already issued capability download URLs may remain accessible until their 15-minute expiry.
 
-All other endpoints (session list, create/delete sessions, global file management, user management, etc.) require a **user-level token**.
+All other endpoints (session list, create/delete sessions, global file management, Network Egress management, user management, etc.) require a **user-level token**.
 
 ## Creating Tokens
 

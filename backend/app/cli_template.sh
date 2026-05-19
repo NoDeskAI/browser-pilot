@@ -74,7 +74,26 @@ _esc() {
   s="${s//\"/\\\"}"
   s="${s//$'\n'/\\n}"
   s="${s//$'\t'/\\t}"
+  s="${s//$'\r'/\\r}"
   printf '%s' "$s"
+}
+
+_egress_json_value() {
+  local egress_id="$1"
+  if [[ "$egress_id" == "direct" ]]; then
+    printf 'null'
+  else
+    printf '"%s"' "$(_esc "$egress_id")"
+  fi
+}
+
+_print_or_fail_ok() {
+  local resp="$1"
+  if echo "$resp" | grep -Eq '"ok"[[:space:]]*:[[:space:]]*false'; then
+    echo "$resp" | _out
+    exit 1
+  fi
+  echo "$resp" | _out
 }
 
 _resolve_url() {
@@ -233,15 +252,27 @@ cmd_session_list() {
 }
 
 cmd_session_create() {
-  local name="新会话"
+  local name="新会话" network_egress_set=false network_egress_id=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --name|-n) name="$2"; shift 2 ;;
-      *) shift ;;
+      --name|-n)
+        [[ -n "${2:-}" ]] || { echo "Usage: $CLI_NAME session create [--name <n>] [--network-egress <egress-id|direct>]"; exit 1; }
+        name="$2"; shift 2 ;;
+      --network-egress)
+        [[ -n "${2:-}" ]] || { echo "Usage: $CLI_NAME session create [--name <n>] [--network-egress <egress-id|direct>]"; exit 1; }
+        network_egress_set=true
+        network_egress_id="$2"
+        shift 2 ;;
+      *) echo "Unknown session create option: $1"; exit 1 ;;
     esac
   done
-  local resp
-  resp=$(_api_post "/api/sessions" "{\"name\":\"$(_esc "$name")\"}")
+  local body resp
+  body="{\"name\":\"$(_esc "$name")\""
+  if $network_egress_set; then
+    body="$body,\"networkEgressId\":$(_egress_json_value "$network_egress_id")"
+  fi
+  body="$body}"
+  resp=$(_api_post "/api/sessions" "$body")
   if $JSON_OUT; then
     echo "$resp"
   else
@@ -251,6 +282,16 @@ cmd_session_create() {
     _green "Created session: $sid  ($sname)"
     _dim "Run: $CLI_NAME session use $sid"
   fi
+}
+
+cmd_session_set_network() {
+  local egress_id="${1:-}"
+  [[ -n "$egress_id" ]] || { echo "Usage: $CLI_NAME session set-network <egress-id|direct>"; exit 1; }
+  shift || true
+  [[ $# -eq 0 ]] || { echo "Unknown session set-network option: $1"; exit 1; }
+  local resp
+  resp=$(_api_post "/api/sessions/$(_sid)/network-egress" "{\"networkEgressId\":$(_egress_json_value "$egress_id")}")
+  _print_or_fail_ok "$resp"
 }
 
 cmd_session_use() {
@@ -479,6 +520,133 @@ cmd_files_delete() {
   _api_delete "/api/sessions/$(_sid)/files/$file_id" | _out
 }
 
+# ── Network egress commands ──────────────────────────────────────────────
+
+cmd_network_egress_list() {
+  _api_get "/api/network-egress" | _out
+}
+
+cmd_network_egress_create() {
+  local name="" egress_type="" config_file="" config_url="" username="" password="" disabled=false
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --name)
+        [[ -n "${2:-}" ]] || { echo "Usage: $CLI_NAME network-egress create --name NAME --type clash|openvpn (--config-file PATH | --config-url URL)"; exit 1; }
+        name="$2"; shift 2 ;;
+      --type)
+        [[ -n "${2:-}" ]] || { echo "Usage: $CLI_NAME network-egress create --name NAME --type clash|openvpn (--config-file PATH | --config-url URL)"; exit 1; }
+        egress_type="$2"; shift 2 ;;
+      --config-file)
+        [[ -n "${2:-}" ]] || { echo "Usage: $CLI_NAME network-egress create --name NAME --type clash|openvpn (--config-file PATH | --config-url URL)"; exit 1; }
+        config_file="$2"; shift 2 ;;
+      --config-url)
+        [[ -n "${2:-}" ]] || { echo "Usage: $CLI_NAME network-egress create --name NAME --type clash|openvpn (--config-file PATH | --config-url URL)"; exit 1; }
+        config_url="$2"; shift 2 ;;
+      --username)
+        [[ -n "${2:-}" ]] || { echo "Usage: $CLI_NAME network-egress create --name NAME --type clash|openvpn (--config-file PATH | --config-url URL)"; exit 1; }
+        username="$2"; shift 2 ;;
+      --password)
+        [[ -n "${2:-}" ]] || { echo "Usage: $CLI_NAME network-egress create --name NAME --type clash|openvpn (--config-file PATH | --config-url URL)"; exit 1; }
+        password="$2"; shift 2 ;;
+      --disabled) disabled=true; shift ;;
+      *) echo "Unknown network-egress create option: $1"; exit 1 ;;
+    esac
+  done
+  [[ -n "$name" && -n "$egress_type" ]] || { echo "Usage: $CLI_NAME network-egress create --name NAME --type clash|openvpn (--config-file PATH | --config-url URL)"; exit 1; }
+  case "$egress_type" in clash|openvpn) ;; *) echo "Error: --type must be clash or openvpn"; exit 1 ;; esac
+  [[ -n "$config_file" || -n "$config_url" ]] || { echo "Error: pass --config-file or --config-url"; exit 1; }
+  [[ -z "$config_file" || -z "$config_url" ]] || { echo "Error: --config-file and --config-url are mutually exclusive"; exit 1; }
+
+  local body config_text
+  body="{\"name\":\"$(_esc "$name")\",\"type\":\"$(_esc "$egress_type")\",\"disabled\":$disabled"
+  if [[ -n "$config_file" ]]; then
+    [[ -f "$config_file" ]] || { echo "Error: config file not found: $config_file" >&2; exit 1; }
+    config_text=$(cat "$config_file")
+    body="$body,\"configText\":\"$(_esc "$config_text")\""
+  else
+    body="$body,\"configUrl\":\"$(_esc "$config_url")\""
+  fi
+  [[ -n "$username" ]] && body="$body,\"username\":\"$(_esc "$username")\""
+  [[ -n "$password" ]] && body="$body,\"password\":\"$(_esc "$password")\""
+  body="$body}"
+  _api_post "/api/network-egress" "$body" | _out
+}
+
+cmd_network_egress_update() {
+  local egress_id="${1:-}"
+  [[ -n "$egress_id" ]] || { echo "Usage: $CLI_NAME network-egress update <egress-id> [options]"; exit 1; }
+  shift || true
+  local name="" config_file="" config_url="" username="" password="" disabled_value="" changed=false
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --name)
+        [[ -n "${2:-}" ]] || { echo "Usage: $CLI_NAME network-egress update <egress-id> [options]"; exit 1; }
+        name="$2"; changed=true; shift 2 ;;
+      --config-file)
+        [[ -n "${2:-}" ]] || { echo "Usage: $CLI_NAME network-egress update <egress-id> [options]"; exit 1; }
+        config_file="$2"; changed=true; shift 2 ;;
+      --config-url)
+        [[ -n "${2:-}" ]] || { echo "Usage: $CLI_NAME network-egress update <egress-id> [options]"; exit 1; }
+        config_url="$2"; changed=true; shift 2 ;;
+      --username)
+        [[ -n "${2:-}" ]] || { echo "Usage: $CLI_NAME network-egress update <egress-id> [options]"; exit 1; }
+        username="$2"; changed=true; shift 2 ;;
+      --password)
+        [[ -n "${2:-}" ]] || { echo "Usage: $CLI_NAME network-egress update <egress-id> [options]"; exit 1; }
+        password="$2"; changed=true; shift 2 ;;
+      --enable)
+        [[ "$disabled_value" != "true" ]] || { echo "Error: --enable and --disable are mutually exclusive"; exit 1; }
+        disabled_value=false; changed=true; shift ;;
+      --disable)
+        [[ "$disabled_value" != "false" ]] || { echo "Error: --enable and --disable are mutually exclusive"; exit 1; }
+        disabled_value=true; changed=true; shift ;;
+      *) echo "Unknown network-egress update option: $1"; exit 1 ;;
+    esac
+  done
+  $changed || { echo "Usage: $CLI_NAME network-egress update <egress-id> [--name NAME] [--config-file PATH | --config-url URL] [--username USER --password PASS] [--enable|--disable]"; exit 1; }
+  [[ -z "$config_file" || -z "$config_url" ]] || { echo "Error: --config-file and --config-url are mutually exclusive"; exit 1; }
+
+  local body="{" sep="" config_text
+  if [[ -n "$name" ]]; then
+    body="$body\"name\":\"$(_esc "$name")\""; sep=","
+  fi
+  if [[ -n "$config_file" ]]; then
+    [[ -f "$config_file" ]] || { echo "Error: config file not found: $config_file" >&2; exit 1; }
+    config_text=$(cat "$config_file")
+    body="$body$sep\"configText\":\"$(_esc "$config_text")\""; sep=","
+  elif [[ -n "$config_url" ]]; then
+    body="$body$sep\"configUrl\":\"$(_esc "$config_url")\""; sep=","
+  fi
+  if [[ -n "$username" ]]; then
+    body="$body$sep\"username\":\"$(_esc "$username")\""; sep=","
+  fi
+  if [[ -n "$password" ]]; then
+    body="$body$sep\"password\":\"$(_esc "$password")\""; sep=","
+  fi
+  if [[ -n "$disabled_value" ]]; then
+    body="$body$sep\"disabled\":$disabled_value"
+  fi
+  body="$body}"
+  _api_patch "/api/network-egress/$egress_id" "$body" | _out
+}
+
+cmd_network_egress_delete() {
+  local egress_id="${1:-}"
+  [[ -n "$egress_id" ]] || { echo "Usage: $CLI_NAME network-egress delete <egress-id>"; exit 1; }
+  shift || true
+  [[ $# -eq 0 ]] || { echo "Unknown network-egress delete option: $1"; exit 1; }
+  _api_delete "/api/network-egress/$egress_id" | _out
+}
+
+cmd_network_egress_check() {
+  local egress_id="${1:-}"
+  [[ -n "$egress_id" ]] || { echo "Usage: $CLI_NAME network-egress check <egress-id>"; exit 1; }
+  [[ "$egress_id" != "direct" ]] || { echo "Error: direct is not a managed network egress profile and cannot be checked"; exit 1; }
+  shift || true
+  [[ $# -eq 0 ]] || { echo "Unknown network-egress check option: $1"; exit 1; }
+  _api_post "/api/network-egress/$egress_id/check" | _out
+}
+
 # ── Option parser ─────────────────────────────────────────────────────
 
 _parse_globals() {
@@ -518,8 +686,20 @@ case "${1:-}" in
       use)      shift; cmd_session_use "$@" ;;
       start)    shift; cmd_session_start "$@" ;;
       stop)     shift; cmd_session_stop "$@" ;;
+      set-network) shift; cmd_session_set_network "$@" ;;
       delete)   shift; cmd_session_delete "$@" ;;
-      *)        echo "Usage: $CLI_NAME session {list|create|use|start|stop|delete}" ;;
+      *)        echo "Usage: $CLI_NAME session {list|create|use|start|stop|set-network|delete}" ;;
+    esac
+    ;;
+  network-egress|network)
+    shift
+    case "${1:-}" in
+      list|ls)  shift; cmd_network_egress_list "$@" ;;
+      create)   shift; cmd_network_egress_create "$@" ;;
+      update)   shift; cmd_network_egress_update "$@" ;;
+      delete|rm) shift; cmd_network_egress_delete "$@" ;;
+      check)    shift; cmd_network_egress_check "$@" ;;
+      *)        echo "Usage: $CLI_NAME network-egress {list|create|update|delete|check}" ;;
     esac
     ;;
   navigate)     shift; cmd_navigate "$@" ;;
@@ -566,16 +746,31 @@ Environment:
 
 Sessions:
   session list                 List all sessions
-  session create [--name <n>]  Create a new session
+  session create [--name <n>] [--network-egress <id|direct>]
+                               Create a new session
   session use <id>             Set active session
   session start <id>           Start browser container
   session stop <id>            Stop browser container
+  session set-network <id|direct>
+                               Switch the target session network egress
   session delete <id>          Delete session and container; completed files are kept in Files
   session delete <id> --delete-files
                                Also delete all completed files for that session
 
 Session target:
   Commands may omit <id> after 'session use <id>', or use --session/-s.
+
+Network egress:
+  network                       Alias for network-egress
+  network-egress list          List Direct plus managed Clash/OpenVPN profiles
+  network-egress create --name <n> --type clash|openvpn (--config-file <path> | --config-url <url>)
+                 [--username <user> --password <pass>] [--disabled]
+                               Create a managed network egress profile
+  network-egress update <id> [--name <n>] [--config-file <path> | --config-url <url>]
+                 [--username <user> --password <pass>] [--enable|--disable]
+                               Update a managed network egress profile
+  network-egress delete <id>   Delete a managed network egress profile
+  network-egress check <id>    Check a managed network egress profile
 
 Browser (require active session):
   navigate <url>               Go to URL

@@ -25,31 +25,35 @@ A typical stateless automation sequence:
 bpilot session create --name "Task Name" --json
 # Read the returned "id".
 
-# 2. Start the target session when you need the VNC port.
+# 2. Optional: choose a managed network egress profile.
+bpilot network-egress list --json
+bpilot --session "<session-id>" session set-network "<egress-id-or-direct>"
+
+# 3. Start the target session when you need the VNC port.
 bpilot --session "<session-id>" session start
 
-# 3. Navigate. The container auto-starts if it is not running.
+# 4. Navigate. The container auto-starts if it is not running.
 bpilot --session "<session-id>" navigate https://example.com
 
-# 4. Observe the page. Use --mode dom by default; switch to vision for visual cards/feeds.
+# 5. Observe the page. Use --mode dom by default; switch to vision for visual cards/feeds.
 bpilot --session "<session-id>" observe --mode dom --json
 
-# 5. Interact.
+# 6. Interact.
 bpilot --session "<session-id>" click 640 380
 bpilot --session "<session-id>" click-element "a.login-btn"
 bpilot --session "<session-id>" type "hello world"
 bpilot --session "<session-id>" key Enter
 
-# 6. Verify result.
+# 7. Verify result.
 bpilot --session "<session-id>" observe --mode dom --json
 
-# 7. Screenshot for visual confirmation. Without --output, the JSON response
+# 8. Screenshot for visual confirmation. Without --output, the JSON response
 # contains a signed file.url and no base64 screenshot payload.
 bpilot --session "<session-id>" screenshot --json
 # Use --output when you also need a local copy.
 bpilot --session "<session-id>" screenshot --output result.png
 
-# 8. Inspect files captured by the browser session.
+# 9. Inspect files captured by the browser session.
 bpilot --session "<session-id>" files list --json
 ```
 
@@ -65,10 +69,27 @@ Add `--json` / `-j` to state-reading commands for machine-readable output.
 |---------|-------------|
 | `bpilot session list --json` | List all sessions with container status |
 | `bpilot session create --name NAME --json` | Create new session, returns ID |
+| `bpilot session create --name NAME --network-egress EGRESS_ID --json` | Create a session bound to a managed network egress profile |
 | `bpilot --session "<session-id>" session start` | Start container for the target session |
 | `bpilot --session "<session-id>" session stop` | Stop container for the target session |
+| `bpilot --session "<session-id>" session set-network EGRESS_ID_OR_DIRECT` | Switch the target session network egress |
 | `bpilot --session "<session-id>" session delete` | Delete session and container; completed files are kept in Files |
 | `bpilot --session "<session-id>" session delete --delete-files` | Delete session, container, and all completed files for that session |
+
+### Network Egress
+
+| Command | Description |
+|---------|-------------|
+| `bpilot network-egress list --json` | List Direct plus managed Clash/OpenVPN profiles |
+| `bpilot network-egress create --name NAME --type clash --config-file ./clash.yaml --json` | Create a managed Clash profile |
+| `bpilot network-egress create --name NAME --type openvpn --config-url URL --json` | Create a managed OpenVPN profile from a URL |
+| `bpilot network-egress update EGRESS_ID --config-file ./clash.yaml --json` | Replace managed profile config |
+| `bpilot network-egress update EGRESS_ID --enable --json` | Enable a managed profile |
+| `bpilot network-egress update EGRESS_ID --disable --json` | Disable a managed profile |
+| `bpilot network-egress check EGRESS_ID --json` | Check a managed profile |
+| `bpilot network-egress delete EGRESS_ID --json` | Delete an unused managed profile |
+
+Read `networkEgressId`, `networkEgressName`, `networkEgressType`, `networkEgressStatus`, and `networkEgressHealthError` from `bpilot session list --json` to inspect a session's current network setting. Use `direct` with `session set-network` to clear a managed egress binding.
 
 ### Browser Primitives
 

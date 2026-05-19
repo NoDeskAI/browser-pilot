@@ -232,17 +232,12 @@ def test_create_session_keeps_major_version_fallback(monkeypatch):
     }
 
 
-def test_change_proxy_endpoint_is_removed(monkeypatch):
-    pool = FakePool([
-        {"tenant_id": "tenant-1"},
-    ])
-    monkeypatch.setattr(sessions, "get_pool", lambda: pool)
-
-    with pytest.raises(sessions.HTTPException) as exc:
-        asyncio.run(sessions.change_proxy("session-1", _user()))
-
-    assert exc.value.status_code == 410
-    assert "Manual HTTP/SOCKS proxy has been removed" in exc.value.detail
+def test_change_proxy_endpoint_is_removed():
+    assert not any(
+        getattr(route, "path", "") == "/api/sessions/{session_id}/proxy"
+        and "POST" in (getattr(route, "methods", set()) or set())
+        for route in sessions.router.routes
+    )
 
 
 def test_create_session_rejects_manual_proxy(monkeypatch):

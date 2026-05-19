@@ -75,11 +75,25 @@ function manualCommandReferenceEn(c: string): string {
 
 ${c} session list                    # List all sessions
 ${c} session create --name "Task"    # Create session
+${c} session create --name "Task" --network-egress <egress-id|direct> # Create with network egress
 ${c} session use <session-id>        # Activate session
 ${c} session start <session-id>      # Start browser container
 ${c} session stop <session-id>       # Stop browser container
+${c} session set-network <egress-id|direct> # Switch active session network egress
 ${c} session delete <session-id>     # Delete session; completed files are kept in Files
 ${c} session delete <session-id> --delete-files # Also delete all completed files
+
+## Network Egress
+
+${c} network-egress list --json      # List Direct plus managed Clash/OpenVPN profiles
+${c} network-egress create --name "Office" --type clash --config-file ./clash.yaml
+${c} network-egress create --name "VPN" --type openvpn --config-url https://example.com/client.ovpn
+${c} network-egress update <egress-id> --config-file ./clash.yaml
+${c} network-egress update <egress-id> --disable
+${c} network-egress check <egress-id>
+${c} network-egress delete <egress-id>
+
+\`${c} session list --json\` returns \`networkEgressId\`, \`networkEgressName\`, \`networkEgressType\`, \`networkEgressStatus\`, and \`networkEgressHealthError\`.
 
 ## Browser Commands (use active session or --session)
 
@@ -140,11 +154,25 @@ function manualCommandReferenceZh(c: string): string {
 
 ${c} session list                    # 列出所有会话
 ${c} session create --name "任务"    # 创建会话
+${c} session create --name "任务" --network-egress <egress-id|direct> # 创建时指定网络出口
 ${c} session use <session-id>        # 激活会话
 ${c} session start <session-id>      # 启动浏览器容器
 ${c} session stop <session-id>       # 停止浏览器容器
+${c} session set-network <egress-id|direct> # 切换当前会话网络出口
 ${c} session delete <session-id>     # 删除会话，已完成文件保留到文件页
 ${c} session delete <session-id> --delete-files # 同时删除全部已完成文件
+
+## 网络出口
+
+${c} network-egress list --json      # 列出 Direct 和托管 Clash/OpenVPN 出口
+${c} network-egress create --name "Office" --type clash --config-file ./clash.yaml
+${c} network-egress create --name "VPN" --type openvpn --config-url https://example.com/client.ovpn
+${c} network-egress update <egress-id> --config-file ./clash.yaml
+${c} network-egress update <egress-id> --disable
+${c} network-egress check <egress-id>
+${c} network-egress delete <egress-id>
+
+\`${c} session list --json\` 会返回 \`networkEgressId\`、\`networkEgressName\`、\`networkEgressType\`、\`networkEgressStatus\`、\`networkEgressHealthError\`。
 
 ## 浏览器命令（使用 active session 或 --session）
 
@@ -211,6 +239,9 @@ ${c} session list --json
 # Path B: create a new session, then copy the returned "id".
 ${c} session create --name "Agent Task" --json
 
+# Optional: list managed network egress profiles and create or switch with --network-egress / session set-network.
+${c} network-egress list --json
+
 # Use the copied id directly:
 ${c} --session "<session-id>" session start`
 }
@@ -226,6 +257,9 @@ ${c} session list --json
 # 方案 B：创建新会话，然后复制返回的 "id"。
 ${c} session create --name "Agent Task" --json
 
+# 可选：列出托管网络出口，通过 --network-egress 或 session set-network 创建/切换。
+${c} network-egress list --json
+
 # 直接使用复制出来的 id：
 ${c} --session "<session-id>" session start`
 }
@@ -235,10 +269,22 @@ function agentCommandReferenceEn(c: string): string {
 
 ${c} session list --json                         # List all sessions
 ${c} session create --name "Task" --json         # Create session and read returned id
+${c} session create --name "Task" --network-egress <egress-id|direct> --json # Create with network egress
 ${c} --session "<session-id>" session start      # Start browser container
 ${c} --session "<session-id>" session stop       # Stop browser container
+${c} --session "<session-id>" session set-network <egress-id|direct> # Switch network egress
 ${c} --session "<session-id>" session delete     # Delete session; completed files are kept in Files
 ${c} --session "<session-id>" session delete --delete-files # Also delete all completed files
+
+## Network Egress
+
+${c} network-egress list --json                  # List Direct plus managed Clash/OpenVPN profiles
+${c} network-egress create --name "Office" --type clash --config-file ./clash.yaml --json
+${c} network-egress update <egress-id> --config-file ./clash.yaml --json
+${c} network-egress check <egress-id> --json
+${c} network-egress delete <egress-id> --json
+
+\`${c} session list --json\` returns the current \`networkEgress*\` fields for each session.
 
 ## Browser Commands (always pass --session)
 
@@ -294,10 +340,22 @@ function agentCommandReferenceZh(c: string): string {
 
 ${c} session list --json                         # 列出所有会话
 ${c} session create --name "任务" --json         # 创建会话并读取返回的 id
+${c} session create --name "任务" --network-egress <egress-id|direct> --json # 创建时指定网络出口
 ${c} --session "<session-id>" session start      # 启动浏览器容器
 ${c} --session "<session-id>" session stop       # 停止浏览器容器
+${c} --session "<session-id>" session set-network <egress-id|direct> # 切换网络出口
 ${c} --session "<session-id>" session delete     # 删除会话，已完成文件保留到文件页
 ${c} --session "<session-id>" session delete --delete-files # 同时删除全部已完成文件
+
+## 网络出口
+
+${c} network-egress list --json                  # 列出 Direct 和托管 Clash/OpenVPN 出口
+${c} network-egress create --name "Office" --type clash --config-file ./clash.yaml --json
+${c} network-egress update <egress-id> --config-file ./clash.yaml --json
+${c} network-egress check <egress-id> --json
+${c} network-egress delete <egress-id> --json
+
+\`${c} session list --json\` 会返回每个会话当前的 \`networkEgress*\` 字段。
 
 ## 浏览器命令（始终传 --session）
 
