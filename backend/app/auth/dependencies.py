@@ -30,6 +30,7 @@ class CurrentUser:
     role: str  # superadmin | admin | member
     created_at: str
     session_scope: str | None = field(default=None)
+    api_token_id: str | None = field(default=None)
 
 
 def _extract_token(request: Request) -> str | None:
@@ -45,7 +46,7 @@ async def _resolve_api_token(raw: str) -> CurrentUser | None:
     pool = get_pool()
     row = await pool.fetchrow(
         """
-        SELECT t.user_id, t.tenant_id, t.session_id,
+        SELECT t.id AS api_token_id, t.user_id, t.tenant_id, t.session_id,
                u.email, u.name, u.role, u.created_at
         FROM api_tokens t JOIN users u ON t.user_id = u.id
         WHERE t.token_hash = $1 AND u.is_active = TRUE
@@ -66,6 +67,7 @@ async def _resolve_api_token(raw: str) -> CurrentUser | None:
         role=row["role"],
         created_at=row["created_at"].isoformat(),
         session_scope=row["session_id"],
+        api_token_id=row["api_token_id"],
     )
 
 

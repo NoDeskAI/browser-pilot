@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query
 from fastapi.responses import Response
 from pydantic import BaseModel
 
+from app import agent_devices
 from app.auth.dependencies import (
     CurrentUser,
     get_current_user,
@@ -105,13 +106,35 @@ async def heartbeat_file_capture_route(
     from app.file_capture import heartbeat_file_capture, verify_file_capture_token
 
     await verify_file_capture_token(session_id, _runtime_token(authorization))
-    await heartbeat_file_capture(
-        session_id,
-        status=(body.status if body else "running"),
-        error=(body.error if body else ""),
-        downloads=(body.downloads if body else None),
-    )
-    return {"ok": True}
+    try:
+        await heartbeat_file_capture(
+            session_id,
+            status=(body.status if body else "running"),
+            error=(body.error if body else ""),
+            downloads=(body.downloads if body else None),
+        )
+        await agent_devices.record_runtime_action(
+            session_id,
+            action="session.files.heartbeat",
+            outcome="succeeded",
+            side_effect_level="internal",
+            summary="Runtime file capture heartbeat received",
+            details={
+                "status": body.status if body else "running",
+                "downloadCount": len(body.downloads or []) if body else 0,
+            },
+        )
+        return {"ok": True}
+    except Exception as exc:
+        await agent_devices.record_runtime_action(
+            session_id,
+            action="session.files.heartbeat",
+            outcome="failed",
+            side_effect_level="internal",
+            summary="Runtime file capture heartbeat failed",
+            error=str(exc),
+        )
+        raise
 
 
 @router.post("/api/sessions/{session_id}/files/ingest")
@@ -132,47 +155,68 @@ async def ingest_session_file(
     from app.file_service import save_file
 
     await verify_file_capture_token(session_id, _runtime_token(authorization))
-    if source != "browser_download":
-        raise HTTPException(422, "Unsupported file source")
-
     filename = originalName.strip() or file.filename or "download"
-    declared_type = contentType.strip() or file.content_type or "application/octet-stream"
-    expected_sha = sha256.strip().lower()
+    try:
+        if source != "browser_download":
+            raise HTTPException(422, "Unsupported file source")
 
-    with tempfile.TemporaryDirectory(prefix="bp-ingest-") as tmp:
-        tmp_path = Path(tmp) / _tmp_filename(filename)
-        digest = hashlib.sha256()
-        total = 0
-        with tmp_path.open("wb") as fh:
-            while True:
-                chunk = await file.read(1024 * 1024)
-                if not chunk:
-                    break
-                total += len(chunk)
-                digest.update(chunk)
-                fh.write(chunk)
+        declared_type = contentType.strip() or file.content_type or "application/octet-stream"
+        expected_sha = sha256.strip().lower()
 
-        if sizeBytes is not None and total != sizeBytes:
-            raise HTTPException(422, "Uploaded file size does not match sizeBytes")
-        actual_sha = digest.hexdigest()
-        if expected_sha and expected_sha != actual_sha:
-            raise HTTPException(422, "Uploaded file sha256 does not match")
+        with tempfile.TemporaryDirectory(prefix="bp-ingest-") as tmp:
+            tmp_path = Path(tmp) / _tmp_filename(filename)
+            digest = hashlib.sha256()
+            total = 0
+            with tmp_path.open("wb") as fh:
+                while True:
+                    chunk = await file.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    digest.update(chunk)
+                    fh.write(chunk)
 
-        saved = await save_file(
-            session_id=session_id,
-            source=source,
-            path=tmp_path,
-            filename=filename,
-            content_type=declared_type,
-            source_id=sourceId.strip() or None,
-            source_path=sourcePath.strip() or None,
-            source_mtime=sourceMtime,
-            sha256=actual_sha,
+            if sizeBytes is not None and total != sizeBytes:
+                raise HTTPException(422, "Uploaded file size does not match sizeBytes")
+            actual_sha = digest.hexdigest()
+            if expected_sha and expected_sha != actual_sha:
+                raise HTTPException(422, "Uploaded file sha256 does not match")
+
+            saved = await save_file(
+                session_id=session_id,
+                source=source,
+                path=tmp_path,
+                filename=filename,
+                content_type=declared_type,
+                source_id=sourceId.strip() or None,
+                source_path=sourcePath.strip() or None,
+                source_mtime=sourceMtime,
+                sha256=actual_sha,
+            )
+
+        clear_active_download(session_id, sourceId.strip() or None)
+        await heartbeat_file_capture(session_id, status="running")
+        await agent_devices.record_runtime_action(
+            session_id,
+            action="session.files.ingest",
+            outcome="succeeded",
+            side_effect_level="internal",
+            summary=f"Runtime ingested browser download {filename}",
+            evidence_refs=[{"type": "session_file", "id": saved.get("id"), "url": saved.get("url")}],
+            details={"sourceId": sourceId.strip() or None, "sizeBytes": total},
         )
-
-    clear_active_download(session_id, sourceId.strip() or None)
-    await heartbeat_file_capture(session_id, status="running")
-    return {"ok": True, "file": saved}
+        return {"ok": True, "file": saved}
+    except Exception as exc:
+        await agent_devices.record_runtime_action(
+            session_id,
+            action="session.files.ingest",
+            outcome="failed",
+            side_effect_level="internal",
+            summary=f"Runtime failed to ingest browser download {filename}",
+            details={"sourceId": sourceId.strip() or None},
+            error=str(exc),
+        )
+        raise
 
 
 @router.post("/api/sessions/{session_id}/files")
@@ -185,27 +229,41 @@ async def upload_session_file(
     from app.file_service import save_file
 
     await verify_session_access(session_id, user)
+    ctx, rejected = await agent_devices.begin_compatible_action(
+        session_id, user, action="session.files.upload", side_effect_level="internal"
+    )
+    if rejected:
+        return rejected
     filename = originalName.strip() or file.filename or "file"
     content_type = file.content_type or "application/octet-stream"
+    try:
+        with tempfile.TemporaryDirectory(prefix="bp-upload-") as tmp:
+            tmp_path = Path(tmp) / _tmp_filename(filename)
+            with tmp_path.open("wb") as fh:
+                while True:
+                    chunk = await file.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    fh.write(chunk)
 
-    with tempfile.TemporaryDirectory(prefix="bp-upload-") as tmp:
-        tmp_path = Path(tmp) / _tmp_filename(filename)
-        with tmp_path.open("wb") as fh:
-            while True:
-                chunk = await file.read(1024 * 1024)
-                if not chunk:
-                    break
-                fh.write(chunk)
+            saved = await save_file(
+                session_id=session_id,
+                source="user_upload",
+                path=tmp_path,
+                filename=filename,
+                content_type=content_type,
+            )
 
-        saved = await save_file(
-            session_id=session_id,
-            source="user_upload",
-            path=tmp_path,
-            filename=filename,
-            content_type=content_type,
+        return await agent_devices.complete_compatible_action(
+            ctx,
+            {"ok": True, "file": saved},
+            summary=f"Uploaded file {filename} into session",
+            evidence_refs=[{"type": "session_file", "id": saved.get("id"), "url": saved.get("url")}],
+            details={"filename": filename, "contentType": content_type},
+            retry_safety="unknown",
         )
-
-    return {"ok": True, "file": saved}
+    except Exception as exc:
+        return await agent_devices.fail_compatible_action(ctx, str(exc))
 
 
 @router.get("/api/sessions/{session_id}/files/{file_id}")
@@ -217,7 +275,22 @@ async def get_session_file_route(
     from app.file_service import get_session_file
 
     await verify_session_access(session_id, user)
-    return {"file": await get_session_file(session_id, file_id)}
+    ctx, rejected = await agent_devices.begin_compatible_action(
+        session_id, user, action="session.files.get", side_effect_level="none"
+    )
+    if rejected:
+        return rejected
+    try:
+        file_payload = await get_session_file(session_id, file_id)
+        return await agent_devices.complete_compatible_action(
+            ctx,
+            {"file": file_payload},
+            summary=f"Read session file {file_id}",
+            evidence_refs=[{"type": "session_file", "id": file_payload.get("id"), "url": file_payload.get("url")}],
+            retry_safety="safe",
+        )
+    except Exception as exc:
+        return await agent_devices.fail_compatible_action(ctx, str(exc), retry_safety="safe")
 
 
 @router.patch("/api/sessions/{session_id}/files/{file_id}")
@@ -230,7 +303,22 @@ async def rename_session_file_route(
     from app.file_service import rename_session_file
 
     await verify_session_access(session_id, user)
-    return {"ok": True, "file": await rename_session_file(session_id, file_id, body.name)}
+    ctx, rejected = await agent_devices.begin_compatible_action(
+        session_id, user, action="session.files.rename", side_effect_level="internal"
+    )
+    if rejected:
+        return rejected
+    try:
+        renamed = await rename_session_file(session_id, file_id, body.name)
+        return await agent_devices.complete_compatible_action(
+            ctx,
+            {"ok": True, "file": renamed},
+            summary=f"Renamed session file {file_id}",
+            evidence_refs=[{"type": "session_file", "id": renamed.get("id"), "url": renamed.get("url")}],
+            details={"name": body.name},
+        )
+    except Exception as exc:
+        return await agent_devices.fail_compatible_action(ctx, str(exc))
 
 
 @router.delete("/api/sessions/{session_id}/files/{file_id}")
@@ -242,4 +330,19 @@ async def delete_session_file_route(
     from app.file_service import delete_session_file
 
     await verify_session_access(session_id, user)
-    return await delete_session_file(session_id, file_id)
+    ctx, rejected = await agent_devices.begin_compatible_action(
+        session_id, user, action="session.files.delete", side_effect_level="internal"
+    )
+    if rejected:
+        return rejected
+    try:
+        result = await delete_session_file(session_id, file_id)
+        return await agent_devices.complete_compatible_action(
+            ctx,
+            result,
+            summary=f"Deleted session file {file_id}",
+            evidence_refs=[{"type": "session_file", "id": file_id}],
+            details=result,
+        )
+    except Exception as exc:
+        return await agent_devices.fail_compatible_action(ctx, str(exc))

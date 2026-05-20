@@ -79,3 +79,70 @@ export interface DeleteSessionResult {
   ok: boolean
   files?: DeleteSessionFileHandlingResult
 }
+
+export interface AgentDeviceLease {
+  id: string
+  device_instance_id: string
+  device_type: 'browser_session' | string
+  lease_mode: 'session_bound' | 'task_bound' | string
+  status: 'active' | 'released' | 'expired' | 'reclaimed' | string
+  operator: string
+  operator_owner_user_id?: string | null
+  task_id?: string | null
+  expires_at?: string | null
+  acquired_at?: string | null
+  updated_at?: string | null
+  released_at?: string | null
+  release_reason?: string | null
+}
+
+export interface AgentDeviceActionSummary {
+  action?: string
+  status?: string
+  auditEventId?: string
+  occurredAt?: string
+  sideEffectLevel?: string
+}
+
+export interface AgentDeviceVisibility {
+  device_instance_id: string
+  device_type: 'browser_session' | string
+  state: 'idle' | 'leased' | 'expired' | string
+  lease_id?: string | null
+  current_operator?: string | null
+  task_id?: string | null
+  session_id: string
+  session_name?: string | null
+  owner_user_id?: string | null
+  operator_owner_user_id?: string | null
+  pause_capability: string
+  needs_intervention: boolean
+  observable_surface_ref?: string | null
+  last_action_summary?: AgentDeviceActionSummary | null
+  updated_at?: string | null
+  runtime_state?: string | null
+  containerStatus?: string | null
+  lease?: AgentDeviceLease | null
+}
+
+export interface AgentDeviceAuditEvent {
+  id: string
+  device_instance_id: string
+  device_type: string
+  session_id?: string | null
+  tenant_id?: string | null
+  lease_id?: string | null
+  operator?: string | null
+  operator_owner_user_id?: string | null
+  action: string
+  status: 'succeeded' | 'failed' | 'rejected' | string
+  side_effect_level?: string | null
+  retry_safety?: string | null
+  route?: string | null
+  method?: string | null
+  status_code?: number | null
+  error_code?: string | null
+  error_message?: string | null
+  metadata?: Record<string, any> | null
+  occurred_at: string
+}

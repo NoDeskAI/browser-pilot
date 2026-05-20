@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import BigInteger, Boolean, Float, ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, Boolean, Float, ForeignKey, JSON, String, Text, UniqueConstraint
 from sqlalchemy import func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from datetime import datetime
@@ -148,6 +148,53 @@ class SessionRuntimeStatus(Base):
     updated_at: Mapped[datetime] = mapped_column(
         nullable=False, server_default=func.now()
     )
+
+
+class AgentDeviceLease(Base):
+    __tablename__ = "agent_device_leases"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    device_instance_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("sessions.id", ondelete="CASCADE"), nullable=False
+    )
+    device_type: Mapped[str] = mapped_column(Text, nullable=False, server_default="browser_session")
+    lease_mode: Mapped[str] = mapped_column(Text, nullable=False)
+    task_id: Mapped[str | None] = mapped_column(Text)
+    session_id: Mapped[str] = mapped_column(Text, ForeignKey("sessions.id", ondelete="CASCADE"), nullable=False)
+    tenant_id: Mapped[str | None] = mapped_column(Text)
+    operator_subject: Mapped[str] = mapped_column(Text, nullable=False)
+    operator_owner_user_id: Mapped[str | None] = mapped_column(Text)
+    current_operator: Mapped[str] = mapped_column(Text, nullable=False)
+    authorized_operators: Mapped[list | None] = mapped_column(JSON)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="active")
+    expires_at: Mapped[datetime | None] = mapped_column()
+    released_at: Mapped[datetime | None] = mapped_column()
+    reclaimed_at: Mapped[datetime | None] = mapped_column()
+    invalidated_reason: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(nullable=False, server_default=func.now())
+
+
+class AgentDeviceAuditEvent(Base):
+    __tablename__ = "agent_device_audit_events"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    tenant_id: Mapped[str | None] = mapped_column(Text)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    actor_owner_user_id: Mapped[str | None] = mapped_column(Text)
+    device_instance_id: Mapped[str] = mapped_column(Text, nullable=False)
+    lease_id: Mapped[str | None] = mapped_column(Text)
+    task_id: Mapped[str | None] = mapped_column(Text)
+    session_id: Mapped[str] = mapped_column(Text, nullable=False)
+    action: Mapped[str] = mapped_column(Text, nullable=False)
+    outcome: Mapped[str] = mapped_column(Text, nullable=False)
+    side_effect_level: Mapped[str] = mapped_column(Text, nullable=False)
+    audit_boundary: Mapped[str] = mapped_column(Text, nullable=False)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    evidence_refs: Mapped[list | None] = mapped_column(JSON)
+    details: Mapped[dict | None] = mapped_column(JSON)
+    error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(nullable=False, server_default=func.now())
 
 
 class NetworkEgressProfile(Base):

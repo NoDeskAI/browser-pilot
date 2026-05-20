@@ -7,6 +7,7 @@ import logging
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 
+from app import agent_devices
 from app.auth.dependencies import CurrentUser, get_session_aware_user, verify_session_access
 from app.auto_name import maybe_auto_name
 from app.container import ensure_localhost_bridge_for_url
@@ -108,6 +109,11 @@ def mix_needs_vision_fallback(result: object) -> bool:
 @router.post("/api/browser/navigate")
 async def api_navigate(body: NavigateBody, user: CurrentUser = Depends(get_session_aware_user)):
     await verify_session_access(body.sessionId, user)
+    ctx, rejected = await agent_devices.begin_compatible_action(
+        body.sessionId, user, action="browser.navigate", side_effect_level="external"
+    )
+    if rejected:
+        return rejected
     try:
         localhost_bridge = await ensure_localhost_bridge_for_url(body.sessionId, body.url)
         async with browser_session(body.sessionId) as (sid, base):
@@ -119,10 +125,15 @@ async def api_navigate(body: NavigateBody, user: CurrentUser = Depends(get_sessi
             page = await quick_observe(sid, base_url=base)
         asyncio.create_task(_update_session_page(body.sessionId, page.get("url"), page.get("title")))
         asyncio.create_task(maybe_auto_name(body.sessionId, page.get("url", ""), page.get("title", "")))
-        return {"ok": True, "navigatedTo": body.url, "currentPage": page, "localhostBridge": localhost_bridge}
+        return await agent_devices.complete_compatible_action(
+            ctx,
+            {"ok": True, "navigatedTo": body.url, "currentPage": page, "localhostBridge": localhost_bridge},
+            summary=f"Navigated browser to {body.url}",
+            details={"url": body.url},
+        )
     except Exception as exc:
         logger.error("navigate failed: %s", exc)
-        return {"ok": False, "error": str(exc)}
+        return await agent_devices.fail_compatible_action(ctx, str(exc))
 
 
 # ---------------------------------------------------------------------------
@@ -132,13 +143,23 @@ async def api_navigate(body: NavigateBody, user: CurrentUser = Depends(get_sessi
 @router.get("/api/browser/current")
 async def api_current(sessionId: str = Query(...), user: CurrentUser = Depends(get_session_aware_user)):
     await verify_session_access(sessionId, user)
+    ctx, rejected = await agent_devices.begin_compatible_action(
+        sessionId, user, action="browser.current", side_effect_level="none"
+    )
+    if rejected:
+        return rejected
     try:
         async with browser_session(sessionId) as (sid, base):
             url = await wd_fetch(f"/session/{sid}/url", timeout=5, base_url=base)
             title = await wd_fetch(f"/session/{sid}/title", timeout=5, base_url=base)
-        return {"ok": True, "url": url, "title": title}
+        return await agent_devices.complete_compatible_action(
+            ctx,
+            {"ok": True, "url": url, "title": title},
+            summary="Read current browser page",
+            retry_safety="safe",
+        )
     except Exception as exc:
-        return {"ok": False, "error": str(exc)}
+        return await agent_devices.fail_compatible_action(ctx, str(exc), retry_safety="safe")
 
 
 # ---------------------------------------------------------------------------
@@ -148,10 +169,22 @@ async def api_current(sessionId: str = Query(...), user: CurrentUser = Depends(g
 @router.post("/api/browser/observe")
 async def api_observe(body: SessionBody, user: CurrentUser = Depends(get_session_aware_user)):
     await verify_session_access(body.sessionId, user)
+    ctx, rejected = await agent_devices.begin_compatible_action(
+        body.sessionId, user, action="browser.observe", side_effect_level="none"
+    )
+    if rejected:
+        return rejected
     try:
         mode = (body.mode or "dom").strip().lower()
         if mode not in {"dom", "vision", "mix"}:
-            return {"ok": False, "error": 'observe mode must be one of: "dom", "vision", "mix"'}
+            return await agent_devices.complete_compatible_action(
+                ctx,
+                {"ok": False, "error": 'observe mode must be one of: "dom", "vision", "mix"'},
+                status="failed",
+                summary="Browser observe rejected invalid mode",
+                retry_safety="safe",
+                next_step="fix_request",
+            )
 
         async with browser_session(body.sessionId) as (sid, base):
             result = {}
@@ -276,9 +309,14 @@ async def api_observe(body: SessionBody, user: CurrentUser = Depends(get_session
                 result["screenshot"] = screenshot_base64
         if isinstance(result, dict):
             asyncio.create_task(_update_session_page(body.sessionId, result.get("url"), result.get("title")))
-        return {"ok": True, **(result if isinstance(result, dict) else {})}
+        return await agent_devices.complete_compatible_action(
+            ctx,
+            {"ok": True, **(result if isinstance(result, dict) else {})},
+            summary=f"Observed browser page with {mode} mode",
+            retry_safety="safe",
+        )
     except Exception as exc:
-        return {"ok": False, "error": str(exc)}
+        return await agent_devices.fail_compatible_action(ctx, str(exc), retry_safety="safe")
 
 
 # ---------------------------------------------------------------------------
@@ -288,6 +326,11 @@ async def api_observe(body: SessionBody, user: CurrentUser = Depends(get_session
 @router.post("/api/browser/click")
 async def api_click(body: ClickBody, user: CurrentUser = Depends(get_session_aware_user)):
     await verify_session_access(body.sessionId, user)
+    ctx, rejected = await agent_devices.begin_compatible_action(
+        body.sessionId, user, action="browser.click", side_effect_level="external"
+    )
+    if rejected:
+        return rejected
     try:
         async with browser_session(body.sessionId) as (sid, base):
             x, y = body.x, body.y
@@ -302,15 +345,20 @@ async def api_click(body: ClickBody, user: CurrentUser = Depends(get_session_awa
             new_tab = len(handles_after) > len(handles_before)
             page = await quick_observe(sid, base_url=base)
         asyncio.create_task(_update_session_page(body.sessionId, page.get("url"), page.get("title")))
-        return {
-            "ok": True,
-            "clickedAt": {"x": x, "y": y},
-            "newTabOpened": new_tab,
-            "tabCount": len(handles_after),
-            "currentPage": page,
-        }
+        return await agent_devices.complete_compatible_action(
+            ctx,
+            {
+                "ok": True,
+                "clickedAt": {"x": x, "y": y},
+                "newTabOpened": new_tab,
+                "tabCount": len(handles_after),
+                "currentPage": page,
+            },
+            summary=f"Clicked browser coordinates {x},{y}",
+            details={"x": x, "y": y, "newTabOpened": new_tab},
+        )
     except Exception as exc:
-        return {"ok": False, "error": str(exc)}
+        return await agent_devices.fail_compatible_action(ctx, str(exc))
 
 
 # ---------------------------------------------------------------------------
@@ -320,6 +368,11 @@ async def api_click(body: ClickBody, user: CurrentUser = Depends(get_session_awa
 @router.post("/api/browser/click-element")
 async def api_click_element(body: ClickElementBody, user: CurrentUser = Depends(get_session_aware_user)):
     await verify_session_access(body.sessionId, user)
+    ctx, rejected = await agent_devices.begin_compatible_action(
+        body.sessionId, user, action="browser.click_element", side_effect_level="external"
+    )
+    if rejected:
+        return rejected
     try:
         async with browser_session(body.sessionId) as (sid, base):
             handles_before = await wd_fetch(
@@ -331,7 +384,15 @@ async def api_click_element(body: ClickElementBody, user: CurrentUser = Depends(
                 base_url=base,
             )
             if not (click_result or {}).get("found"):
-                return {"ok": False, "error": f'Element "{body.selector}" not found'}
+                return await agent_devices.complete_compatible_action(
+                    ctx,
+                    {"ok": False, "error": f'Element "{body.selector}" not found'},
+                    status="failed",
+                    summary=f'Element "{body.selector}" not found',
+                    details={"selector": body.selector},
+                    retry_safety="safe",
+                    next_step="observe",
+                )
             await asyncio.sleep(0.8)
             handles_after = await wd_fetch(
                 f"/session/{sid}/window/handles", timeout=5, base_url=base,
@@ -339,16 +400,21 @@ async def api_click_element(body: ClickElementBody, user: CurrentUser = Depends(
             new_tab = len(handles_after) > len(handles_before)
             page = await quick_observe(sid, base_url=base)
         asyncio.create_task(_update_session_page(body.sessionId, page.get("url"), page.get("title")))
-        return {
-            "ok": True,
-            "selector": body.selector,
-            "clicked": click_result,
-            "newTabOpened": new_tab,
-            "tabCount": len(handles_after),
-            "currentPage": page,
-        }
+        return await agent_devices.complete_compatible_action(
+            ctx,
+            {
+                "ok": True,
+                "selector": body.selector,
+                "clicked": click_result,
+                "newTabOpened": new_tab,
+                "tabCount": len(handles_after),
+                "currentPage": page,
+            },
+            summary=f'Clicked browser element "{body.selector}"',
+            details={"selector": body.selector, "newTabOpened": new_tab},
+        )
     except Exception as exc:
-        return {"ok": False, "error": str(exc)}
+        return await agent_devices.fail_compatible_action(ctx, str(exc))
 
 
 # ---------------------------------------------------------------------------
@@ -358,6 +424,11 @@ async def api_click_element(body: ClickElementBody, user: CurrentUser = Depends(
 @router.post("/api/browser/type")
 async def api_type(body: TypeBody, user: CurrentUser = Depends(get_session_aware_user)):
     await verify_session_access(body.sessionId, user)
+    ctx, rejected = await agent_devices.begin_compatible_action(
+        body.sessionId, user, action="browser.type", side_effect_level="external"
+    )
+    if rejected:
+        return rejected
     try:
         async with browser_session(body.sessionId) as (sid, base):
             await wd_fetch(f"/session/{sid}/actions", "POST", {
@@ -369,9 +440,14 @@ async def api_type(body: TypeBody, user: CurrentUser = Depends(get_session_aware
             await wd_fetch(f"/session/{sid}/actions", "DELETE", base_url=base)
             page = await quick_observe(sid, base_url=base)
         asyncio.create_task(_update_session_page(body.sessionId, page.get("url"), page.get("title")))
-        return {"ok": True, "typed": body.text, "currentPage": page}
+        return await agent_devices.complete_compatible_action(
+            ctx,
+            {"ok": True, "typed": body.text, "currentPage": page},
+            summary="Typed text into browser",
+            details={"textLength": len(body.text)},
+        )
     except Exception as exc:
-        return {"ok": False, "error": str(exc)}
+        return await agent_devices.fail_compatible_action(ctx, str(exc))
 
 
 # ---------------------------------------------------------------------------
@@ -381,6 +457,11 @@ async def api_type(body: TypeBody, user: CurrentUser = Depends(get_session_aware
 @router.post("/api/browser/key")
 async def api_key(body: KeyBody, user: CurrentUser = Depends(get_session_aware_user)):
     await verify_session_access(body.sessionId, user)
+    ctx, rejected = await agent_devices.begin_compatible_action(
+        body.sessionId, user, action="browser.key", side_effect_level="external"
+    )
+    if rejected:
+        return rejected
     try:
         async with browser_session(body.sessionId) as (sid, base):
             key_value = KEY_MAP.get(body.key, body.key)
@@ -397,9 +478,14 @@ async def api_key(body: KeyBody, user: CurrentUser = Depends(get_session_aware_u
             await asyncio.sleep(0.5)
             page = await quick_observe(sid, base_url=base)
         asyncio.create_task(_update_session_page(body.sessionId, page.get("url"), page.get("title")))
-        return {"ok": True, "key": body.key, "currentPage": page}
+        return await agent_devices.complete_compatible_action(
+            ctx,
+            {"ok": True, "key": body.key, "currentPage": page},
+            summary=f"Pressed browser key {body.key}",
+            details={"key": body.key},
+        )
     except Exception as exc:
-        return {"ok": False, "error": str(exc)}
+        return await agent_devices.fail_compatible_action(ctx, str(exc))
 
 
 # ---------------------------------------------------------------------------
@@ -409,6 +495,11 @@ async def api_key(body: KeyBody, user: CurrentUser = Depends(get_session_aware_u
 @router.post("/api/browser/scroll")
 async def api_scroll(body: ScrollBody, user: CurrentUser = Depends(get_session_aware_user)):
     await verify_session_access(body.sessionId, user)
+    ctx, rejected = await agent_devices.begin_compatible_action(
+        body.sessionId, user, action="browser.scroll", side_effect_level="external"
+    )
+    if rejected:
+        return rejected
     try:
         async with browser_session(body.sessionId) as (sid, base):
             await wd_fetch(f"/session/{sid}/actions", "POST", {
@@ -426,9 +517,14 @@ async def api_scroll(body: ScrollBody, user: CurrentUser = Depends(get_session_a
                 }],
             }, base_url=base)
             await wd_fetch(f"/session/{sid}/actions", "DELETE", base_url=base)
-        return {"ok": True, "deltaX": body.deltaX, "deltaY": body.deltaY}
+        return await agent_devices.complete_compatible_action(
+            ctx,
+            {"ok": True, "deltaX": body.deltaX, "deltaY": body.deltaY},
+            summary=f"Scrolled browser by {body.deltaX},{body.deltaY}",
+            details={"deltaX": body.deltaX, "deltaY": body.deltaY},
+        )
     except Exception as exc:
-        return {"ok": False, "error": str(exc)}
+        return await agent_devices.fail_compatible_action(ctx, str(exc))
 
 
 # ---------------------------------------------------------------------------
@@ -438,6 +534,11 @@ async def api_scroll(body: ScrollBody, user: CurrentUser = Depends(get_session_a
 @router.get("/api/browser/tabs")
 async def api_tabs(sessionId: str = Query(...), user: CurrentUser = Depends(get_session_aware_user)):
     await verify_session_access(sessionId, user)
+    ctx, rejected = await agent_devices.begin_compatible_action(
+        sessionId, user, action="browser.tabs", side_effect_level="none"
+    )
+    if rejected:
+        return rejected
     try:
         async with browser_session(sessionId) as (sid, base):
             handles = await wd_fetch(
@@ -459,9 +560,14 @@ async def api_tabs(sessionId: str = Query(...), user: CurrentUser = Depends(get_
                 f"/session/{sid}/window", "POST",
                 {"handle": current_handle}, timeout=5, base_url=base,
             )
-        return {"ok": True, "tabs": tabs, "count": len(tabs)}
+        return await agent_devices.complete_compatible_action(
+            ctx,
+            {"ok": True, "tabs": tabs, "count": len(tabs)},
+            summary=f"Listed {len(tabs)} browser tabs",
+            retry_safety="safe",
+        )
     except Exception as exc:
-        return {"ok": False, "error": str(exc)}
+        return await agent_devices.fail_compatible_action(ctx, str(exc), retry_safety="safe")
 
 
 # ---------------------------------------------------------------------------
@@ -471,6 +577,11 @@ async def api_tabs(sessionId: str = Query(...), user: CurrentUser = Depends(get_
 @router.post("/api/browser/switch-tab")
 async def api_switch_tab(body: SwitchTabBody, user: CurrentUser = Depends(get_session_aware_user)):
     await verify_session_access(body.sessionId, user)
+    ctx, rejected = await agent_devices.begin_compatible_action(
+        body.sessionId, user, action="browser.switch_tab", side_effect_level="external"
+    )
+    if rejected:
+        return rejected
     try:
         async with browser_session(body.sessionId) as (sid, base):
             handles = await wd_fetch(
@@ -478,15 +589,36 @@ async def api_switch_tab(body: SwitchTabBody, user: CurrentUser = Depends(get_se
             )
             if body.handle:
                 if body.handle not in handles:
-                    return {"ok": False, "error": f'Handle "{body.handle}" not found'}
+                    return await agent_devices.complete_compatible_action(
+                        ctx,
+                        {"ok": False, "error": f'Handle "{body.handle}" not found'},
+                        status="failed",
+                        summary=f'Browser tab handle "{body.handle}" not found',
+                        retry_safety="safe",
+                        next_step="tabs",
+                    )
                 target = body.handle
             elif body.index is not None:
                 idx = body.index if body.index >= 0 else len(handles) + body.index
                 if idx < 0 or idx >= len(handles):
-                    return {"ok": False, "error": f"Index {body.index} out of range ({len(handles)} tabs)"}
+                    return await agent_devices.complete_compatible_action(
+                        ctx,
+                        {"ok": False, "error": f"Index {body.index} out of range ({len(handles)} tabs)"},
+                        status="failed",
+                        summary=f"Browser tab index {body.index} out of range",
+                        retry_safety="safe",
+                        next_step="tabs",
+                    )
                 target = handles[idx]
             else:
-                return {"ok": False, "error": "Must provide handle or index"}
+                return await agent_devices.complete_compatible_action(
+                    ctx,
+                    {"ok": False, "error": "Must provide handle or index"},
+                    status="failed",
+                    summary="Browser tab switch missing target",
+                    retry_safety="safe",
+                    next_step="fix_request",
+                )
 
             if body.closeCurrent:
                 await wd_fetch(f"/session/{sid}/window", "DELETE", timeout=5, base_url=base)
@@ -496,9 +628,14 @@ async def api_switch_tab(body: SwitchTabBody, user: CurrentUser = Depends(get_se
             )
             page = await quick_observe(sid, base_url=base)
         asyncio.create_task(_update_session_page(body.sessionId, page.get("url"), page.get("title")))
-        return {"ok": True, "switchedTo": target, "currentPage": page}
+        return await agent_devices.complete_compatible_action(
+            ctx,
+            {"ok": True, "switchedTo": target, "currentPage": page},
+            summary="Switched browser tab",
+            details={"target": target, "closeCurrent": body.closeCurrent},
+        )
     except Exception as exc:
-        return {"ok": False, "error": str(exc)}
+        return await agent_devices.fail_compatible_action(ctx, str(exc))
 
 
 # ---------------------------------------------------------------------------
@@ -512,6 +649,11 @@ async def api_screenshot(
     user: CurrentUser = Depends(get_session_aware_user),
 ):
     await verify_session_access(sessionId, user)
+    ctx, rejected = await agent_devices.begin_compatible_action(
+        sessionId, user, action="browser.screenshot", side_effect_level="internal"
+    )
+    if rejected:
+        return rejected
     try:
         async with browser_session(sessionId) as (sid, base):
             b64 = await wd_fetch(f"/session/{sid}/screenshot", base_url=base)
@@ -524,6 +666,12 @@ async def api_screenshot(
             filename="screenshot.png",
             content_type="image/png",
         )
-        return {"ok": True, "file": file, "screenshot": b64 if includeBase64 is True else None}
+        return await agent_devices.complete_compatible_action(
+            ctx,
+            {"ok": True, "file": file, "screenshot": b64 if includeBase64 is True else None},
+            summary="Captured browser screenshot",
+            evidence_refs=[{"type": "session_file", "id": file.get("id"), "url": file.get("url")}],
+            retry_safety="safe",
+        )
     except Exception as exc:
-        return {"ok": False, "error": str(exc)}
+        return await agent_devices.fail_compatible_action(ctx, str(exc), retry_safety="safe")

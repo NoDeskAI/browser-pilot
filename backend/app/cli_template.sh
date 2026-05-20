@@ -520,6 +520,84 @@ cmd_files_delete() {
   _api_delete "/api/sessions/$(_sid)/files/$file_id" | _out
 }
 
+# ── Agent Device commands ───────────────────────────────────────────────
+
+_lease_body() {
+  local mode="session_bound" task_id="" ttl="" expires_at=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --mode)
+        mode="${2:-session_bound}"; shift 2 ;;
+      --task-id)
+        task_id="${2:-}"; shift 2 ;;
+      --ttl|--ttl-seconds)
+        ttl="${2:-}"; shift 2 ;;
+      --expires-at)
+        expires_at="${2:-}"; shift 2 ;;
+      *) echo "Unknown lease option: $1"; exit 1 ;;
+    esac
+  done
+  local body="{\"leaseMode\":\"$(_esc "$mode")\""
+  [[ -n "$task_id" ]] && body="$body,\"taskId\":\"$(_esc "$task_id")\""
+  [[ -n "$ttl" ]] && body="$body,\"ttlSeconds\":$ttl"
+  [[ -n "$expires_at" ]] && body="$body,\"expiresAt\":\"$(_esc "$expires_at")\""
+  body="$body}"
+  printf '%s' "$body"
+}
+
+cmd_devices() {
+  _api_get "/api/agent-devices" | _out
+}
+
+cmd_device() {
+  local device_id="${1:-}"
+  [[ -n "$device_id" ]] || { echo "Usage: $CLI_NAME device <device-id>"; exit 1; }
+  _api_get "/api/agent-devices/$device_id" | _out
+}
+
+cmd_lease_acquire() {
+  local device_id="${1:-}"
+  [[ -n "$device_id" ]] || { echo "Usage: $CLI_NAME lease acquire <device-id> [--mode session_bound|task_bound] [--task-id ID] [--ttl seconds|--expires-at ISO8601]"; exit 1; }
+  shift || true
+  _api_post "/api/agent-devices/$device_id/leases" "$(_lease_body "$@")" | _out
+}
+
+cmd_lease_renew() {
+  local device_id="${1:-}" lease_id="${2:-}"
+  [[ -n "$device_id" && -n "$lease_id" ]] || { echo "Usage: $CLI_NAME lease renew <device-id> <lease-id> [--ttl seconds|--expires-at ISO8601]"; exit 1; }
+  shift 2 || true
+  _api_patch "/api/agent-devices/$device_id/leases/$lease_id" "$(_lease_body "$@")" | _out
+}
+
+cmd_lease_release() {
+  local device_id="${1:-}" lease_id="${2:-}"
+  [[ -n "$device_id" && -n "$lease_id" ]] || { echo "Usage: $CLI_NAME lease release <device-id> <lease-id>"; exit 1; }
+  _api_post "/api/agent-devices/$device_id/leases/$lease_id/release" "{}" | _out
+}
+
+cmd_lease_reclaim() {
+  local device_id="${1:-}"
+  [[ -n "$device_id" ]] || { echo "Usage: $CLI_NAME lease reclaim <device-id> [--ttl seconds|--expires-at ISO8601]"; exit 1; }
+  shift || true
+  _api_post "/api/agent-devices/$device_id/reclaim" "$(_lease_body "$@")" | _out
+}
+
+cmd_audit() {
+  local device_id="" limit=100
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --device) device_id="${2:-}"; shift 2 ;;
+      --limit|-n) limit="${2:-100}"; shift 2 ;;
+      *) echo "Unknown audit option: $1"; exit 1 ;;
+    esac
+  done
+  if [[ -n "$device_id" ]]; then
+    _api_get "/api/agent-devices/$device_id/audit?limit=$limit" | _out
+  else
+    _api_get "/api/agent-devices/audit?limit=$limit" | _out
+  fi
+}
+
 # ── Network egress commands ──────────────────────────────────────────────
 
 cmd_network_egress_list() {
@@ -702,6 +780,22 @@ case "${1:-}" in
       *)        echo "Usage: $CLI_NAME network-egress {list|create|update|delete|check}" ;;
     esac
     ;;
+  devices)
+    shift; cmd_devices "$@" ;;
+  device)
+    shift; cmd_device "$@" ;;
+  lease)
+    shift
+    case "${1:-}" in
+      acquire) shift; cmd_lease_acquire "$@" ;;
+      renew)   shift; cmd_lease_renew "$@" ;;
+      release) shift; cmd_lease_release "$@" ;;
+      reclaim) shift; cmd_lease_reclaim "$@" ;;
+      *)       echo "Usage: $CLI_NAME lease {acquire|renew|release|reclaim}" ;;
+    esac
+    ;;
+  audit)
+    shift; cmd_audit "$@" ;;
   navigate)     shift; cmd_navigate "$@" ;;
   observe)      cmd_observe ;;
   click)        shift; cmd_click "$@" ;;
@@ -793,6 +887,20 @@ Files:
   files get <id> -o <path>     Save a completed session file locally
   files rename <id> <name>     Rename a completed session file
   files delete <id>            Delete a completed session file
+
+Agent Devices:
+  devices                      List governed Agent Device sessions
+  device <device-id>           Show DeviceVisibility for one session/device
+  lease acquire <device-id> [--mode session_bound|task_bound] [--task-id ID]
+                               Acquire an exclusive DeviceLease
+  lease renew <device-id> <lease-id> [--ttl seconds|--expires-at ISO8601]
+                               Update lease expiration
+  lease release <device-id> <lease-id>
+                               Release the current lease
+  lease reclaim <device-id> [--ttl seconds|--expires-at ISO8601]
+                               Force reclaim and create a new lease for this operator
+  audit [--device <device-id>] [--limit N]
+                               List Agent Device audit events
 
 Global options:
   --json, -j                   Machine-readable JSON output

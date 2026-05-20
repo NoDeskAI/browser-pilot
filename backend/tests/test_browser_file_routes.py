@@ -35,6 +35,32 @@ class FakeBrowserSession:
         return None
 
 
+@pytest.fixture(autouse=True)
+def stub_agent_device_governance(monkeypatch):
+    class FakeActionContext:
+        session_id = "session-1"
+        action = "test"
+
+    async def fake_begin_compatible_action(*_args, **kwargs):
+        ctx = FakeActionContext()
+        ctx.action = kwargs.get("action", "test")
+        return ctx, None
+
+    async def fake_complete_compatible_action(_ctx, response, **_kwargs):
+        return response
+
+    async def fake_fail_compatible_action(_ctx, error, **_kwargs):
+        return {"ok": False, "error": error}
+
+    async def fake_record_runtime_action(*_args, **_kwargs):
+        return "audit-1"
+
+    monkeypatch.setattr(browser.agent_devices, "begin_compatible_action", fake_begin_compatible_action)
+    monkeypatch.setattr(browser.agent_devices, "complete_compatible_action", fake_complete_compatible_action)
+    monkeypatch.setattr(browser.agent_devices, "fail_compatible_action", fake_fail_compatible_action)
+    monkeypatch.setattr(browser.agent_devices, "record_runtime_action", fake_record_runtime_action)
+
+
 def test_screenshot_stores_file_and_keeps_base64_compat(monkeypatch):
     raw = b"png-bytes"
     captured = {}

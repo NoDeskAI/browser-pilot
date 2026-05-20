@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from app import db
+from app import agent_devices
 from app.auth.dependencies import CurrentUser, get_current_user, get_session_aware_user, require_role, verify_session_access
 from app.container import (
     ensure_container_running,
@@ -581,6 +582,7 @@ async def create_session(body: CreateSessionBody, user: CurrentUser = Depends(ge
         safe_lang,
         resolved_chrome_version,
     )
+    lease = await agent_devices.create_initial_lease(session_id, user)
     logger.info("Session created: %s (%s) preset=%s lang=%s chrome=%s", session_id, body.name, preset_id, safe_lang, resolved_chrome_version or "default")
     return {
         "id": session_id,
@@ -590,6 +592,16 @@ async def create_session(body: CreateSessionBody, user: CurrentUser = Depends(ge
         "fingerprintProfile": fp_profile,
         "browserLang": safe_lang,
         "chromeVersion": resolved_chrome_version,
+        "agentDevice": {
+            "deviceInstanceId": session_id,
+            "leaseId": lease.get("lease_id"),
+            "operator": lease.get("current_operator"),
+            "action": "reserve_device",
+            "status": "succeeded",
+            "sideEffectLevel": "internal",
+            "retrySafety": "safe",
+            "nextStep": "continue",
+        },
         **_egress_payload(effective_egress),
     }
 
@@ -654,9 +666,23 @@ async def list_session_files_route(
     user: CurrentUser = Depends(get_session_aware_user),
 ):
     await verify_session_access(session_id, user)
+    ctx, rejected = await agent_devices.begin_compatible_action(
+        session_id, user, action="session.files.list", side_effect_level="none"
+    )
+    if rejected:
+        return rejected
     from app.file_service import list_session_files
 
-    return {"files": await list_session_files(session_id)}
+    try:
+        files = await list_session_files(session_id)
+        return await agent_devices.complete_compatible_action(
+            ctx,
+            {"files": files},
+            summary=f"Listed {len(files)} session files",
+            retry_safety="safe",
+        )
+    except Exception as exc:
+        return await agent_devices.fail_compatible_action(ctx, str(exc), retry_safety="safe")
 
 
 @router.patch("/api/sessions/{session_id}")
@@ -677,21 +703,34 @@ async def delete_session(
     user: CurrentUser = Depends(get_current_user),
 ):
     await _verify_session_tenant(session_id, user)
+    ctx, rejected = await agent_devices.begin_compatible_action(
+        session_id, user, action="session.delete", side_effect_level="external"
+    )
+    if rejected:
+        return rejected
     pool = get_pool()
     from app.file_service import handle_session_delete_files
 
-    delete_body = body or DeleteSessionBody()
-    file_result = await handle_session_delete_files(
-        session_id,
-        user,
-        file_delete_mode=delete_body.fileDeleteMode,
-        delete_file_ids=delete_body.deleteFileIds,
-    )
-    await stop_download_watcher(session_id)
-    await remove_container(session_id)
-    await pool.execute("DELETE FROM sessions WHERE id = $1", session_id)
-    logger.info("Session deleted: %s", session_id)
-    return {"ok": True, "files": file_result}
+    try:
+        delete_body = body or DeleteSessionBody()
+        file_result = await handle_session_delete_files(
+            session_id,
+            user,
+            file_delete_mode=delete_body.fileDeleteMode,
+            delete_file_ids=delete_body.deleteFileIds,
+        )
+        await stop_download_watcher(session_id)
+        await remove_container(session_id)
+        await pool.execute("DELETE FROM sessions WHERE id = $1", session_id)
+        logger.info("Session deleted: %s", session_id)
+        return await agent_devices.complete_compatible_action(
+            ctx,
+            {"ok": True, "files": file_result},
+            summary="Session and browser container deleted",
+            details={"files": file_result},
+        )
+    except Exception as exc:
+        return await agent_devices.fail_compatible_action(ctx, str(exc))
 
 
 # -----------------------------------------------------------------------
@@ -701,6 +740,11 @@ async def delete_session(
 @router.post("/api/sessions/{session_id}/container/start")
 async def start_session_container(session_id: str, user: CurrentUser = Depends(get_session_aware_user)):
     await verify_session_access(session_id, user)
+    ctx, rejected = await agent_devices.begin_compatible_action(
+        session_id, user, action="session.container.start", side_effect_level="external"
+    )
+    if rejected:
+        return rejected
     try:
         ports = await ensure_container_running(session_id)
         await _activate_file_capture(session_id)
@@ -723,46 +767,74 @@ async def start_session_container(session_id: str, user: CurrentUser = Depends(g
         )
         if row:
             _apply_row_fingerprint_readiness(fp, row)
-        return {
-            "ok": True,
-            "ports": ports,
-            "fingerprintProfile": fp,
-            "fileCapture": await _file_capture_payload(session_id, container_status="running"),
-        }
+        return await agent_devices.complete_compatible_action(
+            ctx,
+            {
+                "ok": True,
+                "ports": ports,
+                "fingerprintProfile": fp,
+                "fileCapture": await _file_capture_payload(session_id, container_status="running"),
+            },
+            summary="Started browser container",
+            details={"ports": ports},
+        )
     except Exception as exc:
         logger.error("Container start failed for %s: %s", session_id, exc)
-        return {"ok": False, "error": str(exc)}
+        return await agent_devices.fail_compatible_action(ctx, str(exc))
 
 
 @router.post("/api/sessions/{session_id}/container/stop")
 async def stop_session_container(session_id: str, user: CurrentUser = Depends(get_session_aware_user)):
     await verify_session_access(session_id, user)
+    ctx, rejected = await agent_devices.begin_compatible_action(
+        session_id, user, action="session.container.stop", side_effect_level="external"
+    )
+    if rejected:
+        return rejected
     try:
         await stop_download_watcher(session_id)
         await stop_container(session_id)
         await mark_file_capture_status(session_id, "unavailable", "container_stopped")
-        return {"ok": True}
+        return await agent_devices.complete_compatible_action(
+            ctx,
+            {"ok": True},
+            summary="Stopped browser container",
+        )
     except Exception as exc:
         logger.error("Container stop failed for %s: %s", session_id, exc)
-        return {"ok": False, "error": str(exc)}
+        return await agent_devices.fail_compatible_action(ctx, str(exc))
 
 
 @router.post("/api/sessions/{session_id}/container/pause")
 async def pause_session_container(session_id: str, user: CurrentUser = Depends(get_session_aware_user)):
     await verify_session_access(session_id, user)
+    ctx, rejected = await agent_devices.begin_compatible_action(
+        session_id, user, action="session.container.pause", side_effect_level="external"
+    )
+    if rejected:
+        return rejected
     try:
         await stop_download_watcher(session_id)
         await pause_container(session_id)
         await mark_file_capture_status(session_id, "unavailable", "container_paused")
-        return {"ok": True}
+        return await agent_devices.complete_compatible_action(
+            ctx,
+            {"ok": True},
+            summary="Paused browser container",
+        )
     except Exception as exc:
         logger.error("Container pause failed for %s: %s", session_id, exc)
-        return {"ok": False, "error": str(exc)}
+        return await agent_devices.fail_compatible_action(ctx, str(exc))
 
 
 @router.post("/api/sessions/{session_id}/container/unpause")
 async def unpause_session_container(session_id: str, user: CurrentUser = Depends(get_session_aware_user)):
     await verify_session_access(session_id, user)
+    ctx, rejected = await agent_devices.begin_compatible_action(
+        session_id, user, action="session.container.unpause", side_effect_level="external"
+    )
+    if rejected:
+        return rejected
     try:
         ports = await ensure_container_running(session_id)
         await _activate_file_capture(session_id)
@@ -785,15 +857,20 @@ async def unpause_session_container(session_id: str, user: CurrentUser = Depends
         )
         if row:
             _apply_row_fingerprint_readiness(fp, row)
-        return {
-            "ok": True,
-            "ports": ports,
-            "fingerprintProfile": fp,
-            "fileCapture": await _file_capture_payload(session_id, container_status="running"),
-        }
+        return await agent_devices.complete_compatible_action(
+            ctx,
+            {
+                "ok": True,
+                "ports": ports,
+                "fingerprintProfile": fp,
+                "fileCapture": await _file_capture_payload(session_id, container_status="running"),
+            },
+            summary="Unpaused browser container",
+            details={"ports": ports},
+        )
     except Exception as exc:
         logger.error("Container unpause failed for %s: %s", session_id, exc)
-        return {"ok": False, "error": str(exc)}
+        return await agent_devices.fail_compatible_action(ctx, str(exc))
 
 
 # -----------------------------------------------------------------------
