@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch, type ComponentPublicInstance } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch, type ComponentPublicInstance } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ChevronDown, ChevronRight, CornerDownLeft, FileText, Loader2, RefreshCw } from 'lucide-vue-next'
 import { api } from '../lib/api'
@@ -36,7 +36,9 @@ const loadError = ref(false)
 const expanded = ref(false)
 const selectedIds = ref<string[]>([])
 const deleteButtonRef = ref<Element | ComponentPublicInstance | null>(null)
+const deletingLong = ref(false)
 let loadSeq = 0
+let deletingTimer: number | null = null
 
 const completedFiles = computed(() => files.value.filter(file => file.status === 'completed'))
 const inProgressFiles = computed(() => files.value.filter(file => file.status !== 'completed'))
@@ -47,8 +49,9 @@ const allCompletedSelected = computed(() =>
   completedFiles.value.every(file => selectedIds.value.includes(file.id)),
 )
 const confirmDisabled = computed(() => props.deleting || loading.value || !loaded.value || loadError.value)
+const deletingLabel = computed(() => deletingLong.value ? t('session.deleteStillRunning') : t('session.deleting'))
 const confirmLabel = computed(() => {
-  if (props.deleting) return t('session.deleting')
+  if (props.deleting) return deletingLabel.value
   if (selectedCount.value > 0) return t('sessionDelete.deleteWithFiles', { count: selectedCount.value })
   if (loaded.value && files.value.length === 0) return t('sessionDelete.deleteSessionOnly')
   return t('sessionDelete.deleteKeepFiles')
@@ -67,6 +70,18 @@ watch(completedFiles, (nextFiles) => {
   selectedIds.value = selectedIds.value.filter(id => completedIds.has(id))
 })
 
+watch(() => props.deleting, (deleting) => {
+  clearDeletingTimer()
+  deletingLong.value = false
+  if (deleting) {
+    deletingTimer = window.setTimeout(() => {
+      deletingLong.value = true
+    }, 15000)
+  }
+}, { immediate: true })
+
+onBeforeUnmount(clearDeletingTimer)
+
 function resetState() {
   files.value = []
   loading.value = false
@@ -74,6 +89,15 @@ function resetState() {
   loadError.value = false
   expanded.value = false
   selectedIds.value = []
+  deletingLong.value = false
+  clearDeletingTimer()
+}
+
+function clearDeletingTimer() {
+  if (deletingTimer != null) {
+    window.clearTimeout(deletingTimer)
+    deletingTimer = null
+  }
 }
 
 function setOpen(value: boolean) {
@@ -264,6 +288,16 @@ function focusDeleteButton() {
           </div>
         </template>
       </section>
+
+      <div
+        v-if="deletingLong"
+        class="flex items-start gap-2 rounded-md border border-border bg-muted/20 px-3 py-2 text-sm text-muted-foreground"
+        role="status"
+        aria-live="polite"
+      >
+        <Loader2 class="mt-0.5 size-4 shrink-0 animate-spin" />
+        <span>{{ t('session.deleteStillRunningHint') }}</span>
+      </div>
 
       <AlertDialogFooter>
         <AlertDialogCancel :disabled="deleting">

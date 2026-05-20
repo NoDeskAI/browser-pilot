@@ -65,6 +65,8 @@ export default {
     shortcutEnter: 'Enter',
     shortcutEscape: 'ESC',
     deleting: 'Deleting…',
+    deleteStillRunning: 'Still cleaning up…',
+    deleteStillRunningHint: 'Container cleanup is taking longer than usual. Keep this dialog open; the session will close when deletion finishes.',
     creating: 'Creating…',
     starting: 'Starting…',
     pausing: 'Hibernating…',

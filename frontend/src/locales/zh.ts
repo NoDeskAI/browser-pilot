@@ -65,6 +65,8 @@ export default {
     shortcutEnter: '回车',
     shortcutEscape: 'ESC',
     deleting: '删除中…',
+    deleteStillRunning: '仍在清理…',
+    deleteStillRunningHint: '容器清理时间比平时更长。请保持此窗口打开，删除完成后会自动关闭会话。',
     creating: '创建中…',
     starting: '启动中…',
     pausing: '休眠中…',
