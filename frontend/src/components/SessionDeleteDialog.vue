@@ -50,6 +50,7 @@ const confirmDisabled = computed(() => props.deleting || loading.value || !loade
 const confirmLabel = computed(() => {
   if (props.deleting) return t('session.deleting')
   if (selectedCount.value > 0) return t('sessionDelete.deleteWithFiles', { count: selectedCount.value })
+  if (loaded.value && files.value.length === 0) return t('sessionDelete.deleteSessionOnly')
   return t('sessionDelete.deleteKeepFiles')
 })
 

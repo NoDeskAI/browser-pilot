@@ -127,6 +127,7 @@ export default {
     deleteAction: 'Delete too',
     processingAction: 'Not selectable',
     selectFile: 'Choose whether to delete {name}',
+    deleteSessionOnly: 'Delete Session',
     deleteKeepFiles: 'Delete Session, keep files',
     deleteWithFiles: 'Delete Session and {count} files',
   },

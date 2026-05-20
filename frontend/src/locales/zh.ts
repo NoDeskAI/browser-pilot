@@ -127,6 +127,7 @@ export default {
     deleteAction: '一并删除',
     processingAction: '不可选择',
     selectFile: '选择是否删除 {name}',
+    deleteSessionOnly: '删除 Session',
     deleteKeepFiles: '删除 Session，保留文件',
     deleteWithFiles: '删除 Session 和 {count} 个文件',
   },
