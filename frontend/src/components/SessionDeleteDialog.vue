@@ -231,12 +231,11 @@ function focusDeleteButton() {
 
         <template v-else-if="!loadError">
           <label
-            class="flex items-center gap-2 rounded-md border border-border bg-background px-3 py-2 text-sm"
-            :class="completedFiles.length ? 'cursor-pointer' : 'opacity-60'"
+            v-if="completedFiles.length"
+            class="flex cursor-pointer items-center gap-2 rounded-md border border-border bg-background px-3 py-2 text-sm"
           >
             <Checkbox
               :model-value="allCompletedSelected"
-              :disabled="!completedFiles.length"
               @update:model-value="setAllCompleted"
             />
             <span class="min-w-0 flex-1">{{ t('sessionDelete.deleteAllCompleted') }}</span>
