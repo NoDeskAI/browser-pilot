@@ -329,6 +329,16 @@ async function onPauseContainer() {
         <p class="text-xs mt-1 opacity-60 mb-4 max-w-sm text-center">
           {{ activeSession?.containerStatus === 'paused' ? t('app.browserHibernatedHint') : t('app.containerStoppedHint') }}
         </p>
+        <Button
+          v-if="activeSession?.containerStatus !== 'starting'"
+          class="gap-1.5"
+          :disabled="containerActionLoading"
+          @click="onStartContainer"
+        >
+          <Loader2 v-if="containerActionLoading" class="size-3.5 animate-spin" />
+          <Play v-else class="size-3.5" />
+          {{ activeSession?.containerStatus === 'paused' ? t('session.resumeFromHibernate') : t('session.startContainer') }}
+        </Button>
       </div>
       <div v-else-if="sessions.activeId && !vncUrl && sessions.containerLoading" class="absolute inset-0 flex flex-col items-center justify-center text-muted-foreground">
         <Loader2 class="size-8 mb-3 animate-spin opacity-70" />

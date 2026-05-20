@@ -269,11 +269,11 @@ async function switchSession(id: string): Promise<void> {
       seleniumPort: s.ports.selenium_port,
       vncPort: s.ports.vnc_port,
     }
-  } else if (s && s.containerStatus === 'paused') {
-    state.activePorts = null
-  } else {
+  } else if (s?.containerStatus === 'starting') {
     state.activePorts = null
     await _startContainerForSession(id)
+  } else {
+    state.activePorts = null
   }
 }
 
