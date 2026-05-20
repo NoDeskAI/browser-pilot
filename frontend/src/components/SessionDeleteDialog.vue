@@ -92,6 +92,9 @@ async function fetchFiles() {
     const data = await res.json()
     if (seq !== loadSeq) return
     files.value = data.files || []
+    selectedIds.value = files.value
+      .filter((file: SessionFile) => file.status === 'completed')
+      .map((file: SessionFile) => file.id)
     loaded.value = true
   } catch {
     if (seq !== loadSeq) return
