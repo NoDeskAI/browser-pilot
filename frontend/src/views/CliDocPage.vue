@@ -113,6 +113,8 @@ ${c} logs                            # View CDP event logs
 
 ## Agent Devices
 
+Browser Pilot maps Session as Device and strictly supports Agent Device Level 1 Device Governance. Level 2 control transfer, request_intervention, handoff, and human takeover are not supported.
+
 ${c} devices                         # List governed browser-session devices
 ${c} device <device-id>              # Show one device visibility record
 ${c} lease acquire <device-id> [--mode session_bound|task_bound] [--task-id ID] [--ttl seconds|--expires-at ISO8601]
@@ -201,6 +203,8 @@ ${c} screenshot -o page.png          # 存入文件存储并导出本地副本
 ${c} logs                            # 查看 CDP 事件日志
 
 ## Agent Device
+
+Browser Pilot 将 Session 作为 Device，当前严格支持 Agent Device Level 1 Device Governance；不支持 Level 2 的 control transfer、request_intervention、handoff 和 Human 接手。
 
 ${c} devices                         # 列出纳管的浏览器 Session 设备
 ${c} device <device-id>              # 查看单个设备可见性记录
@@ -324,6 +328,8 @@ ${c} --session "<session-id>" logs                            # View CDP event l
 
 ## Agent Devices
 
+Browser Pilot maps Session as Device and strictly supports Agent Device Level 1 Device Governance. Level 2 control transfer, request_intervention, handoff, and human takeover are not supported.
+
 ${c} devices --json                                      # List governed browser-session devices
 ${c} device "<session-id>" --json                        # A session id is the device id
 ${c} lease acquire "<session-id>" --mode task_bound --task-id "<task-id>" --json
@@ -404,6 +410,8 @@ ${c} --session "<session-id>" screenshot -o page.png          # 存入文件存�
 ${c} --session "<session-id>" logs                            # 查看 CDP 事件日志
 
 ## Agent Device
+
+Browser Pilot 将 Session 作为 Device，当前严格支持 Agent Device Level 1 Device Governance；不支持 Level 2 的 control transfer、request_intervention、handoff 和 Human 接手。
 
 ${c} devices --json                                      # 列出纳管的浏览器 Session 设备
 ${c} device "<session-id>" --json                        # session id 即 device id

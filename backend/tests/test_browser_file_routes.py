@@ -479,10 +479,17 @@ def test_heartbeat_route_accepts_active_download_snapshot(monkeypatch):
 
 
 def test_ingest_route_rejects_bad_runtime_token(monkeypatch):
+    captured = {}
+
     async def fake_verify(_session_id, _raw_token):
         raise file_capture.HTTPException(401, "Invalid runtime token")
 
+    async def fake_record_runtime_action(session_id, **kwargs):
+        captured["audit"] = (session_id, kwargs)
+        return "audit-1"
+
     monkeypatch.setattr(file_capture, "verify_file_capture_token", fake_verify)
+    monkeypatch.setattr(files.agent_devices, "record_runtime_action", fake_record_runtime_action)
 
     upload = UploadFile(filename="report.txt", file=io.BytesIO(b"downloaded"))
     with pytest.raises(file_capture.HTTPException) as exc:
@@ -495,3 +502,36 @@ def test_ingest_route_rejects_bad_runtime_token(monkeypatch):
         )
 
     assert exc.value.status_code == 401
+    assert captured["audit"][0] == "session-1"
+    assert captured["audit"][1]["action"] == "session.files.ingest"
+    assert captured["audit"][1]["outcome"] == "rejected"
+    assert captured["audit"][1]["error"] == "invalid_runtime_token"
+
+
+def test_heartbeat_route_rejects_bad_runtime_token_and_audits(monkeypatch):
+    captured = {}
+
+    async def fake_verify(_session_id, _raw_token):
+        raise file_capture.HTTPException(401, "Invalid runtime token")
+
+    async def fake_record_runtime_action(session_id, **kwargs):
+        captured["audit"] = (session_id, kwargs)
+        return "audit-1"
+
+    monkeypatch.setattr(file_capture, "verify_file_capture_token", fake_verify)
+    monkeypatch.setattr(files.agent_devices, "record_runtime_action", fake_record_runtime_action)
+
+    with pytest.raises(file_capture.HTTPException) as exc:
+        asyncio.run(
+            files.heartbeat_file_capture_route(
+                "session-1",
+                body=files.FileCaptureHeartbeat(status="running"),
+                authorization="Bearer wrong",
+            )
+        )
+
+    assert exc.value.status_code == 401
+    assert captured["audit"][0] == "session-1"
+    assert captured["audit"][1]["action"] == "session.files.heartbeat"
+    assert captured["audit"][1]["outcome"] == "rejected"
+    assert captured["audit"][1]["error"] == "invalid_runtime_token"

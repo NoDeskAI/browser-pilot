@@ -13,6 +13,35 @@ from app.db import get_pool
 
 DEVICE_TYPE = "browser_session"
 AUDIT_BOUNDARY = "browser_pilot"
+PROVIDER = "browser-pilot"
+DEVICE_PROFILE = "browser"
+COMPLIANCE_LEVEL = "level1_device_governance"
+CONCURRENCY_MODEL = "exclusive"
+SUPPORTED_LEASE_MODES = ["session_bound", "task_bound"]
+UNSUPPORTED_PROFILES = ["control_transfer"]
+SYSTEM_LEASE_EXPIRER = "system:lease_expirer"
+
+LEVEL1_POLICY = {
+    "leaseRequired": True,
+    "exclusiveLease": True,
+    "ownerlessActiveLeaseAllowed": False,
+    "controlTransfer": "unsupported",
+    "interventionRequest": "unsupported_level2",
+}
+
+LEVEL1_CAPABILITIES = [
+    "visibility.read",
+    "lease.acquire",
+    "lease.renew",
+    "lease.release",
+    "lease.reclaim",
+    "audit.read",
+    "browser.navigate",
+    "browser.observe",
+    "browser.click",
+    "browser.type",
+    "browser.files",
+]
 
 
 def _row_value(row: Any, key: str, default: Any = None) -> Any:
@@ -31,8 +60,9 @@ def _iso(value: Any) -> str | None:
 
 
 def _operator_subject(user: CurrentUser) -> str:
-    if user.api_token_id:
-        return f"token:{user.api_token_id}"
+    api_token_id = getattr(user, "api_token_id", None)
+    if api_token_id:
+        return f"token:{api_token_id}"
     return f"user:{user.id}"
 
 
@@ -98,9 +128,20 @@ def _lease_to_dict(row: Any | None) -> dict[str, Any] | None:
     }
 
 
+def _lease_with_audit(row: Any | None, audit_event_id: str | None) -> dict[str, Any]:
+    lease = _lease_to_dict(row) or {}
+    if audit_event_id:
+        lease["audit_event_id"] = audit_event_id
+    return lease
+
+
 def _audit_to_dict(row: Any) -> dict[str, Any]:
     outcome = _row_value(row, "outcome")
     created_at = _iso(_row_value(row, "created_at"))
+    details = _row_value(row, "details") or {}
+    evidence_refs = _row_value(row, "evidence_refs") or []
+    side_effect_level = _row_value(row, "side_effect_level")
+    evidence_status = details.get("evidenceStatus") or _evidence_status(side_effect_level, evidence_refs)
     return {
         "id": _row_value(row, "id"),
         "tenant_id": _row_value(row, "tenant_id"),
@@ -116,12 +157,20 @@ def _audit_to_dict(row: Any) -> dict[str, Any]:
         "action": _row_value(row, "action"),
         "outcome": outcome,
         "status": outcome,
-        "side_effect_level": _row_value(row, "side_effect_level"),
+        "executionStatus": outcome,
+        "side_effect_level": side_effect_level,
+        "sideEffectLevel": side_effect_level,
+        "sideEffectStatus": _side_effect_status(outcome, side_effect_level),
+        "failureCategory": _row_value(row, "error") if outcome in {"failed", "rejected"} else None,
+        "auditStatus": "recorded",
+        "evidenceStatus": evidence_status,
+        "stateChanged": _state_changed(outcome, side_effect_level),
         "audit_boundary": _row_value(row, "audit_boundary"),
         "summary": _row_value(row, "summary"),
-        "evidence_refs": _row_value(row, "evidence_refs") or [],
-        "details": _row_value(row, "details") or {},
-        "metadata": _row_value(row, "details") or {},
+        "evidence_refs": evidence_refs,
+        "evidenceRefs": evidence_refs,
+        "details": details,
+        "metadata": details,
         "error": _row_value(row, "error"),
         "created_at": created_at,
         "occurred_at": created_at,
@@ -138,6 +187,86 @@ class AgentDeviceActionContext:
     side_effect_level: str = "external"
 
 
+def _current_page_evidence_ref(session_id: str) -> dict[str, Any]:
+    return {
+        "type": "browser_session",
+        "ref": f"browser_session:{session_id}:current_page",
+        "session_id": session_id,
+        "surface": "current_page",
+    }
+
+
+def _extract_page_snapshot(response: dict[str, Any]) -> dict[str, Any]:
+    page = response.get("currentPage")
+    if isinstance(page, dict):
+        return {
+            "url": page.get("url") or "",
+            "title": page.get("title") or "",
+        }
+    if response.get("url") is not None or response.get("title") is not None:
+        return {
+            "url": response.get("url") or "",
+            "title": response.get("title") or "",
+        }
+    return {}
+
+
+def _ensure_action_evidence(
+    session_id: str,
+    *,
+    side_effect_level: str,
+    status: str,
+    evidence_refs: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    refs = list(evidence_refs or [])
+    if side_effect_level == "external" and status == "succeeded" and not refs:
+        refs.append(_current_page_evidence_ref(session_id))
+    return refs
+
+
+def _evidence_status(side_effect_level: str | None, evidence_refs: list[dict[str, Any]] | None) -> str:
+    if evidence_refs:
+        return "captured"
+    if side_effect_level == "external":
+        return "not_captured"
+    return "not_required"
+
+
+def _side_effect_status(status: str, side_effect_level: str | None) -> str:
+    if side_effect_level in {None, "none"}:
+        return "not_applicable"
+    if status == "succeeded":
+        return "applied"
+    if status == "rejected":
+        return "not_applied"
+    return "unknown"
+
+
+def _state_changed(status: str, side_effect_level: str | None) -> bool:
+    return status == "succeeded" and side_effect_level not in {None, "none"}
+
+
+def _details_with_evidence_semantics(
+    ctx: AgentDeviceActionContext,
+    response: dict[str, Any],
+    details: dict[str, Any] | None,
+    *,
+    evidence_status: str,
+) -> dict[str, Any]:
+    merged = dict(details or {})
+    page = _extract_page_snapshot(response)
+    if page:
+        merged.setdefault("currentPage", page)
+        if page.get("url"):
+            merged.setdefault("url", page["url"])
+        if page.get("title"):
+            merged.setdefault("title", page["title"])
+    if ctx.side_effect_level == "external":
+        merged.setdefault("actionParameters", dict(details or {}))
+    merged["evidenceStatus"] = evidence_status
+    return merged
+
+
 class AgentDeviceLeaseError(Exception):
     def __init__(
         self,
@@ -147,6 +276,7 @@ class AgentDeviceLeaseError(Exception):
         reason: str = "lease_conflict",
         lease: dict[str, Any] | None = None,
         next_step: str = "acquire_lease",
+        audit_event_id: str | None = None,
     ):
         super().__init__(message)
         self.message = message
@@ -154,6 +284,7 @@ class AgentDeviceLeaseError(Exception):
         self.reason = reason
         self.lease = lease
         self.next_step = next_step
+        self.audit_event_id = audit_event_id
 
 
 async def _session_for_user(conn: Any, session_id: str, user: CurrentUser, *, lock: bool = False) -> Any:
@@ -174,6 +305,19 @@ async def _session_for_user(conn: Any, session_id: str, user: CurrentUser, *, lo
 
 
 async def _expire_active_leases(conn: Any, device_id: str) -> None:
+    expired_rows = await conn.fetch(
+        """
+        SELECT *
+        FROM agent_device_leases
+        WHERE device_instance_id = $1
+          AND status = 'active'
+          AND expires_at IS NOT NULL
+          AND expires_at <= NOW()
+        """,
+        device_id,
+    )
+    if not expired_rows:
+        return
     await conn.execute(
         """
         UPDATE agent_device_leases
@@ -187,6 +331,22 @@ async def _expire_active_leases(conn: Any, device_id: str) -> None:
         """,
         device_id,
     )
+    for lease in expired_rows:
+        await _insert_audit(
+            conn,
+            actor=SYSTEM_LEASE_EXPIRER,
+            actor_owner_user_id=None,
+            tenant_id=_row_value(lease, "tenant_id"),
+            device_instance_id=device_id,
+            lease_id=_row_value(lease, "id"),
+            task_id=_row_value(lease, "task_id"),
+            session_id=_row_value(lease, "session_id") or device_id,
+            action="lease_expired",
+            outcome="succeeded",
+            side_effect_level="internal",
+            summary="Device lease automatically expired",
+            details={"invalidatedReason": "expires_at_elapsed"},
+        )
 
 
 async def _active_lease(conn: Any, device_id: str) -> Any | None:
@@ -227,7 +387,7 @@ async def create_initial_lease(session_id: str, user: CurrentUser) -> dict[str, 
                 _operator_subject(user),
                 user.id,
             )
-            await _insert_audit(
+            audit_id = await _insert_audit(
                 conn,
                 actor=_operator_subject(user),
                 actor_owner_user_id=user.id,
@@ -241,7 +401,7 @@ async def create_initial_lease(session_id: str, user: CurrentUser) -> dict[str, 
                 side_effect_level="internal",
                 summary="Initial session-bound device lease created",
             )
-            return _lease_to_dict(lease) or {}
+            return _lease_with_audit(lease, audit_id)
 
 
 async def acquire_lease(
@@ -254,9 +414,19 @@ async def acquire_lease(
     expires_at: datetime | None = None,
 ) -> dict[str, Any]:
     if lease_mode not in {"session_bound", "task_bound"}:
-        raise HTTPException(status_code=422, detail="lease_mode must be session_bound or task_bound")
+        raise AgentDeviceLeaseError(
+            "lease_mode must be session_bound or task_bound",
+            status_code=422,
+            reason="invalid_lease_mode",
+            next_step="fix_request",
+        )
     if lease_mode == "task_bound" and not task_id:
-        raise HTTPException(status_code=422, detail="task_bound leases require task_id")
+        raise AgentDeviceLeaseError(
+            "task_bound leases require task_id",
+            status_code=422,
+            reason="task_id_required",
+            next_step="fix_request",
+        )
 
     pool = get_pool()
     async with pool.acquire() as conn:
@@ -265,7 +435,7 @@ async def acquire_lease(
             await _expire_active_leases(conn, device_id)
             active = await _active_lease(conn, device_id)
             if active:
-                await _insert_audit(
+                audit_id = await _insert_audit(
                     conn,
                     actor=_operator_subject(user),
                     actor_owner_user_id=user.id,
@@ -285,6 +455,7 @@ async def acquire_lease(
                     lease=_lease_to_dict(active),
                     reason="device_occupied",
                     next_step="refresh_visibility",
+                    audit_event_id=audit_id,
                 )
 
             lease = await conn.fetchrow(
@@ -306,7 +477,7 @@ async def acquire_lease(
                 user.id,
                 _normalize_expires(ttl_seconds, expires_at),
             )
-            await _insert_audit(
+            audit_id = await _insert_audit(
                 conn,
                 actor=_operator_subject(user),
                 actor_owner_user_id=user.id,
@@ -320,7 +491,7 @@ async def acquire_lease(
                 side_effect_level="internal",
                 summary="Exclusive device lease acquired",
             )
-            return _lease_to_dict(lease) or {}
+            return _lease_with_audit(lease, audit_id)
 
 
 async def renew_lease(
@@ -347,9 +518,53 @@ async def renew_lease(
                 device_id,
             )
             if not lease or _row_value(lease, "status") != "active":
-                raise AgentDeviceLeaseError("Lease is not active", reason="lease_invalid")
+                audit_id = await _insert_audit(
+                    conn,
+                    actor=_operator_subject(user),
+                    actor_owner_user_id=user.id,
+                    tenant_id=_row_value(row, "tenant_id") or user.tenant_id,
+                    device_instance_id=device_id,
+                    lease_id=lease_id,
+                    task_id=_row_value(lease, "task_id"),
+                    session_id=device_id,
+                    action="renew_lease",
+                    outcome="rejected",
+                    side_effect_level="none",
+                    summary="Lease is not active",
+                    details={"requestedLeaseId": lease_id},
+                    error="lease_invalid",
+                )
+                raise AgentDeviceLeaseError(
+                    "Lease is not active",
+                    reason="lease_invalid",
+                    next_step="acquire_lease",
+                    lease=_lease_to_dict(lease),
+                    audit_event_id=audit_id,
+                )
             if not _lease_matches_actor(lease, user) and not _can_manage(row, user):
-                raise AgentDeviceLeaseError("Only the current operator can renew this lease", reason="operator_mismatch")
+                audit_id = await _insert_audit(
+                    conn,
+                    actor=_operator_subject(user),
+                    actor_owner_user_id=user.id,
+                    tenant_id=_row_value(row, "tenant_id") or user.tenant_id,
+                    device_instance_id=device_id,
+                    lease_id=lease_id,
+                    task_id=_row_value(lease, "task_id"),
+                    session_id=device_id,
+                    action="renew_lease",
+                    outcome="rejected",
+                    side_effect_level="none",
+                    summary="Only the current operator can renew this lease",
+                    details={"requestedLeaseId": lease_id, "currentOperator": _row_value(lease, "current_operator")},
+                    error="operator_mismatch",
+                )
+                raise AgentDeviceLeaseError(
+                    "Only the current operator can renew this lease",
+                    reason="operator_mismatch",
+                    next_step="reclaim_or_wait",
+                    lease=_lease_to_dict(lease),
+                    audit_event_id=audit_id,
+                )
             updated = await conn.fetchrow(
                 """
                 UPDATE agent_device_leases
@@ -362,7 +577,7 @@ async def renew_lease(
                 device_id,
                 _normalize_expires(ttl_seconds, expires_at),
             )
-            await _insert_audit(
+            audit_id = await _insert_audit(
                 conn,
                 actor=_operator_subject(user),
                 actor_owner_user_id=user.id,
@@ -376,7 +591,7 @@ async def renew_lease(
                 side_effect_level="internal",
                 summary="Device lease expiration updated",
             )
-            return _lease_to_dict(updated) or {}
+            return _lease_with_audit(updated, audit_id)
 
 
 async def release_lease(device_id: str, lease_id: str, user: CurrentUser) -> dict[str, Any]:
@@ -391,9 +606,53 @@ async def release_lease(device_id: str, lease_id: str, user: CurrentUser) -> dic
                 device_id,
             )
             if not lease or _row_value(lease, "status") != "active":
-                raise AgentDeviceLeaseError("Lease is not active", reason="lease_invalid")
+                audit_id = await _insert_audit(
+                    conn,
+                    actor=_operator_subject(user),
+                    actor_owner_user_id=user.id,
+                    tenant_id=_row_value(row, "tenant_id") or user.tenant_id,
+                    device_instance_id=device_id,
+                    lease_id=lease_id,
+                    task_id=_row_value(lease, "task_id"),
+                    session_id=device_id,
+                    action="release_device",
+                    outcome="rejected",
+                    side_effect_level="none",
+                    summary="Lease is not active",
+                    details={"requestedLeaseId": lease_id},
+                    error="lease_invalid",
+                )
+                raise AgentDeviceLeaseError(
+                    "Lease is not active",
+                    reason="lease_invalid",
+                    next_step="acquire_lease",
+                    lease=_lease_to_dict(lease),
+                    audit_event_id=audit_id,
+                )
             if not _lease_matches_actor(lease, user) and not _can_manage(row, user):
-                raise AgentDeviceLeaseError("Only the current operator can release this lease", reason="operator_mismatch")
+                audit_id = await _insert_audit(
+                    conn,
+                    actor=_operator_subject(user),
+                    actor_owner_user_id=user.id,
+                    tenant_id=_row_value(row, "tenant_id") or user.tenant_id,
+                    device_instance_id=device_id,
+                    lease_id=lease_id,
+                    task_id=_row_value(lease, "task_id"),
+                    session_id=device_id,
+                    action="release_device",
+                    outcome="rejected",
+                    side_effect_level="none",
+                    summary="Only the current operator can release this lease",
+                    details={"requestedLeaseId": lease_id, "currentOperator": _row_value(lease, "current_operator")},
+                    error="operator_mismatch",
+                )
+                raise AgentDeviceLeaseError(
+                    "Only the current operator can release this lease",
+                    reason="operator_mismatch",
+                    next_step="reclaim_or_wait",
+                    lease=_lease_to_dict(lease),
+                    audit_event_id=audit_id,
+                )
             released = await conn.fetchrow(
                 """
                 UPDATE agent_device_leases
@@ -407,7 +666,7 @@ async def release_lease(device_id: str, lease_id: str, user: CurrentUser) -> dic
                 lease_id,
                 device_id,
             )
-            await _insert_audit(
+            audit_id = await _insert_audit(
                 conn,
                 actor=_operator_subject(user),
                 actor_owner_user_id=user.id,
@@ -421,7 +680,7 @@ async def release_lease(device_id: str, lease_id: str, user: CurrentUser) -> dic
                 side_effect_level="internal",
                 summary="Device lease released",
             )
-            return _lease_to_dict(released) or {}
+            return _lease_with_audit(released, audit_id)
 
 
 async def reclaim_device(
@@ -434,15 +693,46 @@ async def reclaim_device(
     expires_at: datetime | None = None,
 ) -> dict[str, Any]:
     if lease_mode not in {"session_bound", "task_bound"}:
-        raise HTTPException(status_code=422, detail="lease_mode must be session_bound or task_bound")
+        raise AgentDeviceLeaseError(
+            "lease_mode must be session_bound or task_bound",
+            status_code=422,
+            reason="invalid_lease_mode",
+            next_step="fix_request",
+        )
     if lease_mode == "task_bound" and not task_id:
-        raise HTTPException(status_code=422, detail="task_bound leases require task_id")
+        raise AgentDeviceLeaseError(
+            "task_bound leases require task_id",
+            status_code=422,
+            reason="task_id_required",
+            next_step="fix_request",
+        )
     pool = get_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
             row = await _session_for_user(conn, device_id, user, lock=True)
             if not _can_manage(row, user):
-                raise HTTPException(status_code=403, detail="Insufficient permissions")
+                audit_id = await _insert_audit(
+                    conn,
+                    actor=_operator_subject(user),
+                    actor_owner_user_id=user.id,
+                    tenant_id=_row_value(row, "tenant_id") or user.tenant_id,
+                    device_instance_id=device_id,
+                    lease_id=None,
+                    task_id=task_id,
+                    session_id=device_id,
+                    action="force_reclaim",
+                    outcome="rejected",
+                    side_effect_level="none",
+                    summary="Only the owner or an administrator can reclaim this device",
+                    error="insufficient_permissions",
+                )
+                raise AgentDeviceLeaseError(
+                    "Only the owner or an administrator can reclaim this device",
+                    status_code=403,
+                    reason="insufficient_permissions",
+                    next_step="ask_admin",
+                    audit_event_id=audit_id,
+                )
             await _expire_active_leases(conn, device_id)
             active = await _active_lease(conn, device_id)
             reclaimed = None
@@ -478,7 +768,7 @@ async def reclaim_device(
                 user.id,
                 _normalize_expires(ttl_seconds, expires_at),
             )
-            await _insert_audit(
+            audit_id = await _insert_audit(
                 conn,
                 actor=_operator_subject(user),
                 actor_owner_user_id=user.id,
@@ -493,7 +783,7 @@ async def reclaim_device(
                 summary="Device lease force reclaimed",
                 details={"reclaimedLeaseId": _row_value(reclaimed, "id") if reclaimed else None},
             )
-            return {"lease": _lease_to_dict(lease), "reclaimedLease": _lease_to_dict(reclaimed)}
+            return {"lease": _lease_with_audit(lease, audit_id), "reclaimedLease": _lease_to_dict(reclaimed)}
 
 
 async def require_active_lease(
@@ -557,6 +847,7 @@ async def begin_compatible_action(
         )
         return None, _agent_device_response(
             {"ok": False, "error": exc.message},
+            device_instance_id=session_id,
             actor=_operator_subject(user),
             lease=exc.lease,
             action=action,
@@ -565,6 +856,8 @@ async def begin_compatible_action(
             retry_safety="safe_after_new_lease",
             audit_event_id=audit_id,
             next_step=exc.next_step,
+            failure_category=exc.reason,
+            state_changed=False,
         )
 
 
@@ -578,8 +871,22 @@ async def complete_compatible_action(
     details: dict[str, Any] | None = None,
     retry_safety: str = "unknown",
     next_step: str = "continue",
+    failure_category: str | None = None,
 ) -> dict[str, Any]:
     outcome = "succeeded" if status == "succeeded" else "failed"
+    normalized_evidence_refs = _ensure_action_evidence(
+        ctx.session_id,
+        side_effect_level=ctx.side_effect_level,
+        status=status,
+        evidence_refs=evidence_refs,
+    )
+    evidence_status = _evidence_status(ctx.side_effect_level, normalized_evidence_refs)
+    normalized_details = _details_with_evidence_semantics(
+        ctx,
+        response,
+        details,
+        evidence_status=evidence_status,
+    )
     audit_id = await record_action_event(
         session_id=ctx.session_id,
         actor=ctx.actor,
@@ -589,12 +896,13 @@ async def complete_compatible_action(
         outcome=outcome,
         side_effect_level=ctx.side_effect_level,
         summary=summary or ctx.action,
-        evidence_refs=evidence_refs,
-        details=details,
+        evidence_refs=normalized_evidence_refs,
+        details=normalized_details,
         error=None if status == "succeeded" else str(response.get("error") or ""),
     )
     return _agent_device_response(
         response,
+        device_instance_id=ctx.session_id,
         actor=ctx.actor,
         lease=ctx.lease,
         action=ctx.action,
@@ -603,6 +911,9 @@ async def complete_compatible_action(
         retry_safety=retry_safety,
         audit_event_id=audit_id,
         next_step=next_step,
+        evidence_refs=normalized_evidence_refs,
+        evidence_status=evidence_status,
+        failure_category=failure_category,
     )
 
 
@@ -620,12 +931,14 @@ async def fail_compatible_action(
         summary=f"{ctx.action} failed: {error}",
         retry_safety=retry_safety,
         next_step=next_step,
+        failure_category="runtime_error",
     )
 
 
 def _agent_device_response(
     response: dict[str, Any],
     *,
+    device_instance_id: str | None = None,
     actor: str,
     lease: dict[str, Any] | None,
     action: str,
@@ -634,21 +947,65 @@ def _agent_device_response(
     retry_safety: str,
     audit_event_id: str | None,
     next_step: str,
+    evidence_refs: list[dict[str, Any]] | None = None,
+    evidence_status: str | None = None,
+    failure_category: str | None = None,
+    state_changed: bool | None = None,
 ) -> dict[str, Any]:
     payload = dict(response)
+    resolved_device_id = device_instance_id or (lease or {}).get("device_instance_id")
+    resolved_evidence_status = evidence_status or _evidence_status(side_effect_level, evidence_refs)
     payload["agentDevice"] = {
-        "deviceInstanceId": (lease or {}).get("device_instance_id"),
+        "deviceInstanceId": resolved_device_id,
         "leaseId": (lease or {}).get("lease_id"),
         "operator": actor,
         "currentOperator": (lease or {}).get("current_operator"),
         "action": action,
         "status": status,
+        "executionStatus": status,
         "sideEffectLevel": side_effect_level,
+        "sideEffectStatus": _side_effect_status(status, side_effect_level),
+        "failureCategory": failure_category,
         "retrySafety": retry_safety,
         "auditEventId": audit_event_id,
+        "auditStatus": "recorded" if audit_event_id else "not_recorded",
+        "evidenceStatus": resolved_evidence_status,
+        "evidenceRefs": evidence_refs or [],
+        "stateChanged": _state_changed(status, side_effect_level) if state_changed is None else state_changed,
         "nextStep": next_step,
     }
     return payload
+
+
+def control_action_response(
+    response: dict[str, Any],
+    *,
+    device_id: str,
+    user: CurrentUser,
+    lease: dict[str, Any] | None,
+    action: str,
+    status: str,
+    audit_event_id: str | None = None,
+    next_step: str = "continue",
+    retry_safety: str = "safe",
+    failure_category: str | None = None,
+    state_changed: bool | None = None,
+) -> dict[str, Any]:
+    return _agent_device_response(
+        response,
+        device_instance_id=device_id,
+        actor=_operator_subject(user),
+        lease=lease,
+        action=action,
+        status=status,
+        side_effect_level="internal" if status == "succeeded" else "none",
+        retry_safety=retry_safety,
+        audit_event_id=audit_event_id,
+        next_step=next_step,
+        evidence_status="not_required",
+        failure_category=failure_category,
+        state_changed=status == "succeeded" if state_changed is None else state_changed,
+    )
 
 
 async def _insert_audit(
@@ -771,6 +1128,40 @@ async def record_runtime_action(
         )
 
 
+async def record_control_rejection(
+    device_id: str,
+    user: CurrentUser,
+    *,
+    action: str,
+    summary: str,
+    reason: str,
+    lease: dict[str, Any] | None = None,
+    details: dict[str, Any] | None = None,
+) -> str | None:
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        try:
+            row = await _session_for_user(conn, device_id, user)
+        except HTTPException:
+            return None
+        return await _insert_audit(
+            conn,
+            actor=_operator_subject(user),
+            actor_owner_user_id=user.id,
+            tenant_id=_row_value(row, "tenant_id") or user.tenant_id,
+            device_instance_id=device_id,
+            lease_id=(lease or {}).get("lease_id"),
+            task_id=(lease or {}).get("task_id"),
+            session_id=device_id,
+            action=action,
+            outcome="rejected",
+            side_effect_level="none",
+            summary=summary,
+            details=details,
+            error=reason,
+        )
+
+
 async def list_device_visibility(user: CurrentUser) -> list[dict[str, Any]]:
     pool = get_pool()
     async with pool.acquire() as conn:
@@ -805,6 +1196,7 @@ def _visibility_sql(where_sql: str) -> str:
             s.name,
             s.tenant_id,
             s.user_id,
+            s.created_at AS session_created_at,
             s.updated_at AS session_updated_at,
             l.id AS lease_id,
             l.lease_mode,
@@ -817,7 +1209,11 @@ def _visibility_sql(where_sql: str) -> str:
             a.id AS last_audit_id,
             a.action AS last_action,
             a.outcome AS last_outcome,
+            a.side_effect_level AS last_side_effect_level,
             a.summary AS last_summary,
+            a.evidence_refs AS last_evidence_refs,
+            a.details AS last_details,
+            a.error AS last_error,
             a.created_at AS last_audit_at
         FROM sessions s
         LEFT JOIN agent_device_leases l
@@ -837,7 +1233,8 @@ def _visibility_sql(where_sql: str) -> str:
 
 
 def _visibility_from_row(row: Any, container_status: str) -> dict[str, Any]:
-    state = "leased" if _row_value(row, "lease_id") else "idle"
+    browser_pilot_state = "leased" if _row_value(row, "lease_id") else "idle"
+    state = "ERROR" if str(container_status).lower() == "dead" else ("OCCUPIED" if _row_value(row, "lease_id") else "IDLE")
     lease = None
     if _row_value(row, "lease_id"):
         lease = {
@@ -858,29 +1255,52 @@ def _visibility_from_row(row: Any, container_status: str) -> dict[str, Any]:
         }
     last_action_summary = None
     if _row_value(row, "last_audit_id"):
+        last_details = _row_value(row, "last_details") or {}
+        last_evidence_refs = _row_value(row, "last_evidence_refs") or []
+        last_side_effect_level = _row_value(row, "last_side_effect_level")
         last_action_summary = {
             "action": _row_value(row, "last_action"),
             "status": _row_value(row, "last_outcome"),
+            "executionStatus": _row_value(row, "last_outcome"),
+            "sideEffectLevel": last_side_effect_level,
+            "sideEffectStatus": _side_effect_status(_row_value(row, "last_outcome"), last_side_effect_level),
+            "failureCategory": _row_value(row, "last_error") if _row_value(row, "last_outcome") in {"failed", "rejected"} else None,
             "auditEventId": _row_value(row, "last_audit_id"),
+            "auditStatus": "recorded",
+            "evidenceStatus": last_details.get("evidenceStatus") or _evidence_status(last_side_effect_level, last_evidence_refs),
             "summary": _row_value(row, "last_summary"),
             "occurredAt": _iso(_row_value(row, "last_audit_at")),
         }
+    tenant_id = _row_value(row, "tenant_id")
     return {
         "device_instance_id": _row_value(row, "id"),
         "device_type": DEVICE_TYPE,
+        "provider": PROVIDER,
+        "device_profile": DEVICE_PROFILE,
         "display_name": _row_value(row, "name"),
         "session_name": _row_value(row, "name"),
         "owner_user_id": _row_value(row, "user_id"),
         "state": state,
+        "browser_pilot_state": browser_pilot_state,
         "lease_id": _row_value(row, "lease_id"),
         "lease_mode": _row_value(row, "lease_mode"),
         "current_operator": _row_value(row, "current_operator"),
         "operator_owner_user_id": _row_value(row, "operator_owner_user_id"),
         "task_id": _row_value(row, "task_id"),
         "session_id": _row_value(row, "id"),
+        "context_id": f"tenant:{tenant_id}" if tenant_id else "tenant:unassigned",
+        "compliance_level": COMPLIANCE_LEVEL,
+        "concurrency_model": CONCURRENCY_MODEL,
+        "supported_lease_modes": SUPPORTED_LEASE_MODES,
+        "unsupported_profiles": UNSUPPORTED_PROFILES,
+        "policy": LEVEL1_POLICY,
+        "admitted_by": "browser-pilot:agent-device-governance",
+        "admitted_at": _iso(_row_value(row, "session_created_at") or _row_value(row, "session_updated_at")),
+        "capabilities": LEVEL1_CAPABILITIES,
         "pause_capability": "soft_pause",
         "needs_intervention": False,
         "observable_surface_ref": None,
+        "observable_surface_status": "not_required_level1",
         "last_action_summary": last_action_summary,
         "last_action": _row_value(row, "last_action"),
         "last_action_outcome": _row_value(row, "last_outcome"),

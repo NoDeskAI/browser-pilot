@@ -584,26 +584,26 @@ async def create_session(body: CreateSessionBody, user: CurrentUser = Depends(ge
     )
     lease = await agent_devices.create_initial_lease(session_id, user)
     logger.info("Session created: %s (%s) preset=%s lang=%s chrome=%s", session_id, body.name, preset_id, safe_lang, resolved_chrome_version or "default")
-    return {
-        "id": session_id,
-        "name": body.name,
-        "devicePreset": preset_id,
-        "proxyUrl": effective_egress.proxy_url,
-        "fingerprintProfile": fp_profile,
-        "browserLang": safe_lang,
-        "chromeVersion": resolved_chrome_version,
-        "agentDevice": {
-            "deviceInstanceId": session_id,
-            "leaseId": lease.get("lease_id"),
-            "operator": lease.get("current_operator"),
-            "action": "reserve_device",
-            "status": "succeeded",
-            "sideEffectLevel": "internal",
-            "retrySafety": "safe",
-            "nextStep": "continue",
+    return agent_devices.control_action_response(
+        {
+            "id": session_id,
+            "name": body.name,
+            "devicePreset": preset_id,
+            "proxyUrl": effective_egress.proxy_url,
+            "fingerprintProfile": fp_profile,
+            "browserLang": safe_lang,
+            "chromeVersion": resolved_chrome_version,
+            **_egress_payload(effective_egress),
         },
-        **_egress_payload(effective_egress),
-    }
+        device_id=session_id,
+        user=user,
+        lease=lease,
+        action="reserve_device",
+        status="succeeded",
+        audit_event_id=str(lease.get("audit_event_id") or "") or None,
+        next_step="continue",
+        state_changed=True,
+    )
 
 
 @router.get("/api/sessions/{session_id}")

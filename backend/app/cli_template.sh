@@ -115,9 +115,9 @@ _api_get() {
   local token
   token="$(_config_get api_token)"
   if [[ -n "$token" ]]; then
-    curl -sfS -H "Authorization: Bearer $token" "$(_resolve_url)${path}" "$@"
+    curl -sS -H "Authorization: Bearer $token" "$(_resolve_url)${path}" "$@"
   else
-    curl -sfS "$(_resolve_url)${path}" "$@"
+    curl -sS "$(_resolve_url)${path}" "$@"
   fi
 }
 
@@ -140,11 +140,11 @@ _api_post() {
   local token
   token="$(_config_get api_token)"
   if [[ -n "$token" ]]; then
-    curl -sfS -X POST "$(_resolve_url)${path}" \
+    curl -sS -X POST "$(_resolve_url)${path}" \
       -H "Authorization: Bearer $token" \
       -H "Content-Type: application/json" -d "$body"
   else
-    curl -sfS -X POST "$(_resolve_url)${path}" \
+    curl -sS -X POST "$(_resolve_url)${path}" \
       -H "Content-Type: application/json" -d "$body"
   fi
 }
@@ -154,11 +154,11 @@ _api_patch() {
   local token
   token="$(_config_get api_token)"
   if [[ -n "$token" ]]; then
-    curl -sfS -X PATCH "$(_resolve_url)${path}" \
+    curl -sS -X PATCH "$(_resolve_url)${path}" \
       -H "Authorization: Bearer $token" \
       -H "Content-Type: application/json" -d "$body"
   else
-    curl -sfS -X PATCH "$(_resolve_url)${path}" \
+    curl -sS -X PATCH "$(_resolve_url)${path}" \
       -H "Content-Type: application/json" -d "$body"
   fi
 }
@@ -167,7 +167,7 @@ _api_delete() {
   local path="$1" body="${2:-}"
   local token
   token="$(_config_get api_token)"
-  local args=(-sfS -X DELETE)
+  local args=(-sS -X DELETE)
   if [[ -n "$body" ]]; then
     args+=(-H "Content-Type: application/json" -d "$body")
   fi
@@ -183,7 +183,7 @@ _api_upload_file() {
   local path="$1" file_path="$2" original_name="${3:-}"
   local token
   token="$(_config_get api_token)"
-  local args=(-sfS -X POST "$(_resolve_url)${path}" -F "file=@${file_path}")
+  local args=(-sS -X POST "$(_resolve_url)${path}" -F "file=@${file_path}")
   if [[ -n "$original_name" ]]; then
     args+=(-F "originalName=${original_name}")
   fi
@@ -889,6 +889,8 @@ Files:
   files delete <id>            Delete a completed session file
 
 Agent Devices:
+  Browser Pilot exposes Session as Device and strictly supports Level 1 Device Governance only.
+  Level 2 control transfer, request_intervention, handoff, and human takeover are not supported.
   devices                      List governed Agent Device sessions
   device <device-id>           Show DeviceVisibility for one session/device
   lease acquire <device-id> [--mode session_bound|task_bound] [--task-id ID]

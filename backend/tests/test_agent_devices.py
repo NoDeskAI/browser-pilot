@@ -1,11 +1,14 @@
 import asyncio
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
-from fastapi import HTTPException
 
 from app import agent_devices
 from app.auth.dependencies import CurrentUser
+
+
+BACKEND_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _user(user_id="user-1", role="member", *, session_scope=None, api_token_id=None):
@@ -248,10 +251,11 @@ def test_reclaim_rejects_invalid_lease_mode(monkeypatch):
     conn = FakeConn()
     monkeypatch.setattr(agent_devices, "get_pool", lambda: FakePool(conn))
 
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(agent_devices.AgentDeviceLeaseError) as exc:
         asyncio.run(agent_devices.reclaim_device("session-1", _user(role="admin"), lease_mode="invalid"))
 
     assert exc.value.status_code == 422
+    assert exc.value.reason == "invalid_lease_mode"
 
 
 def test_begin_compatible_action_returns_legacy_safe_conflict(monkeypatch):
@@ -278,8 +282,40 @@ def test_begin_compatible_action_returns_legacy_safe_conflict(monkeypatch):
     assert ctx is None
     assert rejected["ok"] is False
     assert rejected["agentDevice"]["status"] == "rejected"
+    assert rejected["agentDevice"]["executionStatus"] == "rejected"
+    assert rejected["agentDevice"]["failureCategory"] == "operator_mismatch"
+    assert rejected["agentDevice"]["auditStatus"] == "recorded"
+    assert rejected["agentDevice"]["evidenceStatus"] == "not_required"
+    assert rejected["agentDevice"]["stateChanged"] is False
     assert rejected["agentDevice"]["auditEventId"] == "audit-1"
     assert rejected["agentDevice"]["nextStep"] == "reclaim_or_wait"
+
+
+def test_control_action_response_extends_legacy_session_agent_device_fields():
+    payload = agent_devices.control_action_response(
+        {"ok": True, "id": "session-1"},
+        device_id="session-1",
+        user=_user(),
+        lease=agent_devices._lease_to_dict(_lease()) or {},
+        action="reserve_device",
+        status="succeeded",
+        audit_event_id="audit-1",
+        next_step="continue",
+        state_changed=True,
+    )
+
+    agent_device = payload["agentDevice"]
+    assert payload["id"] == "session-1"
+    assert agent_device["deviceInstanceId"] == "session-1"
+    assert agent_device["leaseId"] == "lease-1"
+    assert agent_device["operator"] == "user:user-1"
+    assert agent_device["status"] == "succeeded"
+    assert agent_device["executionStatus"] == "succeeded"
+    assert agent_device["sideEffectStatus"] == "applied"
+    assert agent_device["auditStatus"] == "recorded"
+    assert agent_device["evidenceStatus"] == "not_required"
+    assert agent_device["stateChanged"] is True
+    assert agent_device["auditEventId"] == "audit-1"
 
 
 def test_visibility_and_audit_protocol_aliases():
@@ -290,6 +326,7 @@ def test_visibility_and_audit_protocol_aliases():
             "name": "Session 1",
             "tenant_id": "tenant-1",
             "user_id": "user-1",
+            "session_created_at": now,
             "session_updated_at": now,
             "lease_id": "lease-1",
             "lease_mode": "session_bound",
@@ -301,16 +338,31 @@ def test_visibility_and_audit_protocol_aliases():
             "last_audit_id": "audit-1",
             "last_action": "browser.observe",
             "last_outcome": "succeeded",
+            "last_side_effect_level": "none",
             "last_summary": "Observed page",
+            "last_evidence_refs": [],
+            "last_details": {"evidenceStatus": "not_required"},
+            "last_error": None,
             "last_audit_at": now,
         },
         "running",
     )
 
-    assert visibility["state"] == "leased"
+    assert visibility["state"] == "OCCUPIED"
+    assert visibility["browser_pilot_state"] == "leased"
+    assert visibility["provider"] == "browser-pilot"
+    assert visibility["device_profile"] == "browser"
+    assert visibility["context_id"] == "tenant:tenant-1"
+    assert visibility["compliance_level"] == "level1_device_governance"
+    assert visibility["concurrency_model"] == "exclusive"
+    assert visibility["supported_lease_modes"] == ["session_bound", "task_bound"]
+    assert visibility["unsupported_profiles"] == ["control_transfer"]
+    assert visibility["observable_surface_status"] == "not_required_level1"
     assert visibility["session_id"] == "session-1"
     assert visibility["lease"]["lease_id"] == "lease-1"
     assert visibility["last_action_summary"]["auditEventId"] == "audit-1"
+    assert visibility["last_action_summary"]["auditStatus"] == "recorded"
+    assert visibility["last_action_summary"]["evidenceStatus"] == "not_required"
     assert visibility["containerStatus"] == "running"
 
     audit = agent_devices._audit_to_dict(
@@ -337,4 +389,119 @@ def test_visibility_and_audit_protocol_aliases():
 
     assert audit["operator"] == "user:user-1"
     assert audit["status"] == "succeeded"
+    assert audit["executionStatus"] == "succeeded"
+    assert audit["auditStatus"] == "recorded"
+    assert audit["evidenceStatus"] == "not_required"
     assert audit["occurred_at"] == now.isoformat()
+
+
+def test_dead_container_maps_to_protocol_error_state():
+    now = datetime.now(timezone.utc)
+    visibility = agent_devices._visibility_from_row(
+        {
+            "id": "session-1",
+            "name": "Session 1",
+            "tenant_id": "tenant-1",
+            "user_id": "user-1",
+            "session_created_at": now,
+            "session_updated_at": now,
+            "lease_id": None,
+            "lease_mode": None,
+            "task_id": None,
+            "current_operator": None,
+            "operator_owner_user_id": None,
+            "expires_at": None,
+            "lease_updated_at": None,
+            "last_audit_id": None,
+            "last_action": None,
+            "last_outcome": None,
+            "last_side_effect_level": None,
+            "last_summary": None,
+            "last_evidence_refs": None,
+            "last_details": None,
+            "last_error": None,
+            "last_audit_at": None,
+        },
+        "dead",
+    )
+
+    assert visibility["state"] == "ERROR"
+    assert visibility["browser_pilot_state"] == "idle"
+
+
+def test_complete_external_action_adds_governed_page_evidence(monkeypatch):
+    captured = {}
+
+    async def fake_record_action_event(**kwargs):
+        captured.update(kwargs)
+        return "audit-1"
+
+    monkeypatch.setattr(agent_devices, "record_action_event", fake_record_action_event)
+
+    ctx = agent_devices.AgentDeviceActionContext(
+        session_id="session-1",
+        action="browser.click",
+        actor="user:user-1",
+        actor_owner_user_id="user-1",
+        lease=agent_devices._lease_to_dict(_lease()) or {},
+        side_effect_level="external",
+    )
+    result = asyncio.run(
+        agent_devices.complete_compatible_action(
+            ctx,
+            {"ok": True, "currentPage": {"url": "https://example.com", "title": "Example"}},
+            summary="Clicked browser",
+            details={"x": 10, "y": 20},
+        )
+    )
+
+    assert captured["evidence_refs"] == [
+        {
+            "type": "browser_session",
+            "ref": "browser_session:session-1:current_page",
+            "session_id": "session-1",
+            "surface": "current_page",
+        }
+    ]
+    assert captured["details"]["currentPage"]["url"] == "https://example.com"
+    assert captured["details"]["actionParameters"] == {"x": 10, "y": 20}
+    assert captured["details"]["evidenceStatus"] == "captured"
+    assert result["agentDevice"]["evidenceStatus"] == "captured"
+    assert result["agentDevice"]["sideEffectStatus"] == "applied"
+    assert result["agentDevice"]["stateChanged"] is True
+
+
+def test_expire_active_leases_writes_system_audit():
+    class ExpireConn(FakeConn):
+        async def fetch(self, query, *args):
+            sql = " ".join(query.lower().split())
+            if "from agent_device_leases" in sql and "expires_at <= now()" in sql:
+                return [
+                    lease
+                    for lease in self.leases
+                    if lease["device_instance_id"] == args[0]
+                    and lease["status"] == "active"
+                    and lease["expires_at"] is not None
+                    and lease["expires_at"] <= datetime.now(timezone.utc)
+                ]
+            return []
+
+    conn = ExpireConn()
+    conn.leases.append(_lease(expires_at=datetime.now(timezone.utc) - timedelta(seconds=1)))
+
+    asyncio.run(agent_devices._expire_active_leases(conn, "session-1"))
+
+    assert conn.leases[0]["status"] == "expired"
+    assert conn.audits[-1]["actor"] == "system:lease_expirer"
+    assert conn.audits[-1]["action"] == "lease_expired"
+    assert conn.audits[-1]["outcome"] == "succeeded"
+
+
+def test_level1_contract_migration_revokes_ownerless_active_leases():
+    migration = BACKEND_ROOT / "alembic" / "versions" / "0016_agent_device_level1_contract.py"
+    text = migration.read_text()
+
+    assert "operator_owner_user_id IS NULL" in text
+    assert "status = 'revoked'" in text
+    assert "ownerless_active_blocked" in text
+    assert "revoke_ownerless_active_lease" in text

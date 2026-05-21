@@ -105,7 +105,19 @@ async def heartbeat_file_capture_route(
 ):
     from app.file_capture import heartbeat_file_capture, verify_file_capture_token
 
-    await verify_file_capture_token(session_id, _runtime_token(authorization))
+    try:
+        await verify_file_capture_token(session_id, _runtime_token(authorization))
+    except HTTPException as exc:
+        await agent_devices.record_runtime_action(
+            session_id,
+            action="session.files.heartbeat",
+            outcome="rejected",
+            side_effect_level="none",
+            summary="Runtime file capture heartbeat rejected by token validation",
+            details={"statusCode": exc.status_code},
+            error="invalid_runtime_token",
+        )
+        raise
     try:
         await heartbeat_file_capture(
             session_id,
@@ -154,7 +166,19 @@ async def ingest_session_file(
     from app.file_capture import clear_active_download, heartbeat_file_capture, verify_file_capture_token
     from app.file_service import save_file
 
-    await verify_file_capture_token(session_id, _runtime_token(authorization))
+    try:
+        await verify_file_capture_token(session_id, _runtime_token(authorization))
+    except HTTPException as exc:
+        await agent_devices.record_runtime_action(
+            session_id,
+            action="session.files.ingest",
+            outcome="rejected",
+            side_effect_level="none",
+            summary="Runtime file capture ingest rejected by token validation",
+            details={"statusCode": exc.status_code},
+            error="invalid_runtime_token",
+        )
+        raise
     filename = originalName.strip() or file.filename or "download"
     try:
         if source != "browser_download":

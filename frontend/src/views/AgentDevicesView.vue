@@ -150,8 +150,11 @@ function shortId(value?: string | null): string {
 }
 
 function stateLabel(value?: string | null): string {
-  if (value === 'idle') return t('agentDevices.idle')
-  if (value === 'leased') return t('agentDevices.leased')
+  if (value === 'IDLE' || value === 'idle') return t('agentDevices.idle')
+  if (value === 'OCCUPIED' || value === 'leased') return t('agentDevices.occupied')
+  if (value === 'RELEASING') return t('agentDevices.releasing')
+  if (value === 'ERROR') return t('agentDevices.error')
+  if (value === 'QUARANTINED') return t('agentDevices.quarantined')
   if (value === 'expired') return t('agentDevices.expired')
   return value || t('agentDevices.unknown')
 }
@@ -167,13 +170,22 @@ function statusLabel(value?: string | null): string {
   if (value === 'failed') return t('agentDevices.failed')
   if (value === 'rejected') return t('agentDevices.rejected')
   if (value === 'active') return t('agentDevices.active')
+  if (value === 'recorded') return t('agentDevices.recorded')
+  if (value === 'not_recorded') return t('agentDevices.notRecorded')
+  if (value === 'captured') return t('agentDevices.captured')
+  if (value === 'not_captured') return t('agentDevices.notCaptured')
+  if (value === 'not_required') return t('agentDevices.notRequired')
+  if (value === 'applied') return t('agentDevices.applied')
+  if (value === 'not_applied') return t('agentDevices.notApplied')
+  if (value === 'not_applicable') return t('agentDevices.notApplicable')
+  if (value === 'unknown') return t('agentDevices.unknown')
   return value || '-'
 }
 
 function stateBadgeVariant(value?: string | null) {
-  if (value === 'leased') return 'default' as const
-  if (value === 'idle') return 'secondary' as const
-  if (value === 'expired') return 'destructive' as const
+  if (value === 'OCCUPIED' || value === 'leased') return 'default' as const
+  if (value === 'IDLE' || value === 'idle') return 'secondary' as const
+  if (value === 'ERROR' || value === 'QUARANTINED' || value === 'expired') return 'destructive' as const
   return 'outline' as const
 }
 
@@ -181,6 +193,31 @@ function auditBadgeVariant(value?: string | null) {
   if (value === 'succeeded') return 'secondary' as const
   if (value === 'failed' || value === 'rejected') return 'destructive' as const
   return 'outline' as const
+}
+
+function complianceLabel(value?: string | null): string {
+  if (value === 'level1_device_governance') return t('agentDevices.level1')
+  return value || '-'
+}
+
+function surfaceLabel(value?: string | null): string {
+  if (value === 'not_required_level1') return t('agentDevices.surfaceNotRequiredLevel1')
+  return value || '-'
+}
+
+function policySummary(device: AgentDeviceVisibility): string {
+  const policy = device.policy || {}
+  const parts: string[] = []
+  if (policy.leaseRequired) parts.push(t('agentDevices.leaseRequired'))
+  if (policy.exclusiveLease) parts.push(t('agentDevices.exclusiveLease'))
+  if (policy.ownerlessActiveLeaseAllowed === false) parts.push(t('agentDevices.ownerlessBlocked'))
+  if (policy.controlTransfer) parts.push(`${t('agentDevices.controlTransfer')}: ${policy.controlTransfer}`)
+  return parts.length ? parts.join(' · ') : '-'
+}
+
+function shortList(values?: string[] | null): string {
+  if (!values?.length) return '-'
+  return values.join(', ')
 }
 </script>
 
@@ -221,6 +258,9 @@ function auditBadgeVariant(value?: string | null) {
               <span class="block truncate font-medium">{{ device.session_name || device.session_id }}</span>
               <span class="block truncate text-xs text-muted-foreground">{{ device.device_instance_id }}</span>
               <span class="mt-2 block max-w-full overflow-hidden text-ellipsis whitespace-nowrap text-xs text-muted-foreground">
+                {{ device.provider || '-' }} · {{ complianceLabel(device.compliance_level) }}
+              </span>
+              <span class="mt-1 block max-w-full overflow-hidden text-ellipsis whitespace-nowrap text-xs text-muted-foreground">
                 {{ device.runtime_state || device.containerStatus || '-' }} · {{ device.current_operator || t('agentDevices.noLease') }}
               </span>
             </span>
@@ -236,9 +276,9 @@ function auditBadgeVariant(value?: string | null) {
               <TableRow>
                 <TableHead>{{ t('agentDevices.device') }}</TableHead>
                 <TableHead class="w-[96px]">{{ t('agentDevices.state') }}</TableHead>
-                <TableHead class="w-[96px]">{{ t('agentDevices.runtime') }}</TableHead>
+                <TableHead class="w-[112px]">{{ t('agentDevices.provider') }}</TableHead>
+                <TableHead class="w-[136px]">{{ t('agentDevices.compliance') }}</TableHead>
                 <TableHead class="w-[156px]">{{ t('agentDevices.operator') }}</TableHead>
-                <TableHead class="w-[112px]">{{ t('agentDevices.mode') }}</TableHead>
                 <TableHead class="w-[128px]">{{ t('agentDevices.updated') }}</TableHead>
               </TableRow>
             </TableHeader>
@@ -276,15 +316,15 @@ function auditBadgeVariant(value?: string | null) {
                   </Badge>
                 </TableCell>
                 <TableCell class="text-sm text-muted-foreground">
-                  {{ device.runtime_state || device.containerStatus || '-' }}
+                  {{ device.provider || '-' }}
+                </TableCell>
+                <TableCell class="text-sm text-muted-foreground">
+                  {{ complianceLabel(device.compliance_level) }}
                 </TableCell>
                 <TableCell class="text-sm text-muted-foreground">
                   <span class="block truncate" :title="device.current_operator || ''">
                     {{ device.current_operator || t('agentDevices.noLease') }}
                   </span>
-                </TableCell>
-                <TableCell class="text-sm text-muted-foreground">
-                  {{ modeLabel(device.lease?.lease_mode) }}
                 </TableCell>
                 <TableCell class="text-xs text-muted-foreground">
                   {{ formatTime(device.updated_at) }}
@@ -308,8 +348,20 @@ function auditBadgeVariant(value?: string | null) {
                 <span class="truncate" :title="selectedDevice.device_instance_id">{{ selectedDevice.device_instance_id }}</span>
                 <span class="text-muted-foreground">{{ t('agentDevices.session') }}</span>
                 <span class="truncate" :title="selectedDevice.session_id">{{ selectedDevice.session_name || selectedDevice.session_id }}</span>
+                <span class="text-muted-foreground">{{ t('agentDevices.provider') }}</span>
+                <span class="truncate">{{ selectedDevice.provider || '-' }}</span>
+                <span class="text-muted-foreground">{{ t('agentDevices.profile') }}</span>
+                <span class="truncate">{{ selectedDevice.device_profile || selectedDevice.device_type }}</span>
+                <span class="text-muted-foreground">{{ t('agentDevices.context') }}</span>
+                <span class="truncate" :title="selectedDevice.context_id || ''">{{ selectedDevice.context_id || '-' }}</span>
+                <span class="text-muted-foreground">{{ t('agentDevices.compliance') }}</span>
+                <span class="truncate">{{ complianceLabel(selectedDevice.compliance_level) }}</span>
+                <span class="text-muted-foreground">{{ t('agentDevices.concurrency') }}</span>
+                <span class="truncate">{{ selectedDevice.concurrency_model || '-' }}</span>
                 <span class="text-muted-foreground">{{ t('agentDevices.lease') }}</span>
                 <span class="truncate" :title="selectedDevice.lease_id || ''">{{ shortId(selectedDevice.lease_id) }}</span>
+                <span class="text-muted-foreground">{{ t('agentDevices.mode') }}</span>
+                <span>{{ modeLabel(selectedDevice.lease?.lease_mode || selectedDevice.lease_mode) }}</span>
                 <span class="text-muted-foreground">{{ t('agentDevices.operator') }}</span>
                 <span class="truncate" :title="selectedDevice.current_operator || ''">{{ selectedDevice.current_operator || '-' }}</span>
                 <span class="text-muted-foreground">{{ t('agentDevices.expires') }}</span>
@@ -318,10 +370,24 @@ function auditBadgeVariant(value?: string | null) {
                 <span class="truncate" :title="selectedDevice.task_id || ''">{{ selectedDevice.task_id || '-' }}</span>
                 <span class="text-muted-foreground">{{ t('agentDevices.surface') }}</span>
                 <span class="truncate" :title="selectedDevice.observable_surface_ref || ''">{{ selectedDevice.observable_surface_ref || '-' }}</span>
+                <span class="text-muted-foreground">{{ t('agentDevices.surfaceStatus') }}</span>
+                <span class="truncate">{{ surfaceLabel(selectedDevice.observable_surface_status) }}</span>
+                <span class="text-muted-foreground">{{ t('agentDevices.policy') }}</span>
+                <span class="truncate" :title="policySummary(selectedDevice)">{{ policySummary(selectedDevice) }}</span>
+                <span class="text-muted-foreground">{{ t('agentDevices.unsupported') }}</span>
+                <span class="truncate" :title="shortList(selectedDevice.unsupported_profiles)">{{ shortList(selectedDevice.unsupported_profiles) }}</span>
                 <span class="text-muted-foreground">{{ t('agentDevices.lastAction') }}</span>
                 <span class="truncate" :title="selectedDevice.last_action_summary?.action || ''">
                   {{ selectedDevice.last_action_summary?.action || '-' }}
                 </span>
+                <span class="text-muted-foreground">{{ t('agentDevices.evidence') }}</span>
+                <span>{{ statusLabel(selectedDevice.last_action_summary?.evidenceStatus) }}</span>
+                <span class="text-muted-foreground">{{ t('agentDevices.failure') }}</span>
+                <span class="truncate" :title="selectedDevice.last_action_summary?.failureCategory || ''">
+                  {{ selectedDevice.last_action_summary?.failureCategory || '-' }}
+                </span>
+                <span class="text-muted-foreground">{{ t('agentDevices.auditStatus') }}</span>
+                <span>{{ statusLabel(selectedDevice.last_action_summary?.auditStatus) }}</span>
               </div>
 
               <div class="space-y-3 border-t border-border pt-4">
@@ -431,6 +497,16 @@ function auditBadgeVariant(value?: string | null) {
                   <span class="truncate" :title="event.operator || ''">{{ event.operator || '-' }}</span>
                   <span>{{ t('agentDevices.lease') }}</span>
                   <span class="truncate" :title="event.lease_id || ''">{{ shortId(event.lease_id) }}</span>
+                  <span>{{ t('agentDevices.sideEffect') }}</span>
+                  <span>{{ statusLabel(event.sideEffectStatus || event.side_effect_level) }}</span>
+                  <span>{{ t('agentDevices.evidence') }}</span>
+                  <span>{{ statusLabel(event.evidenceStatus) }}</span>
+                  <span>{{ t('agentDevices.failure') }}</span>
+                  <span class="truncate" :title="event.failureCategory || event.error_code || ''">
+                    {{ event.failureCategory || event.error_code || '-' }}
+                  </span>
+                  <span>{{ t('agentDevices.auditStatus') }}</span>
+                  <span>{{ statusLabel(event.auditStatus) }}</span>
                   <span>{{ t('agentDevices.updated') }}</span>
                   <span>{{ formatTime(event.occurred_at) }}</span>
                 </div>

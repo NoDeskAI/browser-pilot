@@ -99,25 +99,44 @@ export interface AgentDeviceLease {
 export interface AgentDeviceActionSummary {
   action?: string
   status?: string
+  executionStatus?: string
   auditEventId?: string
-  occurredAt?: string
+  auditStatus?: string
+  evidenceStatus?: string
   sideEffectLevel?: string
+  sideEffectStatus?: string
+  failureCategory?: string | null
+  occurredAt?: string
 }
 
 export interface AgentDeviceVisibility {
   device_instance_id: string
   device_type: 'browser_session' | string
-  state: 'idle' | 'leased' | 'expired' | string
+  provider?: string
+  device_profile?: string
+  state: 'IDLE' | 'OCCUPIED' | 'RELEASING' | 'ERROR' | 'QUARANTINED' | string
+  browser_pilot_state?: 'idle' | 'leased' | 'expired' | string
   lease_id?: string | null
+  lease_mode?: string | null
   current_operator?: string | null
   task_id?: string | null
   session_id: string
   session_name?: string | null
   owner_user_id?: string | null
   operator_owner_user_id?: string | null
+  context_id?: string | null
+  compliance_level?: string
+  concurrency_model?: string
+  supported_lease_modes?: string[]
+  unsupported_profiles?: string[]
+  policy?: Record<string, any> | null
+  admitted_by?: string | null
+  admitted_at?: string | null
+  capabilities?: string[]
   pause_capability: string
   needs_intervention: boolean
   observable_surface_ref?: string | null
+  observable_surface_status?: string | null
   last_action_summary?: AgentDeviceActionSummary | null
   updated_at?: string | null
   runtime_state?: string | null
@@ -136,7 +155,15 @@ export interface AgentDeviceAuditEvent {
   operator_owner_user_id?: string | null
   action: string
   status: 'succeeded' | 'failed' | 'rejected' | string
+  executionStatus?: string
   side_effect_level?: string | null
+  sideEffectLevel?: string | null
+  sideEffectStatus?: string | null
+  failureCategory?: string | null
+  auditStatus?: string | null
+  evidenceStatus?: string | null
+  stateChanged?: boolean
+  evidenceRefs?: Array<Record<string, any>>
   retry_safety?: string | null
   route?: string | null
   method?: string | null
