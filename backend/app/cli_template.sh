@@ -579,7 +579,7 @@ Session target:
 
 Browser (require active session):
   navigate <url>               Go to URL
-  observe [--mode dom|vision|mix] Get DOM elements, YOLOv8 boxes, or DOM-first vision fallback
+  observe [--mode dom|vision|mix] Get DOM elements, YOLOv8 boxes, or visual-anchor mixed candidates
           [--include-annotated-screenshot] Include a base64 boxed screenshot
   click <x> <y>                Click at coordinates
   click-element <selector>     Click by CSS selector

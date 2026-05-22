@@ -197,11 +197,11 @@ Alternatively set:
 export BP_UI_DETECTOR_MODEL=/absolute/path/to/noah-real-yolov8n-ui.pt
 ```
 
-`observe --mode mix` first returns DOM results. Vision inference is only used as a fallback when DOM observe returns no elements.
+`observe --mode mix` uses the visual-anchor fusion path: YOLO vision boxes and groups define the primary clickable regions, then DOM and Chrome AX candidates enrich those boxes with text, roles, and href hints. The response still returns a single `mixedCandidates` list in click-viewport coordinates.
 
 ### OmniParser vision backend
 
-`observe --mode vision` and `observe --mode mix` can use Microsoft OmniParser V2:
+`observe --mode vision` and the vision leg of `observe --mode mix` can use Microsoft OmniParser V2:
 
 ```bash
 export BP_VISION_BACKEND=omniparser

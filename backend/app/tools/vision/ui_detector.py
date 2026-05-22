@@ -1303,6 +1303,21 @@ def attach_dom_hints(
     return enriched
 
 
+def attach_ax_hints(
+    vision_candidates: list[dict[str, Any]],
+    ax_candidates: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    enriched: list[dict[str, Any]] = []
+    for candidate in vision_candidates:
+        item = dict(candidate)
+        hint = best_ax_hint(candidate, ax_candidates)
+        if hint is not None:
+            item["axHint"] = hint
+            apply_ax_hint_semantics(item, hint)
+        enriched.append(item)
+    return enriched
+
+
 def apply_dom_hint_semantics(candidate: dict[str, Any], hint: dict[str, Any]) -> None:
     """Use DOM only as a semantic hint for the visual box.
 
@@ -1351,58 +1366,108 @@ def apply_dom_hint_semantics(candidate: dict[str, Any], hint: dict[str, Any]) ->
         candidate["semanticConfidence"] = "medium"
 
 
+def apply_ax_hint_semantics(candidate: dict[str, Any], hint: dict[str, Any]) -> None:
+    family = str(candidate.get("family") or "unknown")
+    ax_family_value = str(hint.get("family") or "unknown")
+    label = str(hint.get("label") or "").strip()
+    if label and not candidate.get("textHint"):
+        candidate["textHint"] = label
+
+    bbox = candidate.get("bbox") or {}
+    w = int(bbox.get("w", 0))
+    h = int(bbox.get("h", 0))
+    area = w * h
+    aspect = w / max(h, 1)
+    action_like = h <= 96 and (w <= 380 or 1.4 <= aspect <= 8.0)
+
+    if ax_family_value in {"button", "input", "link", "tab", "menu_item", "control"}:
+        if family == "unknown" or (family in {"text", "icon"} and action_like):
+            candidate["family"] = ax_family_value
+            candidate["label"] = ax_family_value
+            candidate["semanticSource"] = "ax_hint"
+            candidate["semanticConfidence"] = "medium"
+            return
+        if family == "visual" and action_like and area <= 380 * 110:
+            candidate["family"] = ax_family_value
+            candidate["label"] = ax_family_value
+            candidate["semanticSource"] = "ax_hint"
+            candidate["semanticConfidence"] = "medium"
+
+
 def build_mixed_candidates(
     *,
     elements: list[dict[str, Any]],
     vision_candidates: list[dict[str, Any]],
     vision_groups: list[dict[str, Any]] | None = None,
+    ax_candidates: list[dict[str, Any]] | None = None,
     max_candidates: int,
+    fusion_trace: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    max_candidates = max(1, max_candidates)
-    group_entries = [
-        make_vision_group_mixed_candidate(group)
+    """Compatibility wrapper for the public mix mode.
+
+    Mix now uses the visual-anchor strategy: visual boxes/groups are the
+    primary coordinate anchors, while DOM and AX are attached as semantic hints
+    or high-quality supplements.
+    """
+
+    candidates = build_anchor_candidates(
+        elements=elements,
+        vision_candidates=vision_candidates,
+        vision_groups=vision_groups,
+        ax_candidates=ax_candidates,
+        max_candidates=max_candidates,
+        fusion_trace=fusion_trace,
+    )
+    for index, candidate in enumerate(candidates, start=1):
+        candidate["id"] = f"mix-{index:03d}"
+        candidate["rank"] = index
+    return candidates
+
+
+def build_anchor_candidates(
+    *,
+    elements: list[dict[str, Any]],
+    vision_candidates: list[dict[str, Any]],
+    vision_groups: list[dict[str, Any]] | None = None,
+    ax_candidates: list[dict[str, Any]] | None = None,
+    max_candidates: int,
+    fusion_trace: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Build a visual-first candidate list.
+
+    Unlike mix mode, the primary boxes come from visual detections/groups. DOM
+    and AX entries are pulled into those visual anchors to provide labels,
+    roles, and href hints. High-confidence DOM/AX controls that vision misses
+    are still appended so the mode remains usable on ordinary form pages.
+    """
+
+    vision_entries = [
+        make_anchor_group_candidate(group)
         for group in (vision_groups or [])
-        if is_usable_vision_candidate(group) and is_vision_dom_supplement(group, elements, is_group=True)
+        if is_usable_vision_candidate(group)
     ]
-    group_entries.sort(key=lambda item: item.get("mixScore", 0.0), reverse=True)
+    vision_entries.extend(
+        make_anchor_vision_candidate(candidate)
+        for candidate in vision_candidates
+        if is_usable_vision_candidate(candidate)
+    )
+    anchors = [entry for entry in vision_entries if is_visual_anchor_entry(entry)]
 
     dom_entries = [
         make_dom_mixed_candidate(index, element)
         for index, element in enumerate(elements, start=1)
         if is_usable_dom_element(element)
     ]
-    dom_entries.sort(key=lambda item: item.get("mixScore", 0.0), reverse=True)
-
-    vision_entries = [
-        make_vision_mixed_candidate(candidate)
-        for candidate in vision_candidates
-        if is_usable_vision_candidate(candidate) and is_vision_dom_supplement(candidate, elements)
+    ax_entries = [
+        make_ax_mixed_candidate(index, candidate)
+        for index, candidate in enumerate(ax_candidates or [], start=1)
+        if is_usable_vision_candidate(candidate)
     ]
-    vision_entries.sort(key=lambda item: item.get("mixScore", 0.0), reverse=True)
 
-    supplement_entries = group_entries + vision_entries
-    supplement_entries = dedupe_mixed_entries(supplement_entries)
-    supplement_entries.sort(key=lambda item: item.get("mixScore", 0.0), reverse=True)
-
-    if not dom_entries:
-        return supplement_entries[:max_candidates]
-    if not supplement_entries:
-        return dom_entries[:max_candidates]
-
-    supplement_slots = min(len(supplement_entries), max(1, round(max_candidates * 0.35)))
-    dom_slots = max(0, max_candidates - supplement_slots)
-
-    selected = dom_entries[:dom_slots] + supplement_entries[:supplement_slots]
-    selected_ids = {item["id"] for item in selected}
-    remaining = [
-        item
-        for item in dom_entries[dom_slots:] + supplement_entries[supplement_slots:]
-        if item["id"] not in selected_ids
-    ]
-    remaining.sort(key=lambda item: item.get("mixScore", 0.0), reverse=True)
-    selected.extend(remaining[: max_candidates - len(selected)])
-    selected.sort(key=lambda item: item.get("mixScore", 0.0), reverse=True)
-    return selected[:max_candidates]
+    entries: list[dict[str, Any]] = list(vision_entries)
+    entries.extend(entry for entry in dom_entries if should_include_anchor_hint(entry, anchors) or is_high_quality_anchor_supplement(entry))
+    entries.extend(entry for entry in ax_entries if should_include_anchor_hint(entry, anchors) or is_high_quality_anchor_supplement(entry))
+    return fuse_anchor_candidates(entries, max_candidates=max_candidates, fusion_trace=fusion_trace)
 
 
 def make_dom_mixed_candidate(index: int, element: dict[str, Any]) -> dict[str, Any]:
@@ -1412,6 +1477,7 @@ def make_dom_mixed_candidate(index: int, element: dict[str, Any]) -> dict[str, A
         bbox = {"x": center["x"], "y": center["y"], "w": 1, "h": 1}
     family = dom_family(element)
     score = dom_mix_score(element, family)
+    source_key = dom_source_key(element, family)
     return {
         "id": f"dom-{index:03d}",
         "bbox": bbox,
@@ -1421,9 +1487,22 @@ def make_dom_mixed_candidate(index: int, element: dict[str, Any]) -> dict[str, A
         "label": element_label(element),
         "family": family,
         "source": "dom",
+        "sourceKey": source_key,
         "kind": "dom",
         "domHint": compact_dom_hint(element),
     }
+
+
+def make_ax_mixed_candidate(index: int, candidate: dict[str, Any]) -> dict[str, Any]:
+    item = dict(candidate)
+    item["id"] = item.get("id") or f"ax-{index:03d}"
+    item["source"] = "ax_tree"
+    item["sourceKey"] = "ax_tree"
+    item["kind"] = "ax"
+    item["mixScore"] = round(float(item.get("score") or 0.0), 4)
+    item.setdefault("label", item.get("role") or item.get("family") or "ax")
+    item.setdefault("family", "unknown")
+    return item
 
 
 def make_vision_mixed_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
@@ -1446,6 +1525,7 @@ def make_vision_mixed_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
     }.get(family, 0.0)
     item["mixScore"] = round(max(0.0, min(raw_score + source_bonus + family_bonus, 1.0)), 4)
     item["kind"] = "vision_supplement"
+    item["sourceKey"] = "vision_yolo"
     item.setdefault("supplementReason", "dom_blind_spot" if "domHint" not in item else "visual_context")
     return item
 
@@ -1453,11 +1533,533 @@ def make_vision_mixed_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
 def make_vision_group_mixed_candidate(group: dict[str, Any]) -> dict[str, Any]:
     item = dict(group)
     item["source"] = "vision_group"
+    item["sourceKey"] = "vision_group"
     item["kind"] = "vision_supplement_group"
     item["score"] = round(float(item.get("score") or item.get("mixScore") or 0.0), 4)
     item["mixScore"] = round(min(float(item.get("mixScore") or item["score"]) + 0.08, 1.0), 4)
     item.setdefault("supplementReason", "visual_group")
     return item
+
+
+def make_anchor_vision_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
+    item = make_vision_mixed_candidate(candidate)
+    item["kind"] = "vision_anchor"
+    item["anchorRole"] = "visual_atom"
+    item["mixScore"] = round(min(float(item.get("mixScore") or 0.0) + 0.06, 1.0), 4)
+    item.setdefault("supplementReason", "vision_anchor")
+    return item
+
+
+def make_anchor_group_candidate(group: dict[str, Any]) -> dict[str, Any]:
+    item = make_vision_group_mixed_candidate(group)
+    item["kind"] = "vision_anchor_group"
+    item["anchorRole"] = "visual_group"
+    item["mixScore"] = round(min(float(item.get("mixScore") or 0.0) + 0.08, 1.0), 4)
+    item.setdefault("supplementReason", "vision_group_anchor")
+    return item
+
+
+MIX_SOURCE_PRIOR = {
+    "dom_explicit": 0.95,
+    "ax_tree": 0.9,
+    "dom_clickable": 0.82,
+    "vision_group": 0.72,
+    "vision_yolo": 0.58,
+    "dom_generic": 0.55,
+    "ocr_text": 0.45,
+    "unknown": 0.25,
+}
+
+MIX_CONTROL_FAMILIES = {"button", "input", "search_box", "link", "tab", "menu_item", "control", "icon"}
+MIX_LARGE_VISUAL_FAMILIES = {"card", "video_card", "media_item", "visual", "panel", "window", "toolbar", "nav_cluster"}
+ANCHOR_PRESERVED_ATOM_FAMILIES = {
+    "button",
+    "input",
+    "search_box",
+    "nav_item",
+    "link",
+    "icon",
+    "text",
+    "visual",
+    "logo",
+    "tab",
+    "menu_item",
+    "control",
+}
+
+
+def fuse_mixed_candidates(
+    entries: list[dict[str, Any]],
+    *,
+    max_candidates: int,
+    fusion_trace: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    max_candidates = max(1, max_candidates)
+    clusters = cluster_mixed_entries(entries)
+    if fusion_trace is not None:
+        fusion_trace["fusion_cluster_count"] = len(clusters)
+        fusion_trace["fusion_input_count"] = len(entries)
+    fused = [fuse_mixed_cluster(cluster) for cluster in clusters]
+    fused.sort(key=lambda item: float(item.get("score") or 0.0), reverse=True)
+    accepted: list[dict[str, Any]] = []
+    for candidate in fused:
+        if should_drop_due_to_existing(candidate, accepted):
+            continue
+        accepted.append(candidate)
+        if len(accepted) >= max_candidates:
+            break
+    for index, candidate in enumerate(accepted, start=1):
+        candidate["id"] = f"mix-{index:03d}"
+        candidate["rank"] = index
+    return accepted
+
+
+def fuse_anchor_candidates(
+    entries: list[dict[str, Any]],
+    *,
+    max_candidates: int,
+    fusion_trace: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    max_candidates = max(1, max_candidates)
+    clusters = cluster_anchor_entries(entries)
+    if fusion_trace is not None:
+        fusion_trace["fusion_cluster_count"] = len(clusters)
+        fusion_trace["fusion_input_count"] = len(entries)
+    fused = [fuse_anchor_cluster(cluster) for cluster in clusters]
+    fused.sort(key=lambda item: float(item.get("score") or 0.0), reverse=True)
+    accepted: list[dict[str, Any]] = []
+    for candidate in fused:
+        if should_drop_due_to_existing(candidate, accepted):
+            continue
+        accepted.append(candidate)
+        if len(accepted) >= max_candidates:
+            break
+    for index, candidate in enumerate(accepted, start=1):
+        candidate["id"] = f"anchor-{index:03d}"
+        candidate["rank"] = index
+    return accepted
+
+
+def cluster_anchor_entries(entries: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+    clusters: list[list[dict[str, Any]]] = []
+    for entry in entries:
+        if not is_usable_vision_candidate(entry):
+            continue
+        for cluster in clusters:
+            if any(should_cluster_anchor_entries(entry, existing) for existing in cluster):
+                cluster.append(entry)
+                break
+        else:
+            clusters.append([entry])
+    return clusters
+
+
+def should_cluster_anchor_entries(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    left_box = left.get("bbox") or {}
+    right_box = right.get("bbox") or {}
+    if protects_anchor_atom(left, right) or protects_anchor_atom(right, left):
+        return False
+    if bbox_iou(left_box, right_box) >= 0.42:
+        return True
+    if public_source(left) == "vision" and public_source(right) == "vision":
+        return False
+    if is_visual_anchor_entry(left) and anchor_hint_matches(right, left):
+        return True
+    if is_visual_anchor_entry(right) and anchor_hint_matches(left, right):
+        return True
+    return False
+
+
+def protects_anchor_atom(outer: dict[str, Any], inner: dict[str, Any]) -> bool:
+    """Keep atom-level visual detections separate from large visual anchors.
+
+    ANCHOR mode still lets DOM/AX hints attach to big visual boxes for labels,
+    but YOLO atom boxes such as buttons, nav items, icons, and text should not
+    disappear into card/video/list groups. Those atoms are often the actual
+    click targets the agent needs.
+    """
+
+    outer_family = str(outer.get("family") or "unknown")
+    inner_family = str(inner.get("family") or "unknown")
+    outer_source = public_source(outer)
+    if outer_source not in {"vision", "vision_group"} or public_source(inner) != "vision":
+        return False
+    if outer_family not in MIX_LARGE_VISUAL_FAMILIES or inner_family not in ANCHOR_PRESERVED_ATOM_FAMILIES:
+        return False
+    if outer_source == "vision_group":
+        return True
+    outer_box = outer.get("bbox") or {}
+    inner_box = inner.get("bbox") or {}
+    inner_center = inner.get("center") or bbox_center(inner_box)
+    is_inside = bbox_contains(outer_box, inner_box) or point_inside_bbox(
+        int(inner_center.get("x", -1)),
+        int(inner_center.get("y", -1)),
+        outer_box,
+    )
+    if not is_inside:
+        return False
+    return box_area(outer_box) >= box_area(inner_box) * 1.8
+
+
+def cluster_mixed_entries(entries: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+    clusters: list[list[dict[str, Any]]] = []
+    for entry in entries:
+        if not is_usable_vision_candidate(entry):
+            continue
+        for cluster in clusters:
+            if any(should_cluster_mixed_entries(entry, existing) for existing in cluster):
+                cluster.append(entry)
+                break
+        else:
+            clusters.append([entry])
+    return clusters
+
+
+def should_cluster_mixed_entries(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    left_box = left.get("bbox") or {}
+    right_box = right.get("bbox") or {}
+    iou = bbox_iou(left_box, right_box)
+    if iou >= 0.42:
+        return True
+    if protects_nested_control(left, right) or protects_nested_control(right, left):
+        return False
+    if bbox_contains(left_box, right_box) or bbox_contains(right_box, left_box):
+        left_area = box_area(left_box)
+        right_area = box_area(right_box)
+        if min(left_area, right_area) / max(max(left_area, right_area), 1) >= 0.35:
+            return True
+    return False
+
+
+def protects_nested_control(outer: dict[str, Any], inner: dict[str, Any]) -> bool:
+    outer_family = str(outer.get("family") or "unknown")
+    inner_family = str(inner.get("family") or "unknown")
+    if outer_family not in MIX_LARGE_VISUAL_FAMILIES or inner_family not in MIX_CONTROL_FAMILIES:
+        return False
+    outer_box = outer.get("bbox") or {}
+    inner_box = inner.get("bbox") or {}
+    return bbox_contains(outer_box, inner_box) and box_area(outer_box) >= box_area(inner_box) * 2.5
+
+
+def fuse_anchor_cluster(cluster: list[dict[str, Any]]) -> dict[str, Any]:
+    representative = anchor_representative(cluster)
+    family = anchor_cluster_family(cluster, representative)
+    label = cluster_label(cluster, family)
+    bbox = representative.get("bbox") or union_bbox([item.get("bbox") or {} for item in cluster])
+    sources = sorted({public_source(item) for item in cluster})
+    score = score_anchor_cluster(cluster, representative=representative, family=family)
+    result = {
+        "id": representative.get("id"),
+        "bbox": bbox,
+        "center": bbox_center(bbox),
+        "score": score,
+        "mixScore": score,
+        "family": family,
+        "label": label,
+        "source": "anchor_fusion",
+        "kind": "anchor_fusion",
+        "sources": sources,
+        "sourceSummary": "+".join(sources),
+        "anchorSource": public_source(representative),
+    }
+    for item in cluster:
+        if item.get("domHint") and "domHint" not in result:
+            result["domHint"] = item["domHint"]
+        if item.get("axHint") and "axHint" not in result:
+            result["axHint"] = item["axHint"]
+        if public_source(item) in {"vision", "vision_group"} and "visionHint" not in result:
+            result["visionHint"] = compact_vision_hint(item)
+        if item.get("textHint") and not result.get("textHint"):
+            result["textHint"] = item["textHint"]
+    if any(public_source(item) == "dom" and item.get("domHint") for item in cluster) and "domHint" not in result:
+        result["domHint"] = next(item["domHint"] for item in cluster if public_source(item) == "dom" and item.get("domHint"))
+    if any(public_source(item) == "ax_tree" and item.get("axHint") for item in cluster) and "axHint" not in result:
+        result["axHint"] = next(item["axHint"] for item in cluster if public_source(item) == "ax_tree" and item.get("axHint"))
+    return result
+
+
+def anchor_representative(cluster: list[dict[str, Any]]) -> dict[str, Any]:
+    def rank(item: dict[str, Any]) -> tuple[float, float, int]:
+        source = public_source(item)
+        source_rank = {
+            "vision_group": 4.0,
+            "vision": 3.0,
+            "ax_tree": 2.0,
+            "dom": 1.0,
+        }.get(source, 0.0)
+        return (
+            source_rank,
+            float(item.get("mixScore", item.get("score", 0.0)) or 0.0),
+            box_area(item.get("bbox") or {}),
+        )
+
+    return max(cluster, key=rank)
+
+
+def anchor_cluster_family(cluster: list[dict[str, Any]], representative: dict[str, Any]) -> str:
+    representative_family = str(representative.get("family") or "unknown")
+    representative_source = public_source(representative)
+    if representative_source == "vision_group" and representative_family in {
+        "video_card",
+        "card",
+        "media_item",
+        "list_item",
+        "toolbar",
+        "nav_cluster",
+    }:
+        return representative_family
+    if representative_source == "vision" and representative_family in {"visual", "logo"}:
+        return representative_family
+    return cluster_family(cluster)
+
+
+def fuse_mixed_cluster(cluster: list[dict[str, Any]]) -> dict[str, Any]:
+    representative = max(
+        cluster,
+        key=lambda item: (
+            source_prior(item),
+            float(item.get("mixScore", item.get("score", 0.0)) or 0.0),
+            -box_area(item.get("bbox") or {}),
+        ),
+    )
+    family = cluster_family(cluster)
+    label = cluster_label(cluster, family)
+    bbox = representative.get("bbox") or union_bbox([item.get("bbox") or {} for item in cluster])
+    sources = sorted({public_source(item) for item in cluster})
+    score = score_mixed_cluster(cluster, representative=representative, family=family)
+    result = {
+        "id": representative.get("id"),
+        "bbox": bbox,
+        "center": bbox_center(bbox),
+        "score": score,
+        "mixScore": score,
+        "family": family,
+        "label": label,
+        "source": "fusion",
+        "kind": "fusion",
+        "sources": sources,
+        "sourceSummary": "+".join(sources),
+    }
+    for item in cluster:
+        if item.get("domHint") and "domHint" not in result:
+            result["domHint"] = item["domHint"]
+        if item.get("axHint") and "axHint" not in result:
+            result["axHint"] = item["axHint"]
+        if public_source(item) in {"vision", "vision_group"} and "visionHint" not in result:
+            result["visionHint"] = compact_vision_hint(item)
+        if item.get("textHint") and not result.get("textHint"):
+            result["textHint"] = item["textHint"]
+    return result
+
+
+def score_anchor_cluster(cluster: list[dict[str, Any]], *, representative: dict[str, Any], family: str) -> float:
+    score = score_mixed_cluster(cluster, representative=representative, family=family)
+    sources = {public_source(item) for item in cluster}
+    if "vision_group" in sources:
+        score += 0.06
+    elif "vision" in sources:
+        score += 0.04
+    if ("dom" in sources or "ax_tree" in sources) and ("vision" in sources or "vision_group" in sources):
+        score += 0.05
+    if family == "unknown":
+        score -= 0.08
+    return round(max(0.0, min(score, 1.0)), 4)
+
+
+def score_mixed_cluster(cluster: list[dict[str, Any]], *, representative: dict[str, Any], family: str) -> float:
+    source_score = max(source_prior(item) for item in cluster)
+    model_score = max(float(item.get("mixScore", item.get("score", 0.0)) or 0.0) for item in cluster)
+    semantic_bonus = semantic_family_bonus(cluster, family)
+    spatial_bonus = spatial_candidate_bonus(representative)
+    consensus_bonus = mixed_consensus_bonus(cluster)
+    size_penalty = mixed_size_penalty(representative, family)
+    noise_penalty = mixed_noise_penalty(cluster, family)
+    score = (
+        0.40 * source_score
+        + 0.20 * model_score
+        + 0.20 * semantic_bonus
+        + 0.12 * spatial_bonus
+        + 0.12 * consensus_bonus
+        - size_penalty
+        - noise_penalty
+    )
+    return round(max(0.0, min(score, 1.0)), 4)
+
+
+def cluster_family(cluster: list[dict[str, Any]]) -> str:
+    for source in ("ax_tree", "dom", "vision_group", "vision"):
+        for item in cluster:
+            if public_source(item) == source:
+                family = str(item.get("family") or "unknown")
+                if family != "unknown":
+                    return "input" if family == "search_box" else family
+    return str(cluster[0].get("family") or "unknown")
+
+
+def cluster_label(cluster: list[dict[str, Any]], family: str) -> str:
+    for source in ("ax_tree", "dom", "vision_group", "vision"):
+        for item in cluster:
+            if public_source(item) != source:
+                continue
+            label = str(item.get("label") or item.get("textHint") or "").strip()
+            if label and label.lower() not in {"unknown", "visual", "button", "input", "link", "text"}:
+                return label[:120]
+    return family
+
+
+def source_prior(item: dict[str, Any]) -> float:
+    return MIX_SOURCE_PRIOR.get(str(item.get("sourceKey") or public_source(item) or "unknown"), MIX_SOURCE_PRIOR["unknown"])
+
+
+def public_source(item: dict[str, Any]) -> str:
+    source = str(item.get("source") or "")
+    if source == "ax_tree":
+        return "ax_tree"
+    if source == "dom":
+        return "dom"
+    if source == "vision_group":
+        return "vision_group"
+    if source in {SOURCE, OMNIPARSER_SOURCE} or str(item.get("kind", "")).startswith("vision"):
+        return "vision"
+    return source or "unknown"
+
+
+def is_visual_anchor_entry(entry: dict[str, Any]) -> bool:
+    return public_source(entry) in {"vision", "vision_group"} and is_usable_vision_candidate(entry)
+
+
+def should_include_anchor_hint(entry: dict[str, Any], anchors: list[dict[str, Any]]) -> bool:
+    return any(anchor_hint_matches(entry, anchor) for anchor in anchors)
+
+
+def anchor_hint_matches(entry: dict[str, Any], anchor: dict[str, Any]) -> bool:
+    entry_box = entry.get("bbox") or {}
+    anchor_box = anchor.get("bbox") or {}
+    if bbox_iou(entry_box, anchor_box) >= 0.28:
+        return True
+    entry_center = entry.get("center") or bbox_center(entry_box)
+    anchor_center = anchor.get("center") or bbox_center(anchor_box)
+    if point_inside_bbox(int(entry_center.get("x", -1)), int(entry_center.get("y", -1)), anchor_box):
+        return True
+    if point_inside_bbox(int(anchor_center.get("x", -1)), int(anchor_center.get("y", -1)), entry_box):
+        return True
+    if bbox_contains(anchor_box, entry_box):
+        return True
+    if bbox_contains(entry_box, anchor_box):
+        return box_area(anchor_box) / max(box_area(entry_box), 1) >= 0.25
+    return False
+
+
+def is_high_quality_anchor_supplement(entry: dict[str, Any]) -> bool:
+    family = str(entry.get("family") or "unknown")
+    if family not in {"button", "input", "search_box", "link", "tab", "menu_item", "control"}:
+        return False
+    label = str(entry.get("label") or entry.get("textHint") or "").strip()
+    if public_source(entry) == "ax_tree":
+        label = label or str((entry.get("axHint") or {}).get("name") or "").strip()
+    if public_source(entry) == "dom":
+        label = label or str((entry.get("domHint") or {}).get("text") or "").strip()
+    return bool(label) and box_area(entry.get("bbox") or {}) >= 16
+
+
+def semantic_family_bonus(cluster: list[dict[str, Any]], family: str) -> float:
+    if any(item.get("textHint") or item.get("domHint") or item.get("axHint") for item in cluster):
+        base = 0.62
+    else:
+        base = 0.35
+    if family in {"button", "input", "link", "tab", "menu_item", "control"}:
+        base += 0.28
+    elif family in {"video_card", "card", "media_item", "visual", "list_item"}:
+        base += 0.16
+    elif family == "unknown":
+        base -= 0.24
+    return max(0.0, min(base, 1.0))
+
+
+def spatial_candidate_bonus(candidate: dict[str, Any]) -> float:
+    bbox = candidate.get("bbox") or {}
+    w = int(bbox.get("w", 0))
+    h = int(bbox.get("h", 0))
+    if w <= 0 or h <= 0:
+        return 0.0
+    aspect = w / max(h, 1)
+    family = str(candidate.get("family") or "unknown")
+    if family in {"button", "input", "link", "tab", "menu_item"} and h <= 96 and aspect >= 1.0:
+        return 0.75
+    if family in {"icon", "control"} and w <= 96 and h <= 96:
+        return 0.65
+    if family in {"video_card", "card", "media_item", "visual"} and w >= 100 and h >= 80:
+        return 0.58
+    return 0.35
+
+
+def mixed_consensus_bonus(cluster: list[dict[str, Any]]) -> float:
+    sources = {public_source(item) for item in cluster}
+    if {"dom", "ax_tree", "vision"} <= sources or {"dom", "ax_tree", "vision_group"} <= sources:
+        return 1.0
+    if {"dom", "ax_tree"} <= sources:
+        return 0.85
+    if {"dom", "vision"} <= sources or {"dom", "vision_group"} <= sources:
+        return 0.62
+    if {"ax_tree", "vision"} <= sources or {"ax_tree", "vision_group"} <= sources:
+        return 0.62
+    return 0.15
+
+
+def mixed_size_penalty(candidate: dict[str, Any], family: str) -> float:
+    bbox = candidate.get("bbox") or {}
+    area = box_area(bbox)
+    if area <= 0:
+        return 0.2
+    if family in MIX_LARGE_VISUAL_FAMILIES:
+        return 0.0
+    if area > 500_000:
+        return 0.18
+    if area > 220_000:
+        return 0.08
+    return 0.0
+
+
+def mixed_noise_penalty(cluster: list[dict[str, Any]], family: str) -> float:
+    if family == "unknown":
+        return 0.2
+    if len(cluster) == 1 and public_source(cluster[0]) == "vision" and family in {"text", "unknown"}:
+        return 0.12
+    return 0.0
+
+
+def should_drop_due_to_existing(candidate: dict[str, Any], accepted: list[dict[str, Any]]) -> bool:
+    for existing in accepted:
+        if protects_nested_control(existing, candidate) or protects_nested_control(candidate, existing):
+            continue
+        if bbox_iou(candidate.get("bbox") or {}, existing.get("bbox") or {}) >= 0.72:
+            return True
+    return False
+
+
+def dom_source_key(element: dict[str, Any], family: str) -> str:
+    tag = str(element.get("tag") or "").lower()
+    attrs = element.get("attrs") or {}
+    role = str(attrs.get("role") or "").lower()
+    if family in {"button", "input", "search_box", "link", "tab", "menu_item"}:
+        return "dom_explicit" if tag in {"a", "button", "input", "textarea", "select"} or role else "dom_clickable"
+    return "dom_generic"
+
+
+def compact_vision_hint(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": item.get("id"),
+        "family": item.get("family"),
+        "label": item.get("label"),
+        "rawLabel": item.get("rawLabel"),
+        "source": item.get("source"),
+        "bbox": item.get("bbox"),
+        "center": item.get("center"),
+    }
+
+
+def box_area(bbox: dict[str, Any]) -> int:
+    return max(int(bbox.get("w", 0)), 0) * max(int(bbox.get("h", 0)), 0)
 
 
 def is_usable_dom_element(element: dict[str, Any]) -> bool:
@@ -1597,6 +2199,31 @@ def best_dom_hint(candidate: dict[str, Any], elements: list[dict[str, Any]]) -> 
     return compact_dom_hint(best)
 
 
+def best_ax_hint(candidate: dict[str, Any], ax_candidates: list[dict[str, Any]]) -> dict[str, Any] | None:
+    bbox = candidate.get("bbox") or {}
+    cx = int(candidate.get("center", {}).get("x", bbox.get("x", 0)))
+    cy = int(candidate.get("center", {}).get("y", bbox.get("y", 0)))
+    hits = []
+    for ax_candidate in ax_candidates:
+        if not is_usable_vision_candidate(ax_candidate):
+            continue
+        ax_box = ax_candidate.get("bbox") or {}
+        ax_center = ax_candidate.get("center") or bbox_center(ax_box)
+        if point_inside_bbox(int(ax_center.get("x", -1)), int(ax_center.get("y", -1)), bbox) or bbox_iou(bbox, ax_box) >= 0.35:
+            hits.append(ax_candidate)
+    if not hits:
+        return None
+    best = min(
+        hits,
+        key=lambda item: (
+            0 if str(item.get("family") or "") in {"button", "input", "link", "tab", "menu_item", "control"} else 1,
+            0 if item.get("label") else 1,
+            abs(int((item.get("center") or {}).get("x", 0)) - cx) + abs(int((item.get("center") or {}).get("y", 0)) - cy),
+        ),
+    )
+    return compact_ax_hint(best)
+
+
 def point_inside_bbox(x: int, y: int, bbox: dict[str, Any]) -> bool:
     bx = int(bbox.get("x", 0))
     by = int(bbox.get("y", 0))
@@ -1612,6 +2239,19 @@ def compact_dom_hint(element: dict[str, Any]) -> dict[str, Any]:
         "attrs": element.get("attrs", {}),
         "center": {"x": element.get("x"), "y": element.get("y")},
         "bbox": element.get("bbox"),
+    }
+
+
+def compact_ax_hint(candidate: dict[str, Any]) -> dict[str, Any]:
+    ax_hint = candidate.get("axHint") if isinstance(candidate.get("axHint"), dict) else {}
+    return {
+        "role": candidate.get("role") or ax_hint.get("role"),
+        "name": candidate.get("label") or ax_hint.get("name"),
+        "family": candidate.get("family"),
+        "label": candidate.get("label"),
+        "center": candidate.get("center"),
+        "bbox": candidate.get("bbox"),
+        "backendDOMNodeId": ax_hint.get("backendDOMNodeId"),
     }
 
 
