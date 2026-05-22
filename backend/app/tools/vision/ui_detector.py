@@ -398,13 +398,29 @@ def resolve_model_path(configured_model_path: str | None = None) -> Path:
 
 
 def default_model_candidates() -> list[Path]:
-    repo_root = Path(__file__).resolve().parents[4]
-    candidates = [
-        repo_root / "backend" / "models" / DEFAULT_UI_MODEL_FILENAME,
-        repo_root / "models" / DEFAULT_UI_MODEL_FILENAME,
-        Path.home() / ".cache" / "browser-pilot" / "models" / DEFAULT_UI_MODEL_FILENAME,
-        repo_root / "vision_benchmark" / "models" / DEFAULT_UI_MODEL_FILENAME,
-    ]
+    backend_root = Path(__file__).resolve().parents[3]
+    repo_root = backend_root.parent
+    candidates: list[Path] = []
+
+    project_root = os.getenv("PROJECT_ROOT")
+    if project_root:
+        project_path = Path(project_root).expanduser()
+        candidates.extend(
+            [
+                project_path / "models" / DEFAULT_UI_MODEL_FILENAME,
+                project_path / "backend" / "models" / DEFAULT_UI_MODEL_FILENAME,
+            ]
+        )
+
+    candidates.extend(
+        [
+            backend_root / "models" / DEFAULT_UI_MODEL_FILENAME,
+            repo_root / "backend" / "models" / DEFAULT_UI_MODEL_FILENAME,
+            repo_root / "models" / DEFAULT_UI_MODEL_FILENAME,
+            Path.home() / ".cache" / "browser-pilot" / "models" / DEFAULT_UI_MODEL_FILENAME,
+            repo_root / "vision_benchmark" / "models" / DEFAULT_UI_MODEL_FILENAME,
+        ]
+    )
     return candidates
 
 

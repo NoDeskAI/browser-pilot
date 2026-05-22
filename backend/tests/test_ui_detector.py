@@ -1,3 +1,5 @@
+import os
+import tempfile
 import unittest
 
 from app.tools.vision.ui_detector import (
@@ -405,6 +407,28 @@ class UiDetectorFallbackTests(unittest.TestCase):
         self.assertIn(DEFAULT_UI_MODEL_URL, message)
         self.assertIn(DEFAULT_UI_MODEL_FILENAME, message)
         self.assertIn("BP_UI_DETECTOR_MODEL", message)
+
+
+    def test_resolve_model_path_uses_project_root_models(self) -> None:
+        old_project_root = os.environ.get("PROJECT_ROOT")
+        old_model = os.environ.pop("BP_UI_DETECTOR_MODEL", None)
+        try:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                model_dir = os.path.join(tmpdir, "models")
+                os.makedirs(model_dir)
+                model_path = os.path.join(model_dir, DEFAULT_UI_MODEL_FILENAME)
+                with open(model_path, "wb") as handle:
+                    handle.write(b"fake model")
+                os.environ["PROJECT_ROOT"] = tmpdir
+
+                self.assertEqual(str(resolve_model_path()), model_path)
+        finally:
+            if old_project_root is None:
+                os.environ.pop("PROJECT_ROOT", None)
+            else:
+                os.environ["PROJECT_ROOT"] = old_project_root
+            if old_model is not None:
+                os.environ["BP_UI_DETECTOR_MODEL"] = old_model
 
     def test_resolve_model_path_raises_download_hint_for_bad_env_path(self) -> None:
         import os
