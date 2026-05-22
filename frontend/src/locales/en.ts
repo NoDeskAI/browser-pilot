@@ -142,7 +142,7 @@ export default {
     loadFailed: 'Failed to load files',
     session: 'Source Session',
     archivedSession: 'Deleted Session',
-    activeSessionFile: 'Active Session',
+    activeSessionFile: 'Linked Session',
     archivedFile: 'Archived',
   },
   agentDevices: {

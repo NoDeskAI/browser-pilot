@@ -86,6 +86,10 @@ function statusLabel(file: SessionFile): string {
   return file.sessionId ? t('files.activeSessionFile') : t('files.archivedFile')
 }
 
+function sessionFileRoute(file: SessionFile) {
+  return file.sessionId ? { path: `/s/${file.sessionId}`, query: { files: '1' } } : null
+}
+
 async function saveFile(file: SessionFile) {
   if (!file.url) return
   actionId.value = file.id
@@ -218,7 +222,15 @@ async function confirmDelete() {
                 </Badge>
               </TableCell>
               <TableCell class="text-sm text-muted-foreground">
-                <span class="block truncate" :title="sessionLabel(file)">{{ sessionLabel(file) }}</span>
+                <RouterLink
+                  v-if="sessionFileRoute(file)"
+                  :to="sessionFileRoute(file)!"
+                  class="block truncate font-medium text-foreground underline-offset-4 hover:underline"
+                  :title="sessionLabel(file)"
+                >
+                  {{ sessionLabel(file) }}
+                </RouterLink>
+                <span v-else class="block truncate" :title="sessionLabel(file)">{{ sessionLabel(file) }}</span>
               </TableCell>
               <TableCell class="text-sm text-muted-foreground">
                 {{ formatSize(file.size) }}

@@ -666,23 +666,10 @@ async def list_session_files_route(
     user: CurrentUser = Depends(get_session_aware_user),
 ):
     await verify_session_access(session_id, user)
-    ctx, rejected = await agent_devices.begin_compatible_action(
-        session_id, user, action="session.files.list", side_effect_level="none"
-    )
-    if rejected:
-        return rejected
     from app.file_service import list_session_files
 
-    try:
-        files = await list_session_files(session_id)
-        return await agent_devices.complete_compatible_action(
-            ctx,
-            {"files": files},
-            summary=f"Listed {len(files)} session files",
-            retry_safety="safe",
-        )
-    except Exception as exc:
-        return await agent_devices.fail_compatible_action(ctx, str(exc), retry_safety="safe")
+    files = await list_session_files(session_id)
+    return {"files": files}
 
 
 @router.patch("/api/sessions/{session_id}")

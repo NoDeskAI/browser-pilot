@@ -84,7 +84,7 @@ async function copySessionToken() {
   setTimeout(() => { tokenCopied.value = false }, 2000)
 }
 
-watch(() => route.params.id as string | undefined, async (id) => {
+watch(() => [route.params.id as string | undefined, route.query.files] as const, async ([id, filesQuery]) => {
   if (!id) return
   if (!sessions.sessions.some(s => s.id === id)) {
     await fetchSessions()
@@ -96,6 +96,9 @@ watch(() => route.params.id as string | undefined, async (id) => {
   }
   if (sessions.activeId !== id) {
     await switchSession(id)
+  }
+  if (filesQuery === '1') {
+    filesDialogOpen.value = true
   }
 }, { immediate: true })
 

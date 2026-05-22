@@ -103,7 +103,8 @@ async function fetchFiles() {
     const res = await api(`/api/sessions/${props.sessionId}/files`)
     if (!res.ok) throw new Error(await res.text())
     const data = await res.json()
-    files.value = data.files || []
+    if (!Array.isArray(data.files)) throw new Error(data.error || 'Invalid session files response')
+    files.value = data.files
   } catch {
     notify.error(t('sessionFiles.loadFailed'))
   } finally {

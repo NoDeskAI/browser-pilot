@@ -142,7 +142,7 @@ export default {
     loadFailed: '加载文件失败',
     session: '来源 Session',
     archivedSession: '已删除 Session',
-    activeSessionFile: '当前 Session',
+    activeSessionFile: '关联 Session',
     archivedFile: '已归档',
   },
   agentDevices: {

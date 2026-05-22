@@ -115,7 +115,8 @@ async function fetchFiles() {
     if (!res.ok) throw new Error(await res.text())
     const data = await res.json()
     if (seq !== loadSeq) return
-    files.value = data.files || []
+    if (!Array.isArray(data.files)) throw new Error(data.error || 'Invalid session files response')
+    files.value = data.files
     selectedIds.value = files.value
       .filter((file: SessionFile) => file.status === 'completed')
       .map((file: SessionFile) => file.id)

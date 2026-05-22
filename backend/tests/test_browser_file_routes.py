@@ -212,6 +212,25 @@ def test_session_files_route_verifies_access_and_lists_files(monkeypatch):
     assert calls == {"verify": ("session-1", "user-1"), "list": "session-1"}
 
 
+def test_session_files_route_is_not_lease_gated(monkeypatch):
+    async def fake_verify(_session_id, _user):
+        return None
+
+    async def fail_begin_action(*_args, **_kwargs):
+        raise AssertionError("listing session files must not require an active lease")
+
+    async def fake_list(_session_id):
+        return [{"id": "file-1"}]
+
+    monkeypatch.setattr(sessions, "verify_session_access", fake_verify)
+    monkeypatch.setattr(sessions.agent_devices, "begin_compatible_action", fail_begin_action)
+    monkeypatch.setattr(file_service, "list_session_files", fake_list)
+
+    result = asyncio.run(sessions.list_session_files_route("session-1", user=_user()))
+
+    assert result == {"files": [{"id": "file-1"}]}
+
+
 def test_upload_session_file_verifies_access_and_saves_user_upload(monkeypatch):
     captured = {}
 
