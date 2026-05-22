@@ -110,9 +110,13 @@ cp .env.example .env
 
 ./start.sh          # 前台模式（Ctrl+C 停止）
 ./start.sh -d       # 后台守护进程模式
+./start.sh ce       # 强制启动 CE 版
+./start.sh ee -d    # 强制以后台模式启动 EE 版
 ./start.sh stop     # 停止后台进程
 ./start.sh status   # 检查进程状态
 ```
+
+不传版本参数时，`start.sh` 会检查 `ee/backend/__init__.py` 和 `ee/frontend/index.ts`；两个文件都存在才按 EE 启动，否则按 CE 启动。
 
 该脚本会在 Docker 中启动 PostgreSQL 和 MinIO、初始化默认 bucket、构建 Selenium 镜像，并在宿主机上运行后端（uvicorn，端口 8000）和前端开发服务器（Vite，端口 9874）。
 
@@ -122,6 +126,7 @@ cp .env.example .env
 | Variable              | Default                                                        | Description                                                           |
 | --------------------- | -------------------------------------------------------------- | --------------------------------------------------------------------- |
 | `DATABASE_URL`        | 必须在 `.env` 中设置；见 `.env.example`                         | 本地后端开发使用的 PostgreSQL 连接字符串，需和 `POSTGRES_*` 保持一致。                  |
+| `EDITION`             | Docker Compose 默认 `ce`；`start.sh` 不传版本参数时自动探测       | 产品版本。`ce` 为社区版，`ee` 为企业版；启用 EE 需要 `ee/` 代码存在。                   |
 | `POSTGRES_USER`       | 必须在 `.env` 中设置；见 `.env.example`                         | Docker Compose 和本地开发使用的 PostgreSQL 用户名。                              |
 | `POSTGRES_PASSWORD`   | 必须在 `.env` 中设置；见 `.env.example`                         | PostgreSQL 密码，生产/公网部署前必须修改。                                      |
 | `POSTGRES_DB`         | 必须在 `.env` 中设置；见 `.env.example`                         | PostgreSQL 数据库名。                                                       |

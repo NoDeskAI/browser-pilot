@@ -117,9 +117,13 @@ cp .env.example .env
 
 ./start.sh          # foreground mode (Ctrl+C to stop)
 ./start.sh -d       # background daemon mode
+./start.sh ce       # force CE mode
+./start.sh ee -d    # force EE mode in daemon mode
 ./start.sh stop     # stop background processes
 ./start.sh status   # check process status
 ```
+
+When no edition argument is provided, `start.sh` auto-detects EE by checking for both `ee/backend/__init__.py` and `ee/frontend/index.ts`; if either file is missing, it runs CE.
 
 This starts PostgreSQL and bundled S3-compatible object storage in Docker, initializes the default bucket, builds the Selenium image, and runs the backend (uvicorn, port 8000) + frontend dev server (Vite, port 9874) on the host.
 
@@ -129,6 +133,7 @@ This starts PostgreSQL and bundled S3-compatible object storage in Docker, initi
 | Variable              | Default                                                        | Description                                                                                                                        |
 | --------------------- | -------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
 | `DATABASE_URL`        | Required in `.env`; see `.env.example`                         | PostgreSQL connection string for local backend development. Keep it aligned with `POSTGRES_*`.                                     |
+| `EDITION`             | `ce` in Docker Compose; auto-detected by `start.sh` when no edition argument is provided | Product edition. Use `ce` for Community Edition or `ee` for Enterprise Edition. EE requires the `ee/` sources to be present.       |
 | `POSTGRES_USER`       | Required in `.env`; see `.env.example`                         | PostgreSQL user used by Docker Compose and local development.                                                                      |
 | `POSTGRES_PASSWORD`   | Required in `.env`; see `.env.example`                         | PostgreSQL password. Change it before production/public deployment.                                                                |
 | `POSTGRES_DB`         | Required in `.env`; see `.env.example`                         | PostgreSQL database name.                                                                                                         |

@@ -20,17 +20,121 @@ BACKEND_PID_FILE="$LOG_DIR/backend.pid"
 FRONTEND_PID_FILE="$LOG_DIR/frontend.pid"
 BACKEND_LOG="$LOG_DIR/backend.log"
 FRONTEND_LOG="$LOG_DIR/frontend.log"
+MODE=foreground
+CLI_EDITION=""
+EDITION_SOURCE=""
 
 # ------------------------------------------------------------------
 usage() {
     cat <<'EOF'
 用法:
-  ./start.sh           前台 watch 模式（Ctrl+C 停止）
-  ./start.sh -d        后台 daemon 模式
-  ./start.sh stop      停止后台进程
-  ./start.sh status    查看进程状态
+  ./start.sh [ce|ee]            前台 watch 模式（Ctrl+C 停止）
+  ./start.sh [ce|ee] -d         后台 daemon 模式
+  ./start.sh --edition ce|-e ce 指定 CE 版
+  ./start.sh --edition ee|-e ee 指定 EE 版
+  ./start.sh stop               停止后台进程
+  ./start.sh status             查看进程状态
+
+说明:
+  传 ce|ee 时强制指定版本。
+  不传 ce|ee 时检查 ee/backend/__init__.py 和 ee/frontend/index.ts；都有才按 EE，否则按 CE。
 EOF
 }
+
+die_usage() {
+    echo "$1" >&2
+    usage >&2
+    exit 1
+}
+
+normalize_edition() {
+    local value normalized
+    value="${1:-}"
+    normalized=$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]')
+    case "$normalized" in
+        ce|ee) printf '%s' "$normalized" ;;
+        *) return 1 ;;
+    esac
+}
+
+set_cli_edition() {
+    local normalized
+    normalized=$(normalize_edition "$1") || die_usage "无效 edition: $1（只能是 ce 或 ee）"
+    if [[ -n "$CLI_EDITION" && "$CLI_EDITION" != "$normalized" ]]; then
+        die_usage "edition 只能指定一次"
+    fi
+    CLI_EDITION="$normalized"
+}
+
+set_mode() {
+    local mode="$1"
+    if [[ "$MODE" != "foreground" && "$MODE" != "$mode" ]]; then
+        die_usage "启动模式只能指定一个"
+    fi
+    MODE="$mode"
+}
+
+resolve_edition() {
+    if [[ -n "$CLI_EDITION" ]]; then
+        export EDITION="$CLI_EDITION"
+        EDITION_SOURCE="参数"
+        return
+    fi
+
+    if [[ -f "$SCRIPT_DIR/ee/backend/__init__.py" && -f "$SCRIPT_DIR/ee/frontend/index.ts" ]]; then
+        export EDITION=ee
+        EDITION_SOURCE="ee目录探测"
+        return
+    fi
+
+    export EDITION=ce
+    EDITION_SOURCE="ee目录探测"
+}
+
+parse_args() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            ce|CE|ee|EE)
+                set_cli_edition "$1"
+                shift
+                ;;
+            --edition)
+                [[ $# -ge 2 ]] || die_usage "--edition 需要指定 ce 或 ee"
+                set_cli_edition "$2"
+                shift 2
+                ;;
+            --edition=*)
+                set_cli_edition "${1#--edition=}"
+                shift
+                ;;
+            -e)
+                [[ $# -ge 2 ]] || die_usage "-e 需要指定 ce 或 ee"
+                set_cli_edition "$2"
+                shift 2
+                ;;
+            -d|--daemon)
+                set_mode daemon
+                shift
+                ;;
+            stop|status)
+                set_mode "$1"
+                shift
+                ;;
+            -h|--help)
+                set_mode help
+                shift
+                ;;
+            *)
+                die_usage "未知参数: $1"
+                ;;
+        esac
+    done
+    case "$MODE" in
+        foreground|daemon) resolve_edition ;;
+    esac
+}
+
+parse_args "$@"
 
 # ------------------------------------------------------------------
 _is_running() {
@@ -172,6 +276,7 @@ _start_processes() {
     _require_database_env
     export MINIO_STORAGE_BOOTSTRAP="${MINIO_STORAGE_BOOTSTRAP:-true}"
     export MINIO_ENDPOINT="${MINIO_ENDPOINT:-http://localhost:9000}"
+    echo "[edition] $EDITION ($EDITION_SOURCE)"
     _ensure_deps
     _ensure_postgres
     _ensure_object_storage
@@ -239,11 +344,10 @@ do_daemon() {
 }
 
 # ------------------------------------------------------------------
-case "${1:-}" in
-    stop)    do_stop ;;
-    status)  do_status ;;
-    -d)      do_daemon ;;
-    "")      do_foreground ;;
-    -h|--help) usage ;;
-    *)       echo "未知参数: $1"; usage; exit 1 ;;
+case "$MODE" in
+    stop)       do_stop ;;
+    status)     do_status ;;
+    daemon)     do_daemon ;;
+    foreground) do_foreground ;;
+    help)       usage ;;
 esac
