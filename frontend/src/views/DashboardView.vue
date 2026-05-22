@@ -341,9 +341,9 @@ async function onPauseContainer(id: string) {
 
           <div class="px-4 pb-4 flex-1 flex flex-col gap-2.5 min-h-0 justify-center">
             <div class="flex items-center gap-2">
-              <div class="flex items-center gap-1.5 text-muted-foreground shrink-0 w-10">
+              <div class="flex items-center gap-1.5 text-muted-foreground shrink-0 w-12">
                 <Hash class="size-3.5" />
-                <span class="text-[11px]">ID</span>
+                <span class="text-[11px] whitespace-nowrap">ID</span>
               </div>
               <span
                 class="text-xs font-mono text-muted-foreground hover:text-foreground transition-colors cursor-pointer bg-muted/30 px-1.5 py-0.5 rounded"
@@ -355,18 +355,18 @@ async function onPauseContainer(id: string) {
               </span>
             </div>
             <div class="flex items-center gap-2 min-w-0">
-              <div class="flex items-center gap-1.5 text-muted-foreground shrink-0 w-10">
+              <div class="flex items-center gap-1.5 text-muted-foreground shrink-0 w-12">
                 <Globe class="size-3.5" />
-                <span class="text-[11px]">URL</span>
+                <span class="text-[11px] whitespace-nowrap">URL</span>
               </div>
               <span class="text-xs text-muted-foreground truncate flex-1 min-w-0" :title="s.currentUrl">
                 {{ formatUrl(s.currentUrl) || '-' }}
               </span>
             </div>
             <div class="flex items-center gap-2 min-w-0">
-              <div class="flex items-center gap-1.5 text-muted-foreground shrink-0 w-10">
+              <div class="flex items-center gap-1.5 text-muted-foreground shrink-0 w-12">
                 <Network class="size-3.5" />
-                <span class="text-[11px]">{{ t('networkEgress.shortLabel') }}</span>
+                <span class="text-[11px] whitespace-nowrap">{{ t('networkEgress.shortLabel') }}</span>
               </div>
               <span
                 class="text-xs truncate flex-1 min-w-0"
