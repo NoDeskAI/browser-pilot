@@ -255,12 +255,14 @@ ${c} files get file-1 -o result.csv`
 function agentSessionTargetEn(c: string): string {
   return `## Session Target (stateless)
 
+# Browser Pilot maps each Session to an Agent Device. The session id is also the device id.
 # Choose exactly one path, then copy the session id into each --session argument.
 
 # Path A: reuse an existing session.
 ${c} session list --json
+${c} device "<session-id>" --json
 
-# Path B: create a new session, then copy the returned "id".
+# Path B: create a new session, then copy the returned "id" and agentDevice lease fields.
 ${c} session create --name "Agent Task" --json
 
 # Optional: list managed network egress profiles and create or switch with --network-egress / session set-network.
@@ -273,12 +275,14 @@ ${c} --session "<session-id>" session start`
 function agentSessionTargetZh(c: string): string {
   return `## 会话目标（无状态）
 
+# Browser Pilot 将每个 Session 映射为 Agent Device。session id 同时也是 device id。
 # 只选择一种方案，然后把 session id 直接填进每条命令的 --session 参数。
 
 # 方案 A：复用现有会话。
 ${c} session list --json
+${c} device "<session-id>" --json
 
-# 方案 B：创建新会话，然后复制返回的 "id"。
+# 方案 B：创建新会话，然后复制返回的 "id" 和 agentDevice 租约字段。
 ${c} session create --name "Agent Task" --json
 
 # 可选：列出托管网络出口，通过 --network-egress 或 session set-network 创建/切换。
@@ -286,6 +290,80 @@ ${c} network-egress list --json
 
 # 直接使用复制出来的 id：
 ${c} --session "<session-id>" session start`
+}
+
+function agentDeviceModelEn(c: string): string {
+  return `## Agent Device Governance Model
+
+# Level 1 boundary: Session is Device. There is no separate device id table in the CLI contract.
+# Query DeviceVisibility before long-running work, recovery, or reused sessions:
+${c} device "<session-id>" --json
+
+# Key visibility fields to read:
+# - state: IDLE, OCCUPIED, RELEASING, ERROR, or QUARANTINED
+# - compliance_level: level1_device_governance
+# - provider: browser-pilot
+# - context_id: tenant:<tenant_id>
+# - lease / lease_id / current_operator / lease_mode
+# - policy.leaseRequired, policy.exclusiveLease, unsupported_profiles
+
+# Lease rules:
+# - Browser side-effect commands require an active exclusive DeviceLease.
+# - A newly created session normally returns an initial session_bound lease for the creator.
+# - If reused visibility is IDLE, acquire a lease before browser actions.
+# - If visibility is OCCUPIED by another operator, do not keep issuing browser actions; wait, ask the owner/admin, or use reclaim only when authorized.
+# - Level 2 control transfer is not supported: do not call request_intervention, handoff, or human takeover flows.
+
+${c} lease acquire "<session-id>" --mode session_bound --json
+${c} lease acquire "<session-id>" --mode task_bound --task-id "<task-id>" --json
+${c} lease renew "<session-id>" "<lease-id>" --ttl 3600 --json
+${c} lease release "<session-id>" "<lease-id>" --json
+${c} lease reclaim "<session-id>" --json
+
+# Every browser command returns agentDevice. Treat it as the action contract:
+# - executionStatus tells whether the command succeeded, failed, or was rejected.
+# - sideEffectStatus tells whether the external browser side effect was applied, not applied, unknown, or not applicable.
+# - failureCategory and nextStep tell what to do after rejection or failure.
+# - auditStatus and auditEventId tell whether the action entered the audit trail.
+# - evidenceStatus and evidenceRefs tell whether governed evidence was captured.
+# Do not treat a plain ok/status field as enough for Agent decisions; inspect agentDevice on every action.`
+}
+
+function agentDeviceModelZh(c: string): string {
+  return `## Agent Device 治理模型
+
+# Level 1 边界：Session 即 Device。CLI 契约里没有单独的 device id 表。
+# 在长任务、恢复任务或复用已有会话前，先查询 DeviceVisibility：
+${c} device "<session-id>" --json
+
+# 需要读取的关键 visibility 字段：
+# - state: IDLE、OCCUPIED、RELEASING、ERROR 或 QUARANTINED
+# - compliance_level: level1_device_governance
+# - provider: browser-pilot
+# - context_id: tenant:<tenant_id>
+# - lease / lease_id / current_operator / lease_mode
+# - policy.leaseRequired、policy.exclusiveLease、unsupported_profiles
+
+# 租约规则：
+# - 会产生浏览器外部副作用的命令需要 active exclusive DeviceLease。
+# - 新创建的 session 通常会为创建者返回初始 session_bound lease。
+# - 复用会话时，如果 visibility 是 IDLE，先 acquire lease，再执行浏览器动作。
+# - 如果 visibility 是 OCCUPIED 且 operator 不是自己，不要继续盲目发浏览器动作；等待、找 owner/admin，或在有权限时 reclaim。
+# - 当前只支持 Level 1，不支持 Level 2：不要调用 request_intervention、handoff 或 Human 接手流程。
+
+${c} lease acquire "<session-id>" --mode session_bound --json
+${c} lease acquire "<session-id>" --mode task_bound --task-id "<task-id>" --json
+${c} lease renew "<session-id>" "<lease-id>" --ttl 3600 --json
+${c} lease release "<session-id>" "<lease-id>" --json
+${c} lease reclaim "<session-id>" --json
+
+# 每个浏览器命令都会返回 agentDevice。Agent 要把它当成动作契约来读：
+# - executionStatus 判断命令 succeeded / failed / rejected。
+# - sideEffectStatus 判断浏览器外部副作用 applied / not_applied / unknown / not_applicable。
+# - failureCategory 和 nextStep 决定被拒绝或失败后的下一步。
+# - auditStatus 和 auditEventId 判断动作是否进入审计。
+# - evidenceStatus 和 evidenceRefs 判断是否捕获到受治理证据。
+# 不要只看普通 ok/status 字段就继续决策；每次动作后都要检查 agentDevice。`
 }
 
 function agentCommandReferenceEn(c: string): string {
@@ -328,7 +406,8 @@ ${c} --session "<session-id>" logs                            # View CDP event l
 
 ## Agent Devices
 
-Browser Pilot maps Session as Device and strictly supports Agent Device Level 1 Device Governance. Level 2 control transfer, request_intervention, handoff, and human takeover are not supported.
+# Browser Pilot maps Session as Device and strictly supports Agent Device Level 1 Device Governance.
+# Level 2 control transfer, request_intervention, handoff, and human takeover are not supported.
 
 ${c} devices --json                                      # List governed browser-session devices
 ${c} device "<session-id>" --json                        # A session id is the device id
@@ -355,9 +434,12 @@ ${c} --session "<session-id>" files delete <file-id>          # Delete file; res
 ## Example Workflow
 
 ${c} session create --name "Agent Task" --json
-# Read the returned "id", then:
+# Read the returned "id" and agentDevice.leaseId, then:
 ${c} --session "abc-123-..." session start
+${c} device "abc-123-..." --json
+# If state is IDLE, acquire a lease. If OCCUPIED by another operator, do not continue until ownership is resolved.
 ${c} --session "abc-123-..." navigate https://example.com
+# Read response.agentDevice.executionStatus, sideEffectStatus, auditStatus, evidenceStatus, and nextStep.
 ${c} --session "abc-123-..." observe --json
 # → {"url": "...", "title": "...", "elements": [{"tag": "A", "text": "Link", "x": 320, "y": 200}, ...]}
 ${c} --session "abc-123-..." click 320 200
@@ -411,7 +493,8 @@ ${c} --session "<session-id>" logs                            # 查看 CDP 事�
 
 ## Agent Device
 
-Browser Pilot 将 Session 作为 Device，当前严格支持 Agent Device Level 1 Device Governance；不支持 Level 2 的 control transfer、request_intervention、handoff 和 Human 接手。
+# Browser Pilot 将 Session 作为 Device，当前严格支持 Agent Device Level 1 Device Governance。
+# 不支持 Level 2 的 control transfer、request_intervention、handoff 和 Human 接手。
 
 ${c} devices --json                                      # 列出纳管的浏览器 Session 设备
 ${c} device "<session-id>" --json                        # session id 即 device id
@@ -438,9 +521,12 @@ ${c} --session "<session-id>" files delete <file-id>          # 删除文件，�
 ## 使用示例
 
 ${c} session create --name "Agent 任务" --json
-# 读取返回的 "id"，然后：
+# 读取返回的 "id" 和 agentDevice.leaseId，然后：
 ${c} --session "abc-123-..." session start
+${c} device "abc-123-..." --json
+# 如果 state 是 IDLE，先 acquire lease；如果 OCCUPIED 且 operator 不是自己，不要继续执行，先解决归属。
 ${c} --session "abc-123-..." navigate https://example.com
+# 读取 response.agentDevice.executionStatus、sideEffectStatus、auditStatus、evidenceStatus 和 nextStep。
 ${c} --session "abc-123-..." observe --json
 # → {"url": "...", "title": "...", "elements": [{"tag": "A", "text": "Link", "x": 320, "y": 200}, ...]}
 ${c} --session "abc-123-..." click 320 200
@@ -485,6 +571,8 @@ ${setupBlockEn(c, url, installShell)}
 
 ${agentSessionTargetEn(c)}
 
+${agentDeviceModelEn(c)}
+
 ## Agent Rules
 
 # Run the bootstrap block before any ${c} command in every fresh workspace, container, or shell session.
@@ -493,6 +581,8 @@ ${agentSessionTargetEn(c)}
 # Copy the actual session id into every --session "<session-id>" argument.
 # Prefer --json for state-reading commands so the result is easy to parse.
 # If no session id is known, list sessions or create one before browser actions.
+# Before browser side effects on reused sessions, read DeviceVisibility and ensure the lease is active for this operator.
+# After every browser action, inspect response.agentDevice before deciding whether to retry, continue, or escalate.
 # After an action may create a session file, poll files list --json and use each file item's status.
 # Do not infer file readiness from click success; completed files include a backend url.
 # Use files upload/get/rename/delete only for explicit file-management tasks.
@@ -510,6 +600,8 @@ ${setupBlockZh(c, url, installShell)}
 
 ${agentSessionTargetZh(c)}
 
+${agentDeviceModelZh(c)}
+
 ## Agent 规则
 
 # 每个新的工作区、容器或 shell session 开始时，先完整运行启动配置段，再执行任何 ${c} 命令。
@@ -518,6 +610,8 @@ ${agentSessionTargetZh(c)}
 # 把真实 session id 直接填进每条命令的 --session "<session-id>" 参数。
 # 读取状态时优先使用 --json，方便解析结果。
 # 如果还不知道 session id，先列出现有会话或创建新会话。
+# 在复用会话执行浏览器副作用前，先读取 DeviceVisibility，并确认 lease 对当前 operator 有效。
+# 每次浏览器动作后，先检查 response.agentDevice，再决定重试、继续或升级处理。
 # 某个动作可能创建 Session 文件后，轮询 files list --json，并以每个文件 item 的 status 为准。
 # 不要根据点击成功推断文件可用；completed 文件会包含后端 url。
 # 只有明确需要管理文件时，才使用 files upload/get/rename/delete。

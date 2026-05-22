@@ -72,6 +72,8 @@ bpilot files delete <file-id>
 
 Add `--json` for machine-readable output (for AI Agents). Use `bpilot session list --json` to inspect each session's `networkEgress*` fields. Use `bpilot files list --json` to inspect session files; each item includes `status` so agents can distinguish in-progress files from `completed` files.
 
+For Agent integrations, open **Docs > Agent CLI Access** in the web UI. Browser Pilot exposes each Session as an Agent Device: the session id is the device id, browser side-effect commands require an active exclusive DeviceLease, and every browser action returns an `agentDevice` contract with `executionStatus`, `sideEffectStatus`, `auditStatus`, `evidenceStatus`, `failureCategory`, and `nextStep`. Browser Pilot currently supports Agent Device Level 1 Device Governance only; Level 2 control transfer, `request_intervention`, handoff, and human takeover are not supported.
+
 ## Architecture
 
 ```mermaid
