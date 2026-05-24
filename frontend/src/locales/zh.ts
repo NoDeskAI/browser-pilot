@@ -133,6 +133,17 @@ export default {
     deleteKeepFiles: '删除 Session，保留文件',
     deleteWithFiles: '删除 Session 和 {count} 个文件',
   },
+  sessionLease: {
+    occupied: '正在被占用',
+    apiTokenNamed: 'API Token：{name}',
+    apiToken: 'API Token：{id}',
+    userNamed: '用户：{name}',
+    user: '用户：{id}',
+    fileCaptureAgent: '文件捕获 Agent',
+    system: '系统',
+    unknownOperator: '未知 Operator',
+    deleteWarning: '当前由 {operator} 占用。删除会终止这个 Session，并使其 active lease 一起失效。',
+  },
   files: {
     nav: '文件',
     title: '文件',

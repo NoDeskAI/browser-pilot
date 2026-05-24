@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch, type ComponentPublicInstance } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { ChevronDown, ChevronRight, CornerDownLeft, FileText, Loader2, RefreshCw } from 'lucide-vue-next'
+import { Bot, ChevronDown, ChevronRight, CornerDownLeft, FileText, Loader2, RefreshCw } from 'lucide-vue-next'
 import { api } from '../lib/api'
-import type { DeleteSessionFileOptions, SessionFile } from '../types'
+import { formatSessionLeaseOperator } from '../lib/sessionLease'
+import type { ActiveSessionLease, DeleteSessionFileOptions, SessionFile } from '../types'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -17,9 +18,11 @@ const props = withDefaults(defineProps<{
   sessionId: string | null
   sessionName?: string
   deleting?: boolean
+  activeLease?: ActiveSessionLease | null
 }>(), {
   sessionName: '',
   deleting: false,
+  activeLease: null,
 })
 
 const emit = defineEmits<{
@@ -50,6 +53,7 @@ const allCompletedSelected = computed(() =>
 )
 const confirmDisabled = computed(() => props.deleting || loading.value || !loaded.value || loadError.value)
 const deletingLabel = computed(() => deletingLong.value ? t('session.deleteStillRunning') : t('session.deleting'))
+const leaseOperator = computed(() => formatSessionLeaseOperator(props.activeLease, t))
 const confirmLabel = computed(() => {
   if (props.deleting) return deletingLabel.value
   if (selectedCount.value > 0) return t('sessionDelete.deleteWithFiles', { count: selectedCount.value })
@@ -206,6 +210,20 @@ function focusDeleteButton() {
         <AlertDialogTitle>{{ t('session.deleteConfirm') }}</AlertDialogTitle>
         <AlertDialogDescription>{{ t('session.deleteDescription') }}</AlertDialogDescription>
       </AlertDialogHeader>
+
+      <div
+        v-if="activeLease"
+        class="flex items-start gap-3 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2.5 text-sm"
+        role="status"
+      >
+        <Bot class="mt-0.5 size-4 shrink-0 text-amber-600 dark:text-amber-400" />
+        <div class="min-w-0 space-y-1">
+          <p class="font-medium text-foreground">{{ t('sessionLease.occupied') }}</p>
+          <p class="text-muted-foreground">
+            {{ t('sessionLease.deleteWarning', { operator: leaseOperator }) }}
+          </p>
+        </div>
+      </div>
 
       <section class="space-y-3 rounded-md border border-border bg-muted/20 p-3">
         <div class="flex items-start justify-between gap-3">

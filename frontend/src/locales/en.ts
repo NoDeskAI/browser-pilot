@@ -133,6 +133,17 @@ export default {
     deleteKeepFiles: 'Delete Session, keep files',
     deleteWithFiles: 'Delete Session and {count} files',
   },
+  sessionLease: {
+    occupied: 'Occupied',
+    apiTokenNamed: 'API Token: {name}',
+    apiToken: 'API Token: {id}',
+    userNamed: 'User: {name}',
+    user: 'User: {id}',
+    fileCaptureAgent: 'File capture agent',
+    system: 'System',
+    unknownOperator: 'Unknown operator',
+    deleteWarning: 'Currently occupied by {operator}. Deleting will terminate this Session and invalidate its active lease.',
+  },
   files: {
     nav: 'Files',
     title: 'Files',

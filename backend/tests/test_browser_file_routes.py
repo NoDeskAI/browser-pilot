@@ -231,6 +231,34 @@ def test_session_files_route_is_not_lease_gated(monkeypatch):
     assert result == {"files": [{"id": "file-1"}]}
 
 
+def test_active_lease_payload_identifies_api_token_operator():
+    payload = sessions._active_lease_payload_from_row({
+        "lease_id": "lease-1",
+        "lease_mode": "session_bound",
+        "lease_task_id": None,
+        "current_operator": "token:token-1",
+        "operator_owner_user_id": "user-1",
+        "lease_token_name": "QA Agent",
+        "lease_owner_name": "User One",
+        "lease_owner_email": "user@example.com",
+        "lease_expires_at": None,
+        "lease_updated_at": None,
+    })
+
+    assert payload == {
+        "id": "lease-1",
+        "leaseId": "lease-1",
+        "leaseMode": "session_bound",
+        "taskId": None,
+        "currentOperator": "token:token-1",
+        "operatorOwnerUserId": "user-1",
+        "operatorType": "api_token",
+        "operatorName": "QA Agent",
+        "expiresAt": None,
+        "updatedAt": None,
+    }
+
+
 def test_upload_session_file_verifies_access_and_saves_user_upload(monkeypatch):
     captured = {}
 

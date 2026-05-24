@@ -6,7 +6,8 @@ import { useSessions } from '../composables/useSessions'
 import { useNetworkEgress } from '../composables/useNetworkEgress'
 import { useNotify } from '../composables/useNotify'
 import type { DeleteSessionFileOptions } from '../types'
-import { Plus, Play, Pause, Trash2, Monitor, Globe, Hash, Clock, RefreshCw, Loader2, Network, ArrowUpRight } from 'lucide-vue-next'
+import { Plus, Play, Pause, Trash2, Monitor, Globe, Hash, Clock, RefreshCw, Loader2, Network, ArrowUpRight, Bot } from 'lucide-vue-next'
+import { formatSessionLeaseOperator } from '../lib/sessionLease'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
@@ -84,6 +85,10 @@ function refreshWhenFocused() {
   if (autoRefresh.value) {
     void fetchSessionsForAutoRefresh()
   }
+}
+
+function leaseOperatorLabel(lease: NonNullable<typeof sessions.sessions[number]['activeLease']>): string {
+  return formatSessionLeaseOperator(lease, t)
 }
 
 watch(autoRefresh, (on) => {
@@ -337,6 +342,14 @@ async function onPauseContainer(id: string) {
             >
               {{ s.containerStatus === 'running' ? t('session.running') : s.containerStatus === 'starting' ? t('session.starting') : s.containerStatus === 'paused' ? t('session.paused') : t('session.stopped') }}
             </Badge>
+            <Badge
+              v-if="s.activeLease"
+              variant="outline"
+              class="shrink-0 border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-300"
+              :title="leaseOperatorLabel(s.activeLease)"
+            >
+              {{ t('sessionLease.occupied') }}
+            </Badge>
           </div>
 
           <div class="px-4 pb-4 flex-1 flex flex-col gap-2.5 min-h-0 justify-center">
@@ -374,6 +387,18 @@ async function onPauseContainer(id: string) {
                 :title="s.networkEgressHealthError || s.networkEgressProxyUrl || s.networkEgressName"
               >
                 {{ s.networkEgressName || t('networkEgress.direct') }}
+              </span>
+            </div>
+            <div v-if="s.activeLease" class="flex items-center gap-2 min-w-0">
+              <div class="flex items-center gap-1.5 text-muted-foreground shrink-0 w-12">
+                <Bot class="size-3.5" />
+                <span class="text-[11px] whitespace-nowrap">Agent</span>
+              </div>
+              <span
+                class="text-xs truncate flex-1 min-w-0 text-amber-700 dark:text-amber-300"
+                :title="leaseOperatorLabel(s.activeLease)"
+              >
+                {{ leaseOperatorLabel(s.activeLease) }}
               </span>
             </div>
           </div>
@@ -427,6 +452,7 @@ async function onPauseContainer(id: string) {
                 :session-id="s.id"
                 :session-name="s.name"
                 :deleting="!!deleting[s.id]"
+                :active-lease="s.activeLease"
                 @update:open="v => { if (v || !deleting[s.id]) deleteDialogOpen[s.id] = v }"
                 @confirm="options => onDeleteSession(s.id, options)"
               />

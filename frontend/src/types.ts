@@ -17,6 +17,20 @@ export interface Session {
   networkEgressHealthError?: string
   fingerprintProfile?: Record<string, any> | null
   browserLang?: string
+  activeLease?: ActiveSessionLease | null
+}
+
+export interface ActiveSessionLease {
+  id: string
+  leaseId: string
+  leaseMode?: 'session_bound' | 'task_bound' | string | null
+  taskId?: string | null
+  currentOperator: string
+  operatorOwnerUserId?: string | null
+  operatorType?: 'api_token' | 'user' | 'runtime_file_capture' | 'system' | 'unknown' | string
+  operatorName?: string | null
+  expiresAt?: string | null
+  updatedAt?: string | null
 }
 
 export interface DevicePreset {

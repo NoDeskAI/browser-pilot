@@ -150,6 +150,7 @@ async function fetchSessions(): Promise<void> {
         networkEgressHealthError: s.networkEgressHealthError || '',
         fingerprintProfile: s.fingerprintProfile || local?.fingerprintProfile || null,
         browserLang: s.browserLang || 'zh-CN',
+        activeLease: s.activeLease || null,
       }
     })
     for (const id of [...startingSessionIds]) {
@@ -212,6 +213,19 @@ async function createSession(name?: string, chromeVersion?: string, networkEgres
     networkEgressHealthError: data.networkEgressHealthError || '',
     fingerprintProfile: data.fingerprintProfile || null,
     browserLang: data.browserLang || browserLang,
+    activeLease: data.agentDevice?.leaseId
+      ? {
+          id: data.agentDevice.leaseId,
+          leaseId: data.agentDevice.leaseId,
+          leaseMode: data.agentDevice.leaseMode,
+          taskId: data.agentDevice.taskId,
+          currentOperator: data.agentDevice.currentOperator || data.agentDevice.operator || '',
+          operatorType: data.agentDevice.operator?.startsWith('user:') ? 'user' : 'unknown',
+          operatorName: null,
+          expiresAt: data.agentDevice.expiresAt,
+          updatedAt: null,
+        }
+      : null,
   }
   state.sessions.unshift(session)
   return session

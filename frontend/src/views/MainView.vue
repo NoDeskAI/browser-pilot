@@ -280,6 +280,7 @@ async function onPauseContainer() {
       :session-id="activeSession.id"
       :session-name="activeSession.name"
       :deleting="deleting"
+      :active-lease="activeSession.activeLease"
       @confirm="onDeleteSession"
     />
 

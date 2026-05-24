@@ -217,6 +217,46 @@ def _session_proxy_url(row) -> str:
     return _row_get(row, "proxy_url", "") or ""
 
 
+def _iso_or_none(value: Any) -> str | None:
+    if value is None:
+        return None
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return str(value)
+
+
+def _active_lease_payload_from_row(row) -> dict[str, Any] | None:
+    lease_id = _row_get(row, "lease_id")
+    if not lease_id:
+        return None
+    current_operator = _row_get(row, "current_operator", "") or ""
+    operator_type = "unknown"
+    operator_name = None
+    if current_operator.startswith("token:"):
+        operator_type = "api_token"
+        operator_name = _row_get(row, "lease_token_name")
+    elif current_operator.startswith("user:"):
+        operator_type = "user"
+        operator_name = _row_get(row, "lease_owner_name") or _row_get(row, "lease_owner_email")
+    elif current_operator.startswith("runtime:file_capture:"):
+        operator_type = "runtime_file_capture"
+    elif current_operator.startswith("system:"):
+        operator_type = "system"
+
+    return {
+        "id": lease_id,
+        "leaseId": lease_id,
+        "leaseMode": _row_get(row, "lease_mode"),
+        "taskId": _row_get(row, "lease_task_id"),
+        "currentOperator": current_operator,
+        "operatorOwnerUserId": _row_get(row, "operator_owner_user_id"),
+        "operatorType": operator_type,
+        "operatorName": operator_name,
+        "expiresAt": _iso_or_none(_row_get(row, "lease_expires_at")),
+        "updatedAt": _iso_or_none(_row_get(row, "lease_updated_at")),
+    }
+
+
 async def _resolve_session_network(proxy_url: str | None, image_tag: str | None) -> dict:
     return declared_network_profile(proxy_url, image_tag)
 
@@ -447,9 +487,25 @@ async def list_sessions(user: CurrentUser = Depends(get_current_user)):
                    e.name AS network_egress_name,
                    e.type AS network_egress_type,
                    e.status AS network_egress_status,
-                   e.health_error AS network_egress_health_error
+                   e.health_error AS network_egress_health_error,
+                   l.id AS lease_id,
+                   l.lease_mode,
+                   l.task_id AS lease_task_id,
+                   l.current_operator,
+                   l.operator_owner_user_id,
+                   l.expires_at AS lease_expires_at,
+                   l.updated_at AS lease_updated_at,
+                   tok.name AS lease_token_name,
+                   ou.name AS lease_owner_name,
+                   ou.email AS lease_owner_email
             FROM sessions s
             LEFT JOIN network_egress_profiles e ON e.id = s.network_egress_id
+            LEFT JOIN agent_device_leases l
+              ON l.device_instance_id = s.id
+             AND l.status = 'active'
+             AND (l.expires_at IS NULL OR l.expires_at > NOW())
+            LEFT JOIN api_tokens tok ON l.current_operator = 'token:' || tok.id
+            LEFT JOIN users ou ON l.operator_owner_user_id = ou.id
             WHERE s.tenant_id = $1
             ORDER BY s.updated_at DESC
         """, user.tenant_id)
@@ -461,9 +517,25 @@ async def list_sessions(user: CurrentUser = Depends(get_current_user)):
                    e.name AS network_egress_name,
                    e.type AS network_egress_type,
                    e.status AS network_egress_status,
-                   e.health_error AS network_egress_health_error
+                   e.health_error AS network_egress_health_error,
+                   l.id AS lease_id,
+                   l.lease_mode,
+                   l.task_id AS lease_task_id,
+                   l.current_operator,
+                   l.operator_owner_user_id,
+                   l.expires_at AS lease_expires_at,
+                   l.updated_at AS lease_updated_at,
+                   tok.name AS lease_token_name,
+                   ou.name AS lease_owner_name,
+                   ou.email AS lease_owner_email
             FROM sessions s
             LEFT JOIN network_egress_profiles e ON e.id = s.network_egress_id
+            LEFT JOIN agent_device_leases l
+              ON l.device_instance_id = s.id
+             AND l.status = 'active'
+             AND (l.expires_at IS NULL OR l.expires_at > NOW())
+            LEFT JOIN api_tokens tok ON l.current_operator = 'token:' || tok.id
+            LEFT JOIN users ou ON l.operator_owner_user_id = ou.id
             WHERE s.tenant_id = $1 AND s.user_id = $2
             ORDER BY s.updated_at DESC
         """, user.tenant_id, user.id)
@@ -507,6 +579,7 @@ async def list_sessions(user: CurrentUser = Depends(get_current_user)):
             "proxyUrl": _session_proxy_url(r),
             "fingerprintProfile": fp_response,
             "browserLang": r["browser_lang"] or "zh-CN",
+            "activeLease": _active_lease_payload_from_row(r),
             "fileCapture": await _file_capture_payload(sid, container_status=container_status),
             **egress_payload,
         }
