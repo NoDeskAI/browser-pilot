@@ -135,6 +135,11 @@ export default {
   },
   sessionLease: {
     occupied: '正在被占用',
+    operatorLabel: '占用方',
+    userKind: '用户',
+    agentKind: 'Agent',
+    systemKind: '系统',
+    unknownKind: '未知',
     apiTokenNamed: 'API Token：{name}',
     apiToken: 'API Token：{id}',
     userNamed: '用户：{name}',

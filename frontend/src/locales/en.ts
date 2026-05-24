@@ -135,6 +135,11 @@ export default {
   },
   sessionLease: {
     occupied: 'Occupied',
+    operatorLabel: 'Operator',
+    userKind: 'User',
+    agentKind: 'Agent',
+    systemKind: 'System',
+    unknownKind: 'Unknown',
     apiTokenNamed: 'API Token: {name}',
     apiToken: 'API Token: {id}',
     userNamed: 'User: {name}',

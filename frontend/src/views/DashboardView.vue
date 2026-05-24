@@ -6,8 +6,8 @@ import { useSessions } from '../composables/useSessions'
 import { useNetworkEgress } from '../composables/useNetworkEgress'
 import { useNotify } from '../composables/useNotify'
 import type { DeleteSessionFileOptions } from '../types'
-import { Plus, Play, Pause, Trash2, Monitor, Globe, Hash, Clock, RefreshCw, Loader2, Network, ArrowUpRight, Bot } from 'lucide-vue-next'
-import { formatSessionLeaseOperator } from '../lib/sessionLease'
+import { Plus, Play, Pause, Trash2, Monitor, Globe, Hash, Clock, RefreshCw, Loader2, Network, ArrowUpRight, UserCog } from 'lucide-vue-next'
+import { formatSessionLeaseOperator, getSessionLeaseOperatorKind } from '../lib/sessionLease'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
@@ -89,6 +89,32 @@ function refreshWhenFocused() {
 
 function leaseOperatorLabel(lease: NonNullable<typeof sessions.sessions[number]['activeLease']>): string {
   return formatSessionLeaseOperator(lease, t)
+}
+
+function leaseOperatorKind(lease: NonNullable<typeof sessions.sessions[number]['activeLease']>) {
+  return getSessionLeaseOperatorKind(lease)
+}
+
+function leaseOperatorKindLabel(lease: NonNullable<typeof sessions.sessions[number]['activeLease']>): string {
+  const kind = leaseOperatorKind(lease)
+  if (kind === 'user') return t('sessionLease.userKind')
+  if (kind === 'agent') return t('sessionLease.agentKind')
+  if (kind === 'system') return t('sessionLease.systemKind')
+  return t('sessionLease.unknownKind')
+}
+
+function leaseOperatorDisplayName(lease: NonNullable<typeof sessions.sessions[number]['activeLease']>): string {
+  const name = lease.operatorName?.trim()
+  if (name) return name
+  return leaseOperatorLabel(lease)
+}
+
+function leaseOperatorKindClass(lease: NonNullable<typeof sessions.sessions[number]['activeLease']>): string {
+  const kind = leaseOperatorKind(lease)
+  if (kind === 'user') return 'border-emerald-500/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+  if (kind === 'agent') return 'border-sky-500/25 bg-sky-500/10 text-sky-700 dark:text-sky-300'
+  if (kind === 'system') return 'border-violet-500/25 bg-violet-500/10 text-violet-700 dark:text-violet-300'
+  return 'border-border bg-muted/50 text-muted-foreground'
 }
 
 watch(autoRefresh, (on) => {
@@ -390,15 +416,22 @@ async function onPauseContainer(id: string) {
               </span>
             </div>
             <div v-if="s.activeLease" class="flex items-center gap-2 min-w-0">
-              <div class="flex items-center gap-1.5 text-muted-foreground shrink-0 w-12">
-                <Bot class="size-3.5" />
-                <span class="text-[11px] whitespace-nowrap">Agent</span>
+              <div class="flex items-center gap-1.5 text-muted-foreground shrink-0 w-[72px]">
+                <UserCog class="size-3.5" />
+                <span class="text-[11px] whitespace-nowrap">{{ t('sessionLease.operatorLabel') }}</span>
               </div>
+              <Badge
+                variant="outline"
+                class="shrink-0 px-1.5 py-0 text-[10px] font-medium"
+                :class="leaseOperatorKindClass(s.activeLease)"
+              >
+                {{ leaseOperatorKindLabel(s.activeLease) }}
+              </Badge>
               <span
-                class="text-xs truncate flex-1 min-w-0 text-amber-700 dark:text-amber-300"
+                class="text-xs truncate flex-1 min-w-0 text-muted-foreground"
                 :title="leaseOperatorLabel(s.activeLease)"
               >
-                {{ leaseOperatorLabel(s.activeLease) }}
+                {{ leaseOperatorDisplayName(s.activeLease) }}
               </span>
             </div>
           </div>
