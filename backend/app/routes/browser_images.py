@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from app.auth.dependencies import CurrentUser, get_current_user, require_role
 from app.config import PROJECT_ROOT
 from app.db import get_pool
+from app.runtime_control import run_runtime_command as _run
 
 logger = logging.getLogger("routes.browser_images")
 router = APIRouter()
@@ -120,25 +121,6 @@ async def _check_tag_exists(repo: str, tag: str) -> bool:
         return False
 
 
-async def _run(cmd: str, timeout: float = 600) -> tuple[str, str, int]:
-    proc = await asyncio.create_subprocess_shell(
-        cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    try:
-        stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-    except asyncio.TimeoutError:
-        proc.kill()
-        await proc.wait()
-        return "", f"timeout after {timeout}s", -1
-    return (
-        stdout_b.decode("utf-8", errors="replace").strip(),
-        stderr_b.decode("utf-8", errors="replace").strip(),
-        proc.returncode or 0,
-    )
-
-
 async def _do_build(
     image_id: str,
     tenant_id: str,
@@ -176,11 +158,16 @@ async def _do_build(
         logger.error("Build failed for %s: %s", image_tag, log_text[:200])
         return
 
-    ver_cmd = f"docker run --rm {platform_arg}{image_tag} chromium --version 2>/dev/null || docker run --rm {platform_arg}{image_tag} google-chrome --version 2>/dev/null"
-    ver_out, _, ver_rc = await _run(ver_cmd, timeout=30)
+    ver_out, ver_err, ver_rc = await _run(f"docker run --rm {platform_arg}{image_tag} chromium --version", timeout=30)
+    if ver_rc != 0:
+        ver_out, ver_err, ver_rc = await _run(
+            f"docker run --rm {platform_arg}{image_tag} google-chrome --version",
+            timeout=30,
+        )
     chrome_version = ""
-    if ver_rc == 0 and ver_out:
-        m = re.search(r"(\d+\.\d+\.\d+\.\d+)", ver_out)
+    ver_text = ver_out or ver_err
+    if ver_rc == 0 and ver_text:
+        m = re.search(r"(\d+\.\d+\.\d+\.\d+)", ver_text)
         if m:
             chrome_version = m.group(1)
 

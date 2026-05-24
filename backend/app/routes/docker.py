@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import asyncio
 import base64
 import logging
 import re
+import shlex
 
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
@@ -12,6 +12,7 @@ from app.auth.dependencies import CurrentUser, get_session_aware_user, verify_se
 from app.container import container_name, ensure_localhost_bridge_for_url
 from app.db import get_pool
 from app.i18n import t
+from app.runtime_control import run_runtime_command
 
 
 def _locale_from_request(request: Request) -> str:
@@ -25,23 +26,8 @@ router = APIRouter()
 
 
 async def _exec_in_container(cname: str, bash_cmd: str, timeout: float = 15) -> tuple[str, str, int]:
-    cmd = f"docker exec {cname} bash -c '{bash_cmd}'"
-    proc = await asyncio.create_subprocess_shell(
-        cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    try:
-        stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-    except asyncio.TimeoutError:
-        proc.kill()
-        await proc.wait()
-        return "", "timeout", -1
-    return (
-        stdout_bytes.decode("utf-8", errors="replace"),
-        stderr_bytes.decode("utf-8", errors="replace"),
-        proc.returncode or 0,
-    )
+    cmd = f"docker exec {shlex.quote(cname)} bash -c {shlex.quote(bash_cmd)}"
+    return await run_runtime_command(cmd, timeout=timeout)
 
 
 DISPLAY = ":99.0"

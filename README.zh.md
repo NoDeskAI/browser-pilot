@@ -77,7 +77,9 @@ Agent 接入时请打开 Web UI 的 **Docs > Agent 自动接入**。Browser Pilo
 graph TB
   subgraph compose ["docker compose up"]
     Backend["backend:8000 — FastAPI + Web UI"]
+    RuntimeWorker["runtime-worker:8001 — 私有 Docker 控制面"]
     Postgres["postgres:5432"]
+    ObjectStore["S3-compatible object storage"]
   end
   subgraph dynamic ["Created on demand"]
     B1["bp-xxx — Chrome + Selenium"]
@@ -86,8 +88,10 @@ graph TB
   User["Browser"] -->|"http://localhost:8000"| Backend
   User -->|"VNC WebSocket"| B1
   CLI["bpilot CLI"] -->|"REST API"| Backend
-  Backend -->|"Docker socket"| dynamic
+  Backend -->|"runtime control token / private network"| RuntimeWorker
+  RuntimeWorker -->|"Docker socket"| dynamic
   Backend --> Postgres
+  Backend --> ObjectStore
 ```
 
 每个浏览器会话拥有独立的 Docker 容器，包含：
@@ -138,6 +142,9 @@ cp .env.example .env
 | `SELENIUM_BASE_IMAGE` | `selenium/standalone-chrome:latest`                            | 浏览器容器基础镜像。ARM 用户使用 `seleniarm/standalone-chromium:latest`             |
 | `DOCKER_HOST_ADDR`    | `localhost`                                                    | 后端访问浏览器容器的地址。Docker 部署时设为 `host.docker.internal`（docker-compose 自动配置） |
 | `BROWSER_RUNTIME_BACKEND_URL` | `http://host.docker.internal:8000` | 注入浏览器 runtime agent 的后端地址，用于回传文件 ingest API。 |
+| `BROWSER_RUNTIME_CONTROL_URL` | — | 可选的内部 runtime-worker 地址。Docker Compose 会设为 `http://runtime-worker:8001`，使公网后端不再直接挂载 Docker socket。 |
+| `BROWSER_RUNTIME_CONTROL_TOKEN` | — | backend 与 runtime-worker 之间使用的 bearer token。生产/公网部署前必须改成长随机值。 |
+| `BROWSER_RUNTIME_COMMAND_MAX_TIMEOUT` | `900` | runtime-worker Docker 命令允许的最大超时时间，单位秒。 |
 | `BP_LEGACY_DOCKER_DOWNLOAD_WATCHER` | `false` | 旧 Selenium 镜像没有 `file-capture-agent` 时的临时 fallback；启用后后端会使用 Docker copy 命令并返回 degraded warning。 |
 | `OPENAI_API_KEY`      | —                                                              | 可选。设置后会用 LLM 在首次导航时自动命名会话，未设置则以页面标题命名                                 |
 | `LOG_LEVEL`           | `INFO`                                                         | 后端日志级别。排查问题时可设为 `DEBUG`                                               |
@@ -230,7 +237,9 @@ python omniparserserver.py \
 
 ## 安全说明
 
-Docker Compose 部署会将 `/var/run/docker.sock` 挂载到后端容器中，使其对宿主机 Docker 守护进程拥有完全控制权。**请勿将此服务暴露在不受信任的网络上。** 远程部署时请使用带认证的反向代理。
+Docker Compose 部署现在通过内部 `runtime-worker` 服务执行浏览器容器操作。公网 backend 只通过 Compose 私有网络和 `BROWSER_RUNTIME_CONTROL_TOKEN` 访问 worker；只有 worker 挂载 `/var/run/docker.sock`。不要发布 worker 端口，生产/公网部署前必须把 runtime control token 改成长随机值。
+
+runtime-worker 仍然对宿主机 Docker 守护进程拥有完全控制权。请把它当作特权基础设施处理：SaaS 工作负载建议放在专用主机或 VM 边界内，只允许私有服务网络访问，并在公网 backend 前放置带认证的反向代理。
 
 ## 许可证
 

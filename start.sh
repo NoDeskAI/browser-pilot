@@ -253,6 +253,18 @@ PY
     fi
 }
 
+_ensure_local_compose_runtime_env() {
+    if [[ -z "${BROWSER_RUNTIME_CONTROL_TOKEN:-}" ]]; then
+        if [[ -n "${BROWSER_RUNTIME_CONTROL_URL:-}" ]]; then
+            echo "缺少启动配置: BROWSER_RUNTIME_CONTROL_TOKEN" >&2
+            echo "已配置 BROWSER_RUNTIME_CONTROL_URL 时必须同时设置 BROWSER_RUNTIME_CONTROL_TOKEN。" >&2
+            exit 1
+        fi
+        export BROWSER_RUNTIME_CONTROL_TOKEN="browserpilot-local-start-runtime-token"
+        echo "[runtime] 未配置 BROWSER_RUNTIME_CONTROL_TOKEN，本地 start.sh 使用临时占位值用于 Docker Compose 解析"
+    fi
+}
+
 _require_database_env() {
     _infer_postgres_env_from_database_url
 
@@ -274,6 +286,7 @@ _require_database_env() {
 
 _start_processes() {
     _require_database_env
+    _ensure_local_compose_runtime_env
     export MINIO_STORAGE_BOOTSTRAP="${MINIO_STORAGE_BOOTSTRAP:-true}"
     export MINIO_ENDPOINT="${MINIO_ENDPOINT:-http://localhost:9000}"
     echo "[edition] $EDITION ($EDITION_SOURCE)"

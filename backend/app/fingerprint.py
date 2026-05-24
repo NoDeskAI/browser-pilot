@@ -29,6 +29,7 @@ from app.config import (
     DEFAULT_NETWORK_TIMEZONE,
 )
 from app.db import get_pool
+from app.runtime_control import run_runtime_command
 
 logger = logging.getLogger("fingerprint")
 
@@ -977,17 +978,11 @@ async def resolve_network_via_container(proxy_url: str | None, image_tag: str) -
 
         cmd = f"docker run --rm {shlex.quote(image_tag)} sh -c {shlex.quote(curl)}"
         try:
-            proc = await asyncio.create_subprocess_shell(
+            stdout, stderr, returncode = await run_runtime_command(
                 cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+                timeout=_NETWORK_TIMEOUT + 15,
             )
-            stdout_b, stderr_b = await asyncio.wait_for(
-                proc.communicate(), timeout=_NETWORK_TIMEOUT + 15
-            )
-            stdout = stdout_b.decode("utf-8", errors="replace").strip()
-            stderr = stderr_b.decode("utf-8", errors="replace").strip()
-            if proc.returncode != 0:
+            if returncode != 0:
                 warnings.append(f"{api_name} probe failed: {stderr[:160] or 'curl failed'}")
                 continue
             try:

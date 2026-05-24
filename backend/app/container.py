@@ -39,6 +39,7 @@ from app.network_egress import (
     start_session_egress_gateway,
     stop_session_egress_gateway,
 )
+from app.runtime_control import run_runtime_command as _run
 
 logger = logging.getLogger("container")
 
@@ -337,25 +338,6 @@ def _select_network_consensus(networks: list[dict[str, Any]], warnings: list[str
 
     selected["warnings"] = warnings
     return selected
-
-
-async def _run(cmd: str, timeout: float = 30) -> tuple[str, str, int]:
-    proc = await asyncio.create_subprocess_shell(
-        cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    try:
-        stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-    except asyncio.TimeoutError:
-        proc.kill()
-        await proc.wait()
-        return "", f"timeout after {timeout}s", -1
-    return (
-        stdout_b.decode("utf-8", errors="replace").strip(),
-        stderr_b.decode("utf-8", errors="replace").strip(),
-        proc.returncode or 0,
-    )
 
 
 async def exec_in_container(session_id: str, cmd: str, timeout: float = 10) -> str:

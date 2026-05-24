@@ -20,15 +20,17 @@ If you discover a security vulnerability, please report it responsibly:
 
 ## Known Security Considerations
 
-### Docker Socket
+### Runtime Worker / Docker Socket
 
-The default `docker-compose.yml` mounts `/var/run/docker.sock` into the backend container, granting full control over the host Docker daemon. This is required for managing browser session containers.
+The default `docker-compose.yml` runs Docker operations through an internal `runtime-worker` service. The public backend no longer mounts `/var/run/docker.sock` directly; it calls the worker over the private Compose network with `BROWSER_RUNTIME_CONTROL_TOKEN`. The worker still mounts `/var/run/docker.sock` and therefore has full control over the host Docker daemon.
 
 **Mitigations:**
 
 - Never expose the service directly to the public internet without authentication.
 - Use a reverse proxy (Nginx, Caddy, Traefik) with authentication when deploying remotely.
-- Consider running in a dedicated VM or namespace to limit the blast radius.
+- Never publish the runtime-worker port outside the private service network.
+- Set a long random `BROWSER_RUNTIME_CONTROL_TOKEN` before production/public deployment.
+- Consider running the runtime worker in a dedicated VM or namespace to limit the blast radius.
 
 ### Browser Session Isolation
 

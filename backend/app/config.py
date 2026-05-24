@@ -41,6 +41,9 @@ def require_database_url() -> str:
 DOCKER_HOST_ADDR = _env("DOCKER_HOST_ADDR", "localhost")
 API_BASE_URL = _env("API_BASE_URL", "http://localhost:8000")
 BROWSER_RUNTIME_BACKEND_URL = _env("BROWSER_RUNTIME_BACKEND_URL", "http://host.docker.internal:8000")
+BROWSER_RUNTIME_CONTROL_URL = _env("BROWSER_RUNTIME_CONTROL_URL", "")
+BROWSER_RUNTIME_CONTROL_TOKEN = _env("BROWSER_RUNTIME_CONTROL_TOKEN", "")
+BROWSER_RUNTIME_COMMAND_MAX_TIMEOUT = int(_env("BROWSER_RUNTIME_COMMAND_MAX_TIMEOUT", "900"))
 BP_LEGACY_DOCKER_DOWNLOAD_WATCHER = _env("BP_LEGACY_DOCKER_DOWNLOAD_WATCHER", "").lower() in {"1", "true", "yes", "on"}
 
 APP_TITLE = _env("APP_TITLE", "Browser Pilot")
@@ -64,6 +67,13 @@ BUNDLED_S3_BUCKET = MINIO_BUCKET
 BUNDLED_S3_ENDPOINT = MINIO_ENDPOINT
 BUNDLED_S3_PUBLIC_ENDPOINT = MINIO_PUBLIC_ENDPOINT
 BUNDLED_S3_REGION = MINIO_REGION
+
+
+def ensure_project_root_importable() -> None:
+    root = str(PROJECT_ROOT)
+    if root not in sys.path:
+        sys.path.insert(0, root)
+
 
 # --- Declared network profile ---
 
@@ -119,13 +129,13 @@ def _detect_edition() -> str:
     """CE or EE, detected at startup."""
     env = _env("EDITION", "").lower()
     if env in ("ce", "ee"):
+        if env == "ee":
+            ensure_project_root_importable()
         return env
     ee_init = PROJECT_ROOT / "ee" / "backend" / "__init__.py"
     if not ee_init.is_file():
         return "ce"
-    root = str(PROJECT_ROOT)
-    if root not in sys.path:
-        sys.path.insert(0, root)
+    ensure_project_root_importable()
     try:
         importlib.import_module("ee.backend")
         return "ee"

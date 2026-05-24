@@ -80,6 +80,7 @@ For Agent integrations, open **Docs > Agent CLI Access** in the web UI. Browser 
 graph TB
   subgraph compose ["docker compose up"]
     Backend["backend:8000 — FastAPI + Web UI"]
+    RuntimeWorker["runtime-worker:8001 — private Docker control"]
     Postgres["postgres:5432"]
     ObjectStore["S3-compatible object storage"]
   end
@@ -90,7 +91,8 @@ graph TB
   User["Browser"] -->|"http://localhost:8000"| Backend
   User -->|"VNC WebSocket"| B1
   CLI["bpilot CLI"] -->|"REST API"| Backend
-  Backend -->|"Docker socket"| dynamic
+  Backend -->|"runtime control token / private network"| RuntimeWorker
+  RuntimeWorker -->|"Docker socket"| dynamic
   Backend --> Postgres
   Backend --> ObjectStore
 ```
@@ -145,6 +147,9 @@ This starts PostgreSQL and bundled S3-compatible object storage in Docker, initi
 | `SELENIUM_BASE_IMAGE` | `selenium/standalone-chrome:latest`                            | Base image for browser containers. ARM users: `seleniarm/standalone-chromium:latest`                                               |
 | `DOCKER_HOST_ADDR`    | `localhost`                                                    | How the backend reaches browser containers. Set to `host.docker.internal` in Docker deployment (auto-configured by docker-compose) |
 | `BROWSER_RUNTIME_BACKEND_URL` | `http://host.docker.internal:8000` | Backend URL injected into browser runtime agents for internal file ingest callbacks. |
+| `BROWSER_RUNTIME_CONTROL_URL` | — | Optional internal runtime-worker URL. Docker Compose sets this to `http://runtime-worker:8001` so the public backend does not mount Docker socket directly. |
+| `BROWSER_RUNTIME_CONTROL_TOKEN` | — | Shared bearer token used between backend and runtime-worker. Set a long random value before production/public deployment. |
+| `BROWSER_RUNTIME_COMMAND_MAX_TIMEOUT` | `900` | Maximum timeout, in seconds, accepted for runtime-worker Docker commands. |
 | `BP_LEGACY_DOCKER_DOWNLOAD_WATCHER` | `false` | Temporary fallback for old Selenium images without `file-capture-agent`. When enabled, backend uses Docker copy commands and reports a degraded warning. |
 | `OPENAI_API_KEY`      | —                                                              | Optional. When set, uses LLM to auto-name sessions on first navigation. Without it, sessions are named by page title.              |
 | `LOG_LEVEL`           | `INFO`                                                         | Backend log verbosity. Set to `DEBUG` for troubleshooting.                                                                         |
@@ -239,7 +244,9 @@ OmniParser code and weights are not vendored in this repository. Check the OmniP
 
 ## Security
 
-The Docker Compose deployment mounts `/var/run/docker.sock` into the backend container, giving it full control over the host Docker daemon. **Do not expose this service on untrusted networks.** Use a reverse proxy with authentication if deploying remotely.
+The Docker Compose deployment runs browser container operations through an internal `runtime-worker` service. The public backend talks to this worker over the private Compose network with `BROWSER_RUNTIME_CONTROL_TOKEN`; only the worker mounts `/var/run/docker.sock`. Do not publish the worker port, and set a long random runtime control token before production/public deployment.
+
+The runtime worker still has full control over the Docker daemon. Treat it as privileged infrastructure: keep it on a dedicated host or VM boundary for SaaS workloads, restrict access to the private service network, and use a reverse proxy with authentication in front of the public backend if deploying remotely.
 
 ## License
 
