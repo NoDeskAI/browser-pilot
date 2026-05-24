@@ -237,7 +237,7 @@ function shortList(values?: string[] | null): string {
         </Button>
       </header>
 
-      <div class="grid gap-5 2xl:grid-cols-[minmax(0,1fr)_360px]">
+      <div class="grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
         <div class="max-w-full space-y-2 overflow-hidden md:hidden">
           <div v-if="loading && !devices.length" class="rounded-md border border-border px-4 py-8 text-center text-muted-foreground">
             <Loader2 class="mx-auto mb-2 size-5 animate-spin" />
