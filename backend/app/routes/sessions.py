@@ -690,34 +690,21 @@ async def delete_session(
     user: CurrentUser = Depends(get_current_user),
 ):
     await _verify_session_tenant(session_id, user)
-    ctx, rejected = await agent_devices.begin_compatible_action(
-        session_id, user, action="session.delete", side_effect_level="external"
-    )
-    if rejected:
-        return rejected
     pool = get_pool()
     from app.file_service import handle_session_delete_files
 
-    try:
-        delete_body = body or DeleteSessionBody()
-        file_result = await handle_session_delete_files(
-            session_id,
-            user,
-            file_delete_mode=delete_body.fileDeleteMode,
-            delete_file_ids=delete_body.deleteFileIds,
-        )
-        await stop_download_watcher(session_id)
-        await remove_container(session_id)
-        await pool.execute("DELETE FROM sessions WHERE id = $1", session_id)
-        logger.info("Session deleted: %s", session_id)
-        return await agent_devices.complete_compatible_action(
-            ctx,
-            {"ok": True, "files": file_result},
-            summary="Session and browser container deleted",
-            details={"files": file_result},
-        )
-    except Exception as exc:
-        return await agent_devices.fail_compatible_action(ctx, str(exc))
+    delete_body = body or DeleteSessionBody()
+    file_result = await handle_session_delete_files(
+        session_id,
+        user,
+        file_delete_mode=delete_body.fileDeleteMode,
+        delete_file_ids=delete_body.deleteFileIds,
+    )
+    await stop_download_watcher(session_id)
+    await remove_container(session_id)
+    await pool.execute("DELETE FROM sessions WHERE id = $1", session_id)
+    logger.info("Session deleted: %s", session_id)
+    return {"ok": True, "files": file_result}
 
 
 # -----------------------------------------------------------------------

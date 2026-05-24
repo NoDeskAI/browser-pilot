@@ -379,7 +379,11 @@ def test_delete_session_passes_file_selection_and_hard_deletes(monkeypatch):
     async def fake_remove(session_id):
         calls.append(("remove_container", session_id))
 
+    async def fail_begin_action(*_args, **_kwargs):
+        raise AssertionError("deleting a session must not require an active device lease")
+
     monkeypatch.setattr(sessions, "get_pool", lambda: FakePool())
+    monkeypatch.setattr(sessions.agent_devices, "begin_compatible_action", fail_begin_action)
     monkeypatch.setattr(file_service, "handle_session_delete_files", fake_handle)
     monkeypatch.setattr(sessions, "stop_download_watcher", fake_stop)
     monkeypatch.setattr(sessions, "remove_container", fake_remove)
