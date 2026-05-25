@@ -655,7 +655,6 @@ async def create_session(body: CreateSessionBody, user: CurrentUser = Depends(ge
         safe_lang,
         resolved_chrome_version,
     )
-    lease = await agent_devices.create_initial_lease(session_id, user)
     logger.info("Session created: %s (%s) preset=%s lang=%s chrome=%s", session_id, body.name, preset_id, safe_lang, resolved_chrome_version or "default")
     return agent_devices.control_action_response(
         {
@@ -670,11 +669,11 @@ async def create_session(body: CreateSessionBody, user: CurrentUser = Depends(ge
         },
         device_id=session_id,
         user=user,
-        lease=lease,
-        action="reserve_device",
+        lease=None,
+        action="create_session",
         status="succeeded",
-        audit_event_id=str(lease.get("audit_event_id") or "") or None,
-        next_step="continue",
+        audit_event_id=None,
+        next_step="inspect_or_acquire_lease",
         state_changed=True,
     )
 

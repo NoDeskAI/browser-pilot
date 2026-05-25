@@ -363,47 +363,6 @@ async def _active_lease(conn: Any, device_id: str) -> Any | None:
     )
 
 
-async def create_initial_lease(session_id: str, user: CurrentUser) -> dict[str, Any]:
-    pool = get_pool()
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            row = await _session_for_user(conn, session_id, user, lock=True)
-            await _expire_active_leases(conn, session_id)
-            active = await _active_lease(conn, session_id)
-            if active:
-                return _lease_to_dict(active) or {}
-            lease = await conn.fetchrow(
-                """
-                INSERT INTO agent_device_leases (
-                    id, device_instance_id, lease_mode, task_id, session_id, tenant_id,
-                    operator_subject, operator_owner_user_id, current_operator, authorized_operators
-                )
-                VALUES ($1, $2, 'session_bound', NULL, $2, $3, $4, $5, $4, '[]'::jsonb)
-                RETURNING *
-                """,
-                str(uuid.uuid4()),
-                session_id,
-                _row_value(row, "tenant_id") or user.tenant_id,
-                _operator_subject(user),
-                user.id,
-            )
-            audit_id = await _insert_audit(
-                conn,
-                actor=_operator_subject(user),
-                actor_owner_user_id=user.id,
-                tenant_id=_row_value(row, "tenant_id") or user.tenant_id,
-                device_instance_id=session_id,
-                lease_id=_row_value(lease, "id"),
-                task_id=None,
-                session_id=session_id,
-                action="reserve_device",
-                outcome="succeeded",
-                side_effect_level="internal",
-                summary="Initial session-bound device lease created",
-            )
-            return _lease_with_audit(lease, audit_id)
-
-
 async def acquire_lease(
     device_id: str,
     user: CurrentUser,

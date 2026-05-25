@@ -17,18 +17,6 @@ def clear_container_network_state():
     container._BACKGROUND_NETWORK_TASKS.clear()
 
 
-@pytest.fixture(autouse=True)
-def stub_agent_device_initial_lease(monkeypatch):
-    async def fake_create_initial_lease(session_id, _user):
-        return {
-            "lease_id": "lease-1",
-            "device_instance_id": session_id,
-            "current_operator": "user:user-1",
-        }
-
-    monkeypatch.setattr(sessions.agent_devices, "create_initial_lease", fake_create_initial_lease)
-
-
 def _network(timezone="Europe/Berlin", country_code="DE"):
     dns = ["223.5.5.5", "119.29.29.29"] if country_code == "CN" else ["1.1.1.1", "8.8.8.8"]
     return {
@@ -108,6 +96,10 @@ def test_create_session_binds_network_timezone_without_changing_browser_lang(mon
 
     profile = result["fingerprintProfile"]
     assert result["browserLang"] == "fr-FR"
+    assert result["agentDevice"]["leaseId"] is None
+    assert result["agentDevice"]["currentOperator"] is None
+    assert result["agentDevice"]["action"] == "create_session"
+    assert result["agentDevice"]["nextStep"] == "inspect_or_acquire_lease"
     assert profile["timezone"] == "America/New_York"
     assert profile["network"]["timezone"] == "America/New_York"
     assert profile["navigator"]["languages"] == ["fr-FR", "fr", "en"]

@@ -505,3 +505,14 @@ def test_level1_contract_migration_revokes_ownerless_active_leases():
     assert "status = 'revoked'" in text
     assert "ownerless_active_blocked" in text
     assert "revoke_ownerless_active_lease" in text
+
+
+def test_initial_lease_cleanup_migration_revokes_only_implicit_initial_leases():
+    migration = BACKEND_ROOT / "alembic" / "versions" / "0017_remove_implicit_initial_leases.py"
+    text = migration.read_text()
+
+    assert "implicit_initial_lease_removed" in text
+    assert "revoke_implicit_initial_lease" in text
+    assert "Initial session-bound device lease created" in text
+    assert "l.id = 'lease_' || md5(l.device_instance_id || '-agent-device-initial')" in text
+    assert "l.expires_at IS NULL" in text
