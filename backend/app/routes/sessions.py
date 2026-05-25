@@ -786,11 +786,9 @@ async def delete_session(
 @router.post("/api/sessions/{session_id}/container/start")
 async def start_session_container(session_id: str, user: CurrentUser = Depends(get_session_aware_user)):
     await verify_session_access(session_id, user)
-    ctx, rejected = await agent_devices.begin_compatible_action(
-        session_id, user, action="session.container.start", side_effect_level="external"
+    ctx = await agent_devices.begin_control_action(
+        session_id, user, action="session.container.start", side_effect_level="internal"
     )
-    if rejected:
-        return rejected
     try:
         ports = await ensure_container_running(session_id)
         await _activate_file_capture(session_id)

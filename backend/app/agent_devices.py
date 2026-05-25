@@ -820,6 +820,27 @@ async def begin_compatible_action(
         )
 
 
+async def begin_control_action(
+    session_id: str,
+    user: CurrentUser,
+    *,
+    action: str,
+    side_effect_level: str = "internal",
+) -> AgentDeviceActionContext:
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        await _session_for_user(conn, session_id, user)
+        await _expire_active_leases(conn, session_id)
+    return AgentDeviceActionContext(
+        session_id=session_id,
+        action=action,
+        actor=_operator_subject(user),
+        actor_owner_user_id=user.id,
+        lease=None,
+        side_effect_level=side_effect_level,
+    )
+
+
 async def complete_compatible_action(
     ctx: AgentDeviceActionContext,
     response: dict[str, Any],

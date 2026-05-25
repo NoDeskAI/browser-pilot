@@ -291,6 +291,25 @@ def test_begin_compatible_action_returns_legacy_safe_conflict(monkeypatch):
     assert rejected["agentDevice"]["nextStep"] == "reclaim_or_wait"
 
 
+def test_begin_control_action_does_not_require_active_lease(monkeypatch):
+    conn = FakeConn()
+    monkeypatch.setattr(agent_devices, "get_pool", lambda: FakePool(conn))
+
+    ctx = asyncio.run(
+        agent_devices.begin_control_action(
+            "session-1",
+            _user(),
+            action="session.container.start",
+        )
+    )
+
+    assert ctx.session_id == "session-1"
+    assert ctx.action == "session.container.start"
+    assert ctx.actor == "user:user-1"
+    assert ctx.lease is None
+    assert ctx.side_effect_level == "internal"
+
+
 def test_control_action_response_extends_legacy_session_agent_device_fields():
     payload = agent_devices.control_action_response(
         {"ok": True, "id": "session-1"},

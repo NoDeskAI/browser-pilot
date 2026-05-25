@@ -103,6 +103,12 @@ function clearStartingSoon(id: string): void {
   }, 15000)
 }
 
+function assertContainerStarted(data: any): void {
+  if (!data?.ok || !data?.ports) {
+    throw new Error(data?.error || 'Container start failed')
+  }
+}
+
 async function fetchDevicePresets(): Promise<void> {
   try {
     const res = await api('/api/device-presets')
@@ -245,22 +251,18 @@ async function _startContainerForSession(id: string): Promise<void> {
   try {
     const res = await api(`/api/sessions/${id}/container/start`, { method: 'POST' })
     const data = await res.json()
-    if (data.ok && data.ports) {
-      started = true
-      state.activePorts = {
-        seleniumPort: data.ports.selenium_port,
-        vncPort: data.ports.vnc_port,
-      }
-      const s = state.sessions.find(s => s.id === id)
-      if (s) {
-        s.containerStatus = 'running'
-        s.ports = data.ports
-        if (data.fingerprintProfile) s.fingerprintProfile = data.fingerprintProfile
-        applyNetworkEgressFields(s, data)
-      }
-    } else {
-      const current = state.sessions.find(s => s.id === id)
-      if (current) current.containerStatus = restoreContainerStatus(previousStatus)
+    assertContainerStarted(data)
+    started = true
+    state.activePorts = {
+      seleniumPort: data.ports.selenium_port,
+      vncPort: data.ports.vnc_port,
+    }
+    const s = state.sessions.find(s => s.id === id)
+    if (s) {
+      s.containerStatus = 'running'
+      s.ports = data.ports
+      if (data.fingerprintProfile) s.fingerprintProfile = data.fingerprintProfile
+      applyNetworkEgressFields(s, data)
     }
   } catch {
     const current = state.sessions.find(s => s.id === id)
@@ -305,23 +307,19 @@ async function startContainer(id: string): Promise<void> {
   try {
     const res = await api(`/api/sessions/${id}/container/start`, { method: 'POST' })
     const data = await res.json()
-    if (data.ok && data.ports) {
-      started = true
-      if (s) {
-        s.containerStatus = 'running'
-        s.ports = data.ports
-        if (data.fingerprintProfile) s.fingerprintProfile = data.fingerprintProfile
-        applyNetworkEgressFields(s, data)
+    assertContainerStarted(data)
+    started = true
+    if (s) {
+      s.containerStatus = 'running'
+      s.ports = data.ports
+      if (data.fingerprintProfile) s.fingerprintProfile = data.fingerprintProfile
+      applyNetworkEgressFields(s, data)
+    }
+    if (isActive) {
+      state.activePorts = {
+        seleniumPort: data.ports.selenium_port,
+        vncPort: data.ports.vnc_port,
       }
-      if (isActive) {
-        state.activePorts = {
-          seleniumPort: data.ports.selenium_port,
-          vncPort: data.ports.vnc_port,
-        }
-      }
-    } else {
-      const current = state.sessions.find(s => s.id === id)
-      if (current) current.containerStatus = restoreContainerStatus(previousStatus)
     }
   } catch (err) {
     const current = state.sessions.find(s => s.id === id)

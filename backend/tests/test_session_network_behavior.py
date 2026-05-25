@@ -257,6 +257,73 @@ def test_create_session_rejects_manual_proxy(monkeypatch):
     assert "Manual HTTP/SOCKS proxy is no longer supported" in exc.value.detail
 
 
+def test_start_session_container_is_not_lease_gated(monkeypatch):
+    profile = _profile("zh-CN")
+    pool = FakePool([
+        {
+            "fingerprint_profile": profile,
+            "network_egress_id": None,
+            "network_egress_name": None,
+            "network_egress_type": None,
+        }
+    ])
+
+    async def fake_verify(_session_id, _user):
+        return None
+
+    async def fail_begin_compatible_action(*_args, **_kwargs):
+        raise AssertionError("starting a container must not require an active device lease")
+
+    async def fake_begin_control_action(session_id, user, *, action, side_effect_level):
+        return sessions.agent_devices.AgentDeviceActionContext(
+            session_id=session_id,
+            action=action,
+            actor=f"user:{user.id}",
+            actor_owner_user_id=user.id,
+            lease=None,
+            side_effect_level=side_effect_level,
+        )
+
+    async def fake_ensure(_session_id):
+        return {"selenium_port": 4444, "vnc_port": 7900}
+
+    async def fake_runtime(_session_id, fp, **_kwargs):
+        return fp
+
+    async def fake_complete(ctx, response, **kwargs):
+        return sessions.agent_devices._agent_device_response(
+            response,
+            device_instance_id=ctx.session_id,
+            actor=ctx.actor,
+            lease=ctx.lease,
+            action=ctx.action,
+            status=kwargs.get("status", "succeeded"),
+            side_effect_level=ctx.side_effect_level,
+            retry_safety=kwargs.get("retry_safety", "unknown"),
+            audit_event_id="audit-1",
+            next_step=kwargs.get("next_step", "continue"),
+            evidence_status="not_required",
+        )
+
+    monkeypatch.setattr(sessions, "verify_session_access", fake_verify)
+    monkeypatch.setattr(sessions, "get_pool", lambda: pool)
+    monkeypatch.setattr(sessions, "ensure_container_running", fake_ensure)
+    monkeypatch.setattr(sessions, "_activate_file_capture", lambda session_id: asyncio.sleep(0))
+    monkeypatch.setattr(sessions, "_with_runtime_health_wait", fake_runtime)
+    monkeypatch.setattr(sessions, "_file_capture_payload", lambda session_id, container_status: asyncio.sleep(0, {"status": "running"}))
+    monkeypatch.setattr(sessions.agent_devices, "begin_compatible_action", fail_begin_compatible_action)
+    monkeypatch.setattr(sessions.agent_devices, "begin_control_action", fake_begin_control_action)
+    monkeypatch.setattr(sessions.agent_devices, "complete_compatible_action", fake_complete)
+
+    result = asyncio.run(sessions.start_session_container("session-1", _user()))
+
+    assert result["ok"] is True
+    assert result["ports"] == {"selenium_port": 4444, "vnc_port": 7900}
+    assert result["agentDevice"]["leaseId"] is None
+    assert result["agentDevice"]["currentOperator"] is None
+    assert result["agentDevice"]["action"] == "session.container.start"
+
+
 def test_regenerate_fingerprint_preserves_network_and_does_not_fallback_to_utc(monkeypatch):
     pool = FakePool([
         {"tenant_id": "tenant-1"},
