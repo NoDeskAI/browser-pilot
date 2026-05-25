@@ -183,6 +183,10 @@ function formatUrl(raw: string): string {
   }
 }
 
+function formatSessionId(id: string): string {
+  return id.length <= 12 ? id : id.slice(0, 8)
+}
+
 function writeClipboardTextWithSelection(text: string): boolean {
   const activeElement = document.activeElement instanceof HTMLElement ? document.activeElement : null
   const selection = window.getSelection()
@@ -445,7 +449,7 @@ async function onPauseContainer(id: string) {
                 @click.stop="copyValue(s.id, `id:${s.id}`)"
                 :title="s.id"
               >
-                <span class="min-w-0 truncate">{{ s.id.slice(0, 8) }}</span>
+                <span class="min-w-0 truncate">{{ formatSessionId(s.id) }}</span>
                 <Check v-if="copiedValueKey === `id:${s.id}`" class="size-3 shrink-0" />
                 <Copy v-else class="size-3 shrink-0 opacity-0 transition-opacity group-hover/value:opacity-70" />
               </button>

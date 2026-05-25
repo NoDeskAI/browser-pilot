@@ -67,9 +67,9 @@ bpilot files rename <file-id> final.csv
 bpilot files delete <file-id>
 ```
 
-加 `--json` 可输出机器可读格式（供 AI Agent 使用）。Agent 通过 `bpilot session list --json` 查看每个 session 的 `networkEgress*` 字段；通过 `bpilot files list --json` 查看当前 session 文件，每个 item 都有 `status`，用于区分进行中的文件和 `completed` 文件。
+加 `--json` 可输出机器可读格式（供 AI Agent 使用）。Agent 通过 `bpilot session list --json` 查看每个 session 的 `networkEgress*` 字段；新会话返回 12 位短 ID，已有 UUID session id 仍然有效。通过 `bpilot files list --json` 查看当前 session 文件，每个 item 都有 `status`，用于区分进行中的文件和 `completed` 文件。
 
-Agent 接入时请打开 Web UI 的 **Docs > Agent 自动接入**。Browser Pilot 将每个 Session 暴露为 Agent Device：session id 即 device id，浏览器外部副作用命令需要 active exclusive DeviceLease，每个浏览器动作都会返回 `agentDevice` 契约字段，包括 `executionStatus`、`sideEffectStatus`、`auditStatus`、`evidenceStatus`、`failureCategory` 和 `nextStep`。Browser Pilot 当前只支持 Agent Device Level 1 Device Governance；不支持 Level 2 的 control transfer、`request_intervention`、handoff 和 Human 接手。
+Agent 接入时请打开 Web UI 的 **Docs > Agent 自动接入**。Browser Pilot 将每个 Session 暴露为 Agent Device：session id 即 device id，浏览器外部副作用命令需要 active exclusive DeviceLease，每个浏览器动作都会返回 `agentDevice` 契约字段，包括 `executionStatus`、`sideEffectStatus`、`auditStatus`、`evidenceStatus`、`failureCategory` 和 `nextStep`。Agent 应把 API 返回的完整 id 填进 `--session`；新 ID 通常是 12 位，旧 UUID ID 仍可继续使用。Browser Pilot 当前只支持 Agent Device Level 1 Device Governance；不支持 Level 2 的 control transfer、`request_intervention`、handoff 和 Human 接手。
 
 ## 架构
 

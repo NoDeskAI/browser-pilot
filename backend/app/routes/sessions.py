@@ -3,11 +3,13 @@ from __future__ import annotations
 import json
 import logging
 import re
-import uuid
+import secrets
+import string
 import asyncio
 from datetime import datetime, timezone
 from typing import Any, Literal
 
+import asyncpg
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -46,6 +48,19 @@ from app.network_egress import (
 
 logger = logging.getLogger("routes.sessions")
 router = APIRouter()
+
+SESSION_ID_LENGTH = 12
+SESSION_ID_RETRY_LIMIT = 5
+SESSION_ID_FIRST_CHARS = string.ascii_lowercase
+SESSION_ID_CHARS = string.ascii_lowercase + string.digits
+
+
+def _generate_session_id(length: int = SESSION_ID_LENGTH) -> str:
+    if length < 1:
+        raise ValueError("session id length must be at least 1")
+    first = secrets.choice(SESSION_ID_FIRST_CHARS)
+    rest = "".join(secrets.choice(SESSION_ID_CHARS) for _ in range(length - 1))
+    return f"{first}{rest}"
 
 
 def _row_value(row, key: str, default=None):
@@ -603,7 +618,6 @@ async def create_session(body: CreateSessionBody, user: CurrentUser = Depends(ge
         raise HTTPException(422, "Manual HTTP/SOCKS proxy is no longer supported. Use a Clash or OpenVPN network egress profile.")
 
     pool = get_pool()
-    session_id = str(uuid.uuid4())
     preset_id = body.devicePreset if body.devicePreset in DEVICE_PRESETS else DEFAULT_PRESET
     safe_lang = re.sub(r"[^a-zA-Z0-9_-]", "", body.browserLang or "zh-CN") or "zh-CN"
 
@@ -637,24 +651,40 @@ async def create_session(body: CreateSessionBody, user: CurrentUser = Depends(ge
     fp_profile["screen"]["width"] = preset_data["width"]
     fp_profile["screen"]["height"] = preset_data["height"]
 
-    await pool.execute(
-        """
-        INSERT INTO sessions
-            (id, name, device_preset, proxy_url, network_egress_id, tenant_id, user_id,
-             fingerprint_profile, browser_lang, chrome_version)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10)
-        """,
-        session_id,
-        body.name,
-        preset_id,
-        effective_egress.proxy_url,
-        effective_egress.id,
-        user.tenant_id,
-        user.id,
-        fp_profile,
-        safe_lang,
-        resolved_chrome_version,
-    )
+    session_id = ""
+    last_collision: Exception | None = None
+    for attempt in range(SESSION_ID_RETRY_LIMIT):
+        session_id = _generate_session_id()
+        try:
+            await pool.execute(
+                """
+                INSERT INTO sessions
+                    (id, name, device_preset, proxy_url, network_egress_id, tenant_id, user_id,
+                     fingerprint_profile, browser_lang, chrome_version)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10)
+                """,
+                session_id,
+                body.name,
+                preset_id,
+                effective_egress.proxy_url,
+                effective_egress.id,
+                user.tenant_id,
+                user.id,
+                fp_profile,
+                safe_lang,
+                resolved_chrome_version,
+            )
+            break
+        except asyncpg.exceptions.UniqueViolationError as exc:
+            last_collision = exc
+            logger.warning(
+                "Session id collision while creating session, retrying (%s/%s)",
+                attempt + 1,
+                SESSION_ID_RETRY_LIMIT,
+            )
+    else:
+        raise HTTPException(status_code=500, detail="Could not allocate session id") from last_collision
+
     logger.info("Session created: %s (%s) preset=%s lang=%s chrome=%s", session_id, body.name, preset_id, safe_lang, resolved_chrome_version or "default")
     return agent_devices.control_action_response(
         {

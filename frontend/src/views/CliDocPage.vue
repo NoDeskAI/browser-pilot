@@ -144,9 +144,9 @@ BPILOT_API_TOKEN                    Use this token for the current shell
 ## Example Workflow
 
 ${c} session create --name "My Task" --json
-# → {"id": "abc-123-...", "name": "My Task"}
-${c} session use abc-123-...
-${c} session start                   # Uses active session abc-123-...
+# → {"id": "k9f2m7q4z1pa", "name": "My Task"}
+${c} session use k9f2m7q4z1pa
+${c} session start                   # Uses active session k9f2m7q4z1pa
 ${c} navigate https://example.com
 ${c} observe --json
 # → {"url": "...", "title": "...", "elements": [{"tag": "A", "text": "Link", "x": 320, "y": 200}, ...]}
@@ -235,9 +235,9 @@ BPILOT_API_TOKEN                    当前 shell 使用的 API Token
 ## 使用示例
 
 ${c} session create --name "我的任务" --json
-# → {"id": "abc-123-...", "name": "我的任务"}
-${c} session use abc-123-...
-${c} session start                   # 使用已激活的 abc-123-...
+# → {"id": "k9f2m7q4z1pa", "name": "我的任务"}
+${c} session use k9f2m7q4z1pa
+${c} session start                   # 使用已激活的 k9f2m7q4z1pa
 ${c} navigate https://example.com
 ${c} observe --json
 # → {"url": "...", "title": "...", "elements": [{"tag": "A", "text": "Link", "x": 320, "y": 200}, ...]}
@@ -256,6 +256,7 @@ function agentSessionTargetEn(c: string): string {
   return `## Session Target (stateless)
 
 # Browser Pilot maps each Session to an Agent Device. The session id is also the device id.
+# New sessions return 12-character short ids; existing UUID sessions remain valid.
 # Choose exactly one path, then copy the session id into each --session argument.
 
 # Path A: reuse an existing session.
@@ -276,6 +277,7 @@ function agentSessionTargetZh(c: string): string {
   return `## 会话目标（无状态）
 
 # Browser Pilot 将每个 Session 映射为 Agent Device。session id 同时也是 device id。
+# 新会话返回 12 位短 ID；已有 UUID 会话仍然有效。
 # 只选择一种方案，然后把 session id 直接填进每条命令的 --session 参数。
 
 # 方案 A：复用现有会话。
@@ -435,23 +437,23 @@ ${c} --session "<session-id>" files delete <file-id>          # Delete file; res
 
 ${c} session create --name "Agent Task" --json
 # Read the returned "id", then acquire a lease before browser side effects:
-${c} --session "abc-123-..." session start
-${c} device "abc-123-..." --json
-${c} lease acquire "abc-123-..." --mode session_bound --json
+${c} --session "k9f2m7q4z1pa" session start
+${c} device "k9f2m7q4z1pa" --json
+${c} lease acquire "k9f2m7q4z1pa" --mode session_bound --json
 # If state is OCCUPIED by another operator, do not continue until ownership is resolved.
-${c} --session "abc-123-..." navigate https://example.com
+${c} --session "k9f2m7q4z1pa" navigate https://example.com
 # Read response.agentDevice.executionStatus, sideEffectStatus, auditStatus, evidenceStatus, and nextStep.
-${c} --session "abc-123-..." observe --json
+${c} --session "k9f2m7q4z1pa" observe --json
 # → {"url": "...", "title": "...", "elements": [{"tag": "A", "text": "Link", "x": 320, "y": 200}, ...]}
-${c} --session "abc-123-..." click 320 200
-${c} --session "abc-123-..." type "search query"
-${c} --session "abc-123-..." key Enter
-${c} --session "abc-123-..." screenshot --json
-${c} --session "abc-123-..." files list --json
+${c} --session "k9f2m7q4z1pa" click 320 200
+${c} --session "k9f2m7q4z1pa" type "search query"
+${c} --session "k9f2m7q4z1pa" key Enter
+${c} --session "k9f2m7q4z1pa" screenshot --json
+${c} --session "k9f2m7q4z1pa" files list --json
 # → {"ok": true, "file": {"id": "file-1", "url": "http://localhost:8000/api/files/file-1.png?expires=...&signature=..."}, "screenshot": null}
 # → {"files": [{"id": "guid-1", "status": "downloading", ...}, {"id": "file-1", "status": "completed", "url": "http://localhost:8000/api/files/file-1.csv?expires=...&signature=...", ...}]}
-${c} --session "abc-123-..." files upload ./input.csv --name input.csv
-${c} --session "abc-123-..." files get file-1 -o result.csv`
+${c} --session "k9f2m7q4z1pa" files upload ./input.csv --name input.csv
+${c} --session "k9f2m7q4z1pa" files get file-1 -o result.csv`
 }
 
 function agentCommandReferenceZh(c: string): string {
@@ -523,23 +525,23 @@ ${c} --session "<session-id>" files delete <file-id>          # 删除文件，�
 
 ${c} session create --name "Agent 任务" --json
 # 读取返回的 "id"，然后在产生浏览器副作用前 acquire lease：
-${c} --session "abc-123-..." session start
-${c} device "abc-123-..." --json
-${c} lease acquire "abc-123-..." --mode session_bound --json
+${c} --session "k9f2m7q4z1pa" session start
+${c} device "k9f2m7q4z1pa" --json
+${c} lease acquire "k9f2m7q4z1pa" --mode session_bound --json
 # 如果 state 是 OCCUPIED 且 operator 不是自己，不要继续执行，先解决归属。
-${c} --session "abc-123-..." navigate https://example.com
+${c} --session "k9f2m7q4z1pa" navigate https://example.com
 # 读取 response.agentDevice.executionStatus、sideEffectStatus、auditStatus、evidenceStatus 和 nextStep。
-${c} --session "abc-123-..." observe --json
+${c} --session "k9f2m7q4z1pa" observe --json
 # → {"url": "...", "title": "...", "elements": [{"tag": "A", "text": "Link", "x": 320, "y": 200}, ...]}
-${c} --session "abc-123-..." click 320 200
-${c} --session "abc-123-..." type "搜索内容"
-${c} --session "abc-123-..." key Enter
-${c} --session "abc-123-..." screenshot --json
-${c} --session "abc-123-..." files list --json
+${c} --session "k9f2m7q4z1pa" click 320 200
+${c} --session "k9f2m7q4z1pa" type "搜索内容"
+${c} --session "k9f2m7q4z1pa" key Enter
+${c} --session "k9f2m7q4z1pa" screenshot --json
+${c} --session "k9f2m7q4z1pa" files list --json
 # → {"ok": true, "file": {"id": "file-1", "url": "http://localhost:8000/api/files/file-1.png?expires=...&signature=..."}, "screenshot": null}
 # → {"files": [{"id": "guid-1", "status": "downloading", ...}, {"id": "file-1", "status": "completed", "url": "http://localhost:8000/api/files/file-1.csv?expires=...&signature=...", ...}]}
-${c} --session "abc-123-..." files upload ./input.csv --name input.csv
-${c} --session "abc-123-..." files get file-1 -o result.csv`
+${c} --session "k9f2m7q4z1pa" files upload ./input.csv --name input.csv
+${c} --session "k9f2m7q4z1pa" files get file-1 -o result.csv`
 }
 
 function buildManualDocEn(c: string, url: string, installShell: string, title: string) {
@@ -581,6 +583,7 @@ ${agentDeviceModelEn(c)}
 # Do not only save this document into a skill or memory; execute the bootstrap block.
 # Do not use ${c} session use, shell variables, active_session, or BPILOT_ACTIVE_SESSION for session targeting.
 # Copy the actual session id into every --session "<session-id>" argument.
+# New sessions usually use 12-character ids such as "k9f2m7q4z1pa"; existing UUID session ids are still valid.
 # Prefer --json for state-reading commands so the result is easy to parse.
 # If no session id is known, list sessions or create one before browser actions.
 # Before browser side effects on reused sessions, read DeviceVisibility and ensure the lease is active for this operator.
@@ -610,6 +613,7 @@ ${agentDeviceModelZh(c)}
 # 不要只把本文档写进 skill 或记忆；必须实际执行启动配置段。
 # 不要使用 ${c} session use、shell 变量、active_session 或 BPILOT_ACTIVE_SESSION 来指定会话。
 # 把真实 session id 直接填进每条命令的 --session "<session-id>" 参数。
+# 新会话通常使用类似 "k9f2m7q4z1pa" 的 12 位 ID；已有 UUID session id 仍然有效。
 # 读取状态时优先使用 --json，方便解析结果。
 # 如果还不知道 session id，先列出现有会话或创建新会话。
 # 在复用会话执行浏览器副作用前，先读取 DeviceVisibility，并确认 lease 对当前 operator 有效。

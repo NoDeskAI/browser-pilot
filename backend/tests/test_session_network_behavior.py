@@ -66,12 +66,21 @@ def _user():
     return SimpleNamespace(id="user-1", tenant_id="tenant-1", role="admin")
 
 
+def test_generate_session_id_uses_short_safe_base36_shape():
+    session_id = sessions._generate_session_id()
+
+    assert len(session_id) == 12
+    assert session_id[0].isalpha()
+    assert session_id.islower()
+    assert session_id.isalnum()
+
+
 def test_create_session_binds_network_timezone_without_changing_browser_lang(monkeypatch):
     pool = FakePool([
         {"chrome_version": "147.0.0.0", "image_tag": "browser-pilot:test"},
     ])
     monkeypatch.setattr(sessions, "get_pool", lambda: pool)
-    monkeypatch.setattr(sessions.uuid, "uuid4", lambda: "session-1")
+    monkeypatch.setattr(sessions, "_generate_session_id", lambda: "session-1")
 
     async def fake_network(proxy_url, image_tag):
         assert proxy_url is None
@@ -96,6 +105,7 @@ def test_create_session_binds_network_timezone_without_changing_browser_lang(mon
 
     profile = result["fingerprintProfile"]
     assert result["browserLang"] == "fr-FR"
+    assert result["id"] == "session-1"
     assert result["agentDevice"]["leaseId"] is None
     assert result["agentDevice"]["currentOperator"] is None
     assert result["agentDevice"]["action"] == "create_session"
@@ -105,13 +115,46 @@ def test_create_session_binds_network_timezone_without_changing_browser_lang(mon
     assert profile["navigator"]["languages"] == ["fr-FR", "fr", "en"]
 
 
+def test_create_session_retries_short_id_collision(monkeypatch):
+    pool = FakePool([
+        {"chrome_version": "147.0.0.0", "image_tag": "browser-pilot:test"},
+    ])
+    attempted_ids = []
+    generated_ids = iter(["a11111111111", "b22222222222"])
+    monkeypatch.setattr(sessions, "get_pool", lambda: pool)
+    monkeypatch.setattr(sessions, "_generate_session_id", lambda: next(generated_ids))
+
+    async def fake_execute(*args):
+        attempted_ids.append(args[1])
+        if len(attempted_ids) == 1:
+            raise sessions.asyncpg.exceptions.UniqueViolationError("duplicate key")
+        return "OK"
+
+    async def fake_generate_profile(tenant_id, browser_lang, chrome_version=None):
+        return _profile(browser_lang)
+
+    monkeypatch.setattr(pool, "execute", fake_execute)
+    monkeypatch.setattr(sessions, "generate_profile", fake_generate_profile)
+
+    result = asyncio.run(
+        sessions.create_session(
+            sessions.CreateSessionBody(name="test", browserLang="zh-CN"),
+            _user(),
+        )
+    )
+
+    assert attempted_ids == ["a11111111111", "b22222222222"]
+    assert result["id"] == "b22222222222"
+    assert result["agentDevice"]["deviceInstanceId"] == "b22222222222"
+
+
 def test_create_session_uses_declared_network_without_container_probe(monkeypatch):
     pool = FakePool([
         {"chrome_version": "147.0.0.0", "image_tag": "browser-pilot:test"},
     ])
     calls = {}
     monkeypatch.setattr(sessions, "get_pool", lambda: pool)
-    monkeypatch.setattr(sessions.uuid, "uuid4", lambda: "session-1")
+    monkeypatch.setattr(sessions, "_generate_session_id", lambda: "session-1")
 
     def fake_declared_network(proxy_url, image_tag):
         calls["proxy_url"] = proxy_url
@@ -172,7 +215,7 @@ def test_create_session_prefers_exact_chrome_version(monkeypatch):
     ])
     captured = {}
     monkeypatch.setattr(sessions, "get_pool", lambda: pool)
-    monkeypatch.setattr(sessions.uuid, "uuid4", lambda: "session-1")
+    monkeypatch.setattr(sessions, "_generate_session_id", lambda: "session-1")
 
     async def fake_network(proxy_url, image_tag):
         captured["image_tag"] = image_tag
@@ -209,7 +252,7 @@ def test_create_session_keeps_major_version_fallback(monkeypatch):
     ])
     captured = {}
     monkeypatch.setattr(sessions, "get_pool", lambda: pool)
-    monkeypatch.setattr(sessions.uuid, "uuid4", lambda: "session-1")
+    monkeypatch.setattr(sessions, "_generate_session_id", lambda: "session-1")
 
     async def fake_network(proxy_url, image_tag):
         captured["image_tag"] = image_tag

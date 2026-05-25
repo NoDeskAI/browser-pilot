@@ -280,6 +280,7 @@ cmd_session_create() {
     sid=$(echo "$resp" | grep -o '"id" *: *"[^"]*"' | head -1 | sed 's/.*: *"//;s/"//')
     sname=$(echo "$resp" | grep -o '"name" *: *"[^"]*"' | head -1 | sed 's/.*: *"//;s/"//')
     _green "Created session: $sid  ($sname)"
+    _dim "Copy the full id exactly. New sessions usually use 12-character ids; existing sessions may be UUIDs."
     _dim "Run: $CLI_NAME session use $sid"
   fi
 }
@@ -853,6 +854,7 @@ Sessions:
 
 Session target:
   Commands may omit <id> after 'session use <id>', or use --session/-s.
+  Copy the full id returned by the API. New sessions usually use 12-character ids; existing sessions may be UUIDs.
 
 Network egress:
   network                       Alias for network-egress
