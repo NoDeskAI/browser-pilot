@@ -135,6 +135,8 @@ export default {
   },
   sessionLease: {
     occupied: '正在被占用',
+    unoccupiedKind: '未占用',
+    unoccupied: '没有占用',
     operatorLabel: '占用方',
     userKind: '用户',
     agentKind: 'Agent',

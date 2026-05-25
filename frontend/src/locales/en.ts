@@ -135,6 +135,8 @@ export default {
   },
   sessionLease: {
     occupied: 'Occupied',
+    unoccupiedKind: 'Unoccupied',
+    unoccupied: 'Not occupied',
     operatorLabel: 'Operator',
     userKind: 'User',
     agentKind: 'Agent',
