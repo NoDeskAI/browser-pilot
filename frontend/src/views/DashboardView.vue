@@ -6,7 +6,7 @@ import { useSessions } from '../composables/useSessions'
 import { useNetworkEgress } from '../composables/useNetworkEgress'
 import { useNotify } from '../composables/useNotify'
 import type { ActiveSessionLease, DeleteSessionFileOptions } from '../types'
-import { Plus, Play, Pause, Trash2, Monitor, Globe, Hash, Clock, RefreshCw, Loader2, Network, ArrowUpRight, UserCog } from 'lucide-vue-next'
+import { Plus, Play, Pause, Trash2, Monitor, Globe, Hash, Clock, RefreshCw, Loader2, Network, ArrowUpRight, UserCog, Copy, Check } from 'lucide-vue-next'
 import { formatSessionLeaseOperator, getSessionLeaseOperatorKind } from '../lib/sessionLease'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -121,10 +121,6 @@ function leaseStatusTitle(lease: ActiveSessionLease | null | undefined): string 
   return lease ? leaseOperatorLabel(lease) : t('sessionLease.unoccupied')
 }
 
-function leaseStatusBadgeLabel(lease: ActiveSessionLease | null | undefined): string {
-  return lease ? t('sessionLease.occupied') : t('sessionLease.unoccupiedKind')
-}
-
 function leaseStatusKindLabel(lease: ActiveSessionLease | null | undefined): string {
   return lease ? leaseOperatorKindLabel(lease) : t('sessionLease.unoccupiedKind')
 }
@@ -170,7 +166,7 @@ onUnmounted(() => {
 const editingId = ref<string | null>(null)
 const editName = ref('')
 const inputRefs = ref<Record<string, HTMLInputElement>>({})
-const copiedId = ref<string | null>(null)
+const copiedValueKey = ref<string | null>(null)
 const deleteDialogOpen = ref<Record<string, boolean>>({})
 const deleting = ref<Record<string, boolean>>({})
 const creating = ref(false)
@@ -187,13 +183,59 @@ function formatUrl(raw: string): string {
   }
 }
 
-function copyId(id: string) {
-  navigator.clipboard.writeText(id).then(() => {
-    copiedId.value = id
-    setTimeout(() => {
-      if (copiedId.value === id) copiedId.value = null
-    }, 1500)
-  })
+function writeClipboardTextWithSelection(text: string): boolean {
+  const activeElement = document.activeElement instanceof HTMLElement ? document.activeElement : null
+  const selection = window.getSelection()
+  const ranges = selection
+    ? Array.from({ length: selection.rangeCount }, (_, i) => selection.getRangeAt(i))
+    : []
+  const textarea = document.createElement('textarea')
+  textarea.value = text
+  textarea.setAttribute('readonly', '')
+  textarea.style.position = 'fixed'
+  textarea.style.inset = '0 auto auto 0'
+  textarea.style.opacity = '0'
+  textarea.style.pointerEvents = 'none'
+  document.body.appendChild(textarea)
+  textarea.focus()
+  textarea.select()
+  textarea.setSelectionRange(0, textarea.value.length)
+
+  try {
+    return document.execCommand('copy')
+  } catch {
+    return false
+  } finally {
+    document.body.removeChild(textarea)
+    if (selection) {
+      selection.removeAllRanges()
+      ranges.forEach(range => selection.addRange(range))
+    }
+    activeElement?.focus()
+  }
+}
+
+async function writeClipboardText(text: string): Promise<boolean> {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text)
+      return true
+    } catch {
+      return writeClipboardTextWithSelection(text)
+    }
+  }
+  return writeClipboardTextWithSelection(text)
+}
+
+async function copyValue(value: string, key: string) {
+  const text = value.trim()
+  if (!text) return
+  copiedValueKey.value = key
+  notify.success(t('session.copied'))
+  void writeClipboardText(text)
+  setTimeout(() => {
+    if (copiedValueKey.value === key) copiedValueKey.value = null
+  }, 1500)
 }
 
 function formatRelativeTime(iso: string): string {
@@ -388,71 +430,99 @@ async function onPauseContainer(id: string) {
             >
               {{ s.containerStatus === 'running' ? t('session.running') : s.containerStatus === 'starting' ? t('session.starting') : s.containerStatus === 'paused' ? t('session.paused') : t('session.stopped') }}
             </Badge>
-            <Badge
-              variant="outline"
-              class="shrink-0 px-2 py-0.5 text-[10px] font-medium"
-              :class="s.activeLease ? 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300' : 'border-border bg-muted/50 text-muted-foreground'"
-              :title="leaseStatusTitle(s.activeLease)"
-            >
-              {{ leaseStatusBadgeLabel(s.activeLease) }}
-            </Badge>
           </div>
 
           <div class="px-4 pb-4 flex-1 flex flex-col gap-2.5 min-h-0 justify-center">
-            <div class="flex items-center gap-2">
-              <div class="flex items-center gap-1.5 text-muted-foreground shrink-0 w-12">
+            <div class="flex items-center gap-2 min-w-0">
+              <div class="flex items-center gap-1.5 text-muted-foreground shrink-0 w-[72px]">
                 <Hash class="size-3.5" />
                 <span class="text-[11px] whitespace-nowrap">ID</span>
               </div>
-              <span
-                class="text-xs font-mono text-muted-foreground hover:text-foreground transition-colors cursor-pointer bg-muted/30 px-1.5 py-0.5 rounded"
-                :class="copiedId === s.id ? 'text-green-500 bg-green-500/10' : ''"
-                @click.stop="copyId(s.id)"
-                :title="t('session.copyId')"
+              <button
+                type="button"
+                class="group/value ml-auto flex min-w-0 max-w-[calc(100%-80px)] items-center justify-end gap-1 rounded px-1.5 py-0.5 text-right text-xs font-mono text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                :class="copiedValueKey === `id:${s.id}` ? 'bg-green-500/10 text-green-600 dark:text-green-400' : ''"
+                @click.stop="copyValue(s.id, `id:${s.id}`)"
+                :title="s.id"
               >
-                {{ copiedId === s.id ? t('session.copied') : s.id.slice(0, 8) }}
-              </span>
+                <span class="min-w-0 truncate">{{ s.id.slice(0, 8) }}</span>
+                <Check v-if="copiedValueKey === `id:${s.id}`" class="size-3 shrink-0" />
+                <Copy v-else class="size-3 shrink-0 opacity-0 transition-opacity group-hover/value:opacity-70" />
+              </button>
             </div>
             <div class="flex items-center gap-2 min-w-0">
-              <div class="flex items-center gap-1.5 text-muted-foreground shrink-0 w-12">
+              <div class="flex items-center gap-1.5 text-muted-foreground shrink-0 w-[72px]">
                 <Globe class="size-3.5" />
                 <span class="text-[11px] whitespace-nowrap">URL</span>
               </div>
-              <span class="text-xs text-muted-foreground truncate flex-1 min-w-0" :title="s.currentUrl">
-                {{ formatUrl(s.currentUrl) || '-' }}
-              </span>
+              <button
+                type="button"
+                class="group/value ml-auto flex min-w-0 max-w-[calc(100%-80px)] items-center justify-end gap-1 rounded px-1.5 py-0.5 text-right text-xs text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                :class="copiedValueKey === `url:${s.id}` ? 'bg-green-500/10 text-green-600 dark:text-green-400' : ''"
+                @click.stop="copyValue(s.currentUrl || '-', `url:${s.id}`)"
+                :title="s.currentUrl || '-'"
+              >
+                <span class="min-w-0 truncate">{{ formatUrl(s.currentUrl) || '-' }}</span>
+                <Check v-if="copiedValueKey === `url:${s.id}`" class="size-3 shrink-0" />
+                <Copy v-else class="size-3 shrink-0 opacity-0 transition-opacity group-hover/value:opacity-70" />
+              </button>
             </div>
             <div class="flex items-center gap-2 min-w-0">
-              <div class="flex items-center gap-1.5 text-muted-foreground shrink-0 w-12">
+              <div class="flex items-center gap-1.5 text-muted-foreground shrink-0 w-[72px]">
                 <Network class="size-3.5" />
                 <span class="text-[11px] whitespace-nowrap">{{ t('networkEgress.shortLabel') }}</span>
               </div>
-              <span
-                class="text-xs truncate flex-1 min-w-0"
-                :class="s.networkEgressStatus === 'unhealthy' || s.networkEgressStatus === 'unsupported' ? 'text-destructive' : 'text-muted-foreground'"
-                :title="s.networkEgressHealthError || s.networkEgressProxyUrl || s.networkEgressName"
+              <button
+                type="button"
+                class="group/value ml-auto flex min-w-0 max-w-[calc(100%-80px)] items-center justify-end gap-1 rounded px-1.5 py-0.5 text-right text-xs transition-colors hover:bg-muted/50 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                :class="[
+                  s.networkEgressStatus === 'unhealthy' || s.networkEgressStatus === 'unsupported' ? 'text-destructive' : 'text-muted-foreground',
+                  copiedValueKey === `network:${s.id}` ? 'bg-green-500/10 text-green-600 dark:text-green-400' : ''
+                ]"
+                @click.stop="copyValue(s.networkEgressName || t('networkEgress.direct'), `network:${s.id}`)"
+                :title="s.networkEgressHealthError || s.networkEgressProxyUrl || s.networkEgressName || t('networkEgress.direct')"
               >
-                {{ s.networkEgressName || t('networkEgress.direct') }}
-              </span>
+                <span class="min-w-0 truncate">{{ s.networkEgressName || t('networkEgress.direct') }}</span>
+                <Check v-if="copiedValueKey === `network:${s.id}`" class="size-3 shrink-0" />
+                <Copy v-else class="size-3 shrink-0 opacity-0 transition-opacity group-hover/value:opacity-70" />
+              </button>
             </div>
             <div class="flex items-center gap-2 min-w-0">
               <div class="flex items-center gap-1.5 text-muted-foreground shrink-0 w-[72px]">
                 <UserCog class="size-3.5" />
                 <span class="text-[11px] whitespace-nowrap">{{ t('sessionLease.operatorLabel') }}</span>
               </div>
-              <Badge
-                variant="outline"
-                class="shrink-0 px-1.5 py-0 text-[10px] font-medium"
-                :class="leaseStatusKindClass(s.activeLease)"
-              >
-                {{ leaseStatusKindLabel(s.activeLease) }}
-              </Badge>
-              <span
-                class="text-xs truncate flex-1 min-w-0 text-muted-foreground"
-                :title="leaseStatusTitle(s.activeLease)"
-              >
-                {{ leaseStatusDisplayName(s.activeLease) }}
-              </span>
+              <div class="ml-auto flex min-w-0 max-w-[calc(100%-80px)] items-center justify-end gap-1.5">
+                <button
+                  type="button"
+                  class="group/value min-w-0 rounded transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  :class="copiedValueKey === `lease-kind:${s.id}` ? 'bg-green-500/10' : ''"
+                  @click.stop="copyValue(leaseStatusKindLabel(s.activeLease), `lease-kind:${s.id}`)"
+                  :title="leaseStatusKindLabel(s.activeLease)"
+                >
+                  <Badge
+                    variant="outline"
+                    class="max-w-full px-1.5 py-0 text-[10px] font-medium"
+                    :class="leaseStatusKindClass(s.activeLease)"
+                  >
+                    <span class="min-w-0 truncate">{{ leaseStatusKindLabel(s.activeLease) }}</span>
+                    <Check v-if="copiedValueKey === `lease-kind:${s.id}`" class="ml-1 size-3 shrink-0" />
+                    <Copy v-else class="ml-1 size-3 shrink-0 opacity-0 transition-opacity group-hover/value:opacity-70" />
+                  </Badge>
+                </button>
+                <button
+                  v-if="s.activeLease"
+                  type="button"
+                  class="group/value flex min-w-0 items-center justify-end gap-1 rounded px-1.5 py-0.5 text-right text-xs text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  :class="copiedValueKey === `lease:${s.id}` ? 'bg-green-500/10 text-green-600 dark:text-green-400' : ''"
+                  @click.stop="copyValue(leaseStatusTitle(s.activeLease), `lease:${s.id}`)"
+                  :title="leaseStatusTitle(s.activeLease)"
+                >
+                  <span class="min-w-0 truncate">{{ leaseStatusDisplayName(s.activeLease) }}</span>
+                  <Check v-if="copiedValueKey === `lease:${s.id}`" class="size-3 shrink-0" />
+                  <Copy v-else class="size-3 shrink-0 opacity-0 transition-opacity group-hover/value:opacity-70" />
+                </button>
+              </div>
             </div>
           </div>
 
