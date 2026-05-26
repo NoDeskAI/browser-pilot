@@ -1,16 +1,11 @@
 import unittest
 
-from app.routes.browser import mix_needs_vision_fallback
+from app.routes.browser import mix_observe_strategy
 
 
 class ObserveModeTests(unittest.TestCase):
-    def test_mix_skips_vision_when_dom_has_elements(self) -> None:
-        self.assertFalse(mix_needs_vision_fallback({"elements": [{"tag": "button"}]}))
-
-    def test_mix_uses_vision_when_dom_is_empty_or_invalid(self) -> None:
-        self.assertTrue(mix_needs_vision_fallback({"elements": []}))
-        self.assertTrue(mix_needs_vision_fallback({}))
-        self.assertTrue(mix_needs_vision_fallback(None))
+    def test_mix_strategy_uses_visual_anchor_fusion(self) -> None:
+        self.assertEqual(mix_observe_strategy(), "vision_anchor_fusion")
 
 
 if __name__ == "__main__":

@@ -1,10 +1,14 @@
+import os
+import tempfile
 import unittest
 
 from app.tools.vision.ui_detector import (
     DEFAULT_UI_MODEL_FILENAME,
     DEFAULT_UI_MODEL_URL,
     VisionFrame,
+    apply_ax_hint_semantics,
     apply_dom_hint_semantics,
+    build_anchor_candidates,
     build_mixed_candidates,
     inference_bbox_to_click_bbox,
     is_usable_dom_element,
@@ -16,6 +20,7 @@ from app.tools.vision.ui_detector import (
     resolve_model_path,
     target_inference_size,
 )
+from app.tools.browser.ax import normalize_ax_role
 
 
 class UiDetectorFallbackTests(unittest.TestCase):
@@ -104,11 +109,9 @@ class UiDetectorFallbackTests(unittest.TestCase):
             max_candidates=10,
         )
 
-        ids = [item["id"] for item in mixed]
-        self.assertIn("dom-001", ids)
-        self.assertIn("vis-002", ids)
-        self.assertNotIn("vis-001", ids)
-        self.assertEqual(next(item for item in mixed if item["id"] == "vis-002")["kind"], "vision_supplement")
+        self.assertTrue(any(set(item.get("sources", [])) == {"dom", "vision"} for item in mixed))
+        self.assertTrue(any(item.get("family") == "visual" and item.get("sources") == ["vision"] for item in mixed))
+        self.assertTrue(all(str(item.get("id", "")).startswith("mix-") for item in mixed))
 
     def test_mix_keeps_group_as_visual_context(self) -> None:
         elements = [
@@ -140,10 +143,182 @@ class UiDetectorFallbackTests(unittest.TestCase):
             max_candidates=10,
         )
 
-        self.assertIn("group-001", [item["id"] for item in mixed])
-        group = next(item for item in mixed if item["id"] == "group-001")
-        self.assertEqual(group["kind"], "vision_supplement_group")
-        self.assertEqual(group["supplementReason"], "visual_group")
+        self.assertTrue(any(item.get("family") == "video_card" for item in mixed))
+        group = next(item for item in mixed if item.get("family") == "video_card")
+        self.assertEqual(set(group["sources"]), {"dom", "vision_group"})
+
+    def test_anchor_mode_keeps_visual_bbox_and_uses_dom_label(self) -> None:
+        elements = [
+            {
+                "tag": "a",
+                "text": "Best Cats",
+                "attrs": {"href": "/watch"},
+                "x": 430,
+                "y": 318,
+                "bbox": {"x": 360, "y": 300, "w": 140, "h": 36},
+            }
+        ]
+        vision_groups = [
+            {
+                "id": "group-001",
+                "bbox": {"x": 220, "y": 180, "w": 520, "h": 270},
+                "center": {"x": 480, "y": 315},
+                "score": 0.71,
+                "mixScore": 0.83,
+                "family": "video_card",
+                "label": "video_card",
+            }
+        ]
+
+        anchored = build_anchor_candidates(
+            elements=elements,
+            vision_candidates=[],
+            vision_groups=vision_groups,
+            ax_candidates=[],
+            max_candidates=10,
+        )
+
+        self.assertTrue(all(str(item.get("id", "")).startswith("anchor-") for item in anchored))
+        self.assertEqual(anchored[0]["bbox"], vision_groups[0]["bbox"])
+        self.assertEqual(anchored[0]["label"], "Best Cats")
+        self.assertEqual(set(anchored[0]["sources"]), {"dom", "vision_group"})
+
+    def test_anchor_mode_preserves_visual_atoms_inside_large_groups(self) -> None:
+        vision_groups = [
+            {
+                "id": "group-001",
+                "bbox": {"x": 100, "y": 100, "w": 500, "h": 320},
+                "center": {"x": 350, "y": 260},
+                "score": 0.82,
+                "mixScore": 0.9,
+                "family": "video_card",
+                "label": "video_card",
+            }
+        ]
+        vision_candidates = [
+            {
+                "id": "vis-button",
+                "bbox": {"x": 430, "y": 365, "w": 92, "h": 36},
+                "center": {"x": 476, "y": 383},
+                "score": 0.74,
+                "family": "button",
+                "label": "button",
+                "source": "yolov8_ui",
+            },
+            {
+                "id": "vis-text",
+                "bbox": {"x": 130, "y": 420, "w": 240, "h": 32},
+                "center": {"x": 250, "y": 436},
+                "score": 0.58,
+                "family": "text",
+                "label": "text",
+                "source": "yolov8_ui",
+            },
+            {
+                "id": "vis-image",
+                "bbox": {"x": 135, "y": 135, "w": 210, "h": 150},
+                "center": {"x": 240, "y": 210},
+                "score": 0.69,
+                "family": "visual",
+                "label": "visual",
+                "source": "yolov8_ui",
+            },
+        ]
+
+        anchored = build_anchor_candidates(
+            elements=[],
+            vision_candidates=vision_candidates,
+            vision_groups=vision_groups,
+            ax_candidates=[],
+            max_candidates=10,
+        )
+
+        families = [item.get("family") for item in anchored]
+        self.assertIn("video_card", families)
+        self.assertIn("button", families)
+        self.assertIn("text", families)
+        self.assertIn("visual", families)
+        button = next(item for item in anchored if item.get("family") == "button")
+        self.assertEqual(button["bbox"], vision_candidates[0]["bbox"])
+
+    def test_ax_roles_normalize_to_candidate_families(self) -> None:
+        self.assertEqual(normalize_ax_role("button"), "button")
+        self.assertEqual(normalize_ax_role("searchbox"), "input")
+        self.assertEqual(normalize_ax_role("menuitem"), "menu_item")
+        self.assertEqual(normalize_ax_role("switch"), "control")
+        self.assertEqual(normalize_ax_role("staticText"), "text")
+
+    def test_ax_hint_can_promote_unknown_vision_candidate(self) -> None:
+        candidate = {
+            "id": "vis-001",
+            "bbox": {"x": 100, "y": 100, "w": 96, "h": 36},
+            "center": {"x": 148, "y": 118},
+            "score": 0.4,
+            "family": "unknown",
+            "label": "unknown",
+            "semanticSource": "model_unknown",
+        }
+        hint = {
+            "label": "Search",
+            "family": "button",
+            "role": "button",
+            "bbox": {"x": 100, "y": 100, "w": 96, "h": 36},
+        }
+
+        apply_ax_hint_semantics(candidate, hint)
+
+        self.assertEqual(candidate["family"], "button")
+        self.assertEqual(candidate["label"], "button")
+        self.assertEqual(candidate["textHint"], "Search")
+        self.assertEqual(candidate["semanticSource"], "ax_hint")
+
+    def test_fusion_scores_dom_ax_consensus_ahead_of_single_vision_unknown(self) -> None:
+        elements = [
+            {
+                "tag": "button",
+                "text": "Search",
+                "attrs": {},
+                "x": 145,
+                "y": 118,
+                "bbox": {"x": 100, "y": 100, "w": 90, "h": 36},
+            }
+        ]
+        ax_candidates = [
+            {
+                "id": "ax-001",
+                "bbox": {"x": 101, "y": 101, "w": 88, "h": 34},
+                "center": {"x": 145, "y": 118},
+                "score": 0.94,
+                "family": "button",
+                "label": "Search",
+                "source": "ax_tree",
+                "role": "button",
+                "axHint": {"role": "button", "name": "Search"},
+            }
+        ]
+        vision_candidates = [
+            {
+                "id": "vis-001",
+                "bbox": {"x": 400, "y": 100, "w": 80, "h": 30},
+                "center": {"x": 440, "y": 115},
+                "score": 0.6,
+                "family": "unknown",
+                "label": "unknown",
+                "source": "yolov8_ui",
+            }
+        ]
+
+        mixed = build_mixed_candidates(
+            elements=elements,
+            ax_candidates=ax_candidates,
+            vision_candidates=vision_candidates,
+            vision_groups=[],
+            max_candidates=10,
+        )
+
+        self.assertEqual(mixed[0]["family"], "button")
+        self.assertEqual(set(mixed[0]["sources"]), {"dom", "ax_tree"})
+        self.assertGreater(mixed[0]["score"], mixed[-1]["score"])
 
     def test_degenerate_dom_bbox_is_not_usable(self) -> None:
         base = {
@@ -232,6 +407,28 @@ class UiDetectorFallbackTests(unittest.TestCase):
         self.assertIn(DEFAULT_UI_MODEL_URL, message)
         self.assertIn(DEFAULT_UI_MODEL_FILENAME, message)
         self.assertIn("BP_UI_DETECTOR_MODEL", message)
+
+
+    def test_resolve_model_path_uses_project_root_models(self) -> None:
+        old_project_root = os.environ.get("PROJECT_ROOT")
+        old_model = os.environ.pop("BP_UI_DETECTOR_MODEL", None)
+        try:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                model_dir = os.path.join(tmpdir, "models")
+                os.makedirs(model_dir)
+                model_path = os.path.join(model_dir, DEFAULT_UI_MODEL_FILENAME)
+                with open(model_path, "wb") as handle:
+                    handle.write(b"fake model")
+                os.environ["PROJECT_ROOT"] = tmpdir
+
+                self.assertEqual(str(resolve_model_path()), model_path)
+        finally:
+            if old_project_root is None:
+                os.environ.pop("PROJECT_ROOT", None)
+            else:
+                os.environ["PROJECT_ROOT"] = old_project_root
+            if old_model is not None:
+                os.environ["BP_UI_DETECTOR_MODEL"] = old_model
 
     def test_resolve_model_path_raises_download_hint_for_bad_env_path(self) -> None:
         import os

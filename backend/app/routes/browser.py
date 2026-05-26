@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
+import time
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
@@ -21,7 +22,13 @@ from app.tools.browser.session import (
     quick_observe,
     wd_fetch,
 )
-from app.tools.vision.ui_detector import attach_dom_hints, build_mixed_candidates, ui_detector
+from app.tools.browser.ax import collect_ax_candidates
+from app.tools.vision.ui_detector import (
+    attach_ax_hints,
+    attach_dom_hints,
+    build_mixed_candidates,
+    ui_detector,
+)
 
 logger = logging.getLogger("routes.browser")
 
@@ -96,10 +103,8 @@ class SwitchTabBody(BaseModel):
     closeCurrent: bool = False
 
 
-def mix_needs_vision_fallback(result: object) -> bool:
-    if not isinstance(result, dict):
-        return True
-    return not bool(result.get("elements"))
+def mix_observe_strategy() -> str:
+    return "vision_anchor_fusion"
 
 
 # ---------------------------------------------------------------------------
@@ -191,6 +196,9 @@ async def api_observe(body: SessionBody, user: CurrentUser = Depends(get_session
             screenshot_base64 = None
             viewport_metrics = None
             vision_result = None
+            ax_candidates = []
+            ax_error = None
+            mix_strategy = mix_observe_strategy()
 
             if mode in {"dom", "mix"}:
                 result = await wd_fetch(
@@ -199,10 +207,18 @@ async def api_observe(body: SessionBody, user: CurrentUser = Depends(get_session
                     base_url=base,
                 )
 
-            needs_vision = mode == "vision"
             if mode == "mix":
-                needs_vision = mix_needs_vision_fallback(result)
+                try:
+                    ax_candidates = await collect_ax_candidates(
+                        sid,
+                        base_url=base,
+                        max_candidates=body.maxCandidates,
+                    )
+                except Exception as exc:
+                    ax_error = str(exc)
+                    ax_candidates = []
 
+            needs_vision = mode in {"vision", "mix"}
             if needs_vision or body.includeScreenshot:
                 screenshot_base64 = await wd_fetch(f"/session/{sid}/screenshot", base_url=base)
                 viewport_metrics = await wd_fetch(
@@ -238,69 +254,65 @@ async def api_observe(body: SessionBody, user: CurrentUser = Depends(get_session
 
             if mode == "mix":
                 elements = (result or {}).get("elements", []) if isinstance(result, dict) else []
-                if needs_vision:
-                    vision_result = await asyncio.to_thread(
-                        ui_detector.detect_base64,
-                        screenshot_base64,
-                        max_candidates=body.maxCandidates,
-                        threshold=body.threshold,
-                        include_annotated=body.includeAnnotatedScreenshot,
-                        click_viewport=viewport_metrics,
-                    )
-                    vision_candidates = attach_dom_hints(vision_result.candidates, elements)
-                    mixed_candidates = build_mixed_candidates(
-                        elements=elements,
-                        vision_candidates=vision_candidates,
-                        vision_groups=vision_result.groups,
-                        max_candidates=body.maxCandidates,
-                    )
-                    result = {
-                        **(result if isinstance(result, dict) else {}),
-                        "mode": mode,
-                        "viewport": vision_result.viewport,
-                        "visionCandidates": vision_candidates,
-                        "visionGroups": vision_result.groups,
-                        "visionFrame": vision_result.vision_frame,
-                        "mixedCandidates": mixed_candidates,
-                        "trace": {
-                            **vision_result.trace,
-                            "mixed_count": len(mixed_candidates),
-                            "mixed_vision_supplement_count": len(
-                                [
-                                    item
-                                    for item in mixed_candidates
-                                    if str(item.get("kind", "")).startswith("vision_supplement")
-                                ]
-                            ),
-                            "mix_strategy": "dom_then_vision_fallback",
-                            "vision_fallback_used": True,
-                            "dom_element_count": len(elements),
-                        },
-                    }
-                    if vision_result.annotated_screenshot:
-                        result["annotatedScreenshot"] = vision_result.annotated_screenshot
-                else:
-                    mixed_candidates = build_mixed_candidates(
-                        elements=elements,
-                        vision_candidates=[],
-                        vision_groups=[],
-                        max_candidates=body.maxCandidates,
-                    )
-                    result = {
-                        **(result if isinstance(result, dict) else {}),
-                        "mode": mode,
-                        "visionCandidates": [],
-                        "visionGroups": [],
-                        "mixedCandidates": mixed_candidates,
-                        "trace": {
-                            "mix_strategy": "dom_then_vision_fallback",
-                            "vision_fallback_used": False,
-                            "vision_skipped_reason": "dom_observe_succeeded",
-                            "dom_element_count": len(elements),
-                            "mixed_count": len(mixed_candidates),
-                            "mixed_vision_supplement_count": 0,
-                        },
-                    }
+                vision_result = await asyncio.to_thread(
+                    ui_detector.detect_base64,
+                    screenshot_base64,
+                    max_candidates=body.maxCandidates,
+                    threshold=body.threshold,
+                    include_annotated=body.includeAnnotatedScreenshot,
+                    click_viewport=viewport_metrics,
+                )
+                vision_candidates = attach_ax_hints(
+                    attach_dom_hints(vision_result.candidates, elements),
+                    ax_candidates,
+                )
+                fusion_started = time.perf_counter()
+                fusion_trace = {}
+                mixed_candidates = build_mixed_candidates(
+                    elements=elements,
+                    vision_candidates=vision_candidates,
+                    vision_groups=vision_result.groups,
+                    ax_candidates=ax_candidates,
+                    max_candidates=body.maxCandidates,
+                    fusion_trace=fusion_trace,
+                )
+                fusion_ms = round((time.perf_counter() - fusion_started) * 1000, 2)
+                result = {
+                    **(result if isinstance(result, dict) else {}),
+                    "mode": mode,
+                    "viewport": vision_result.viewport,
+                    "axCandidates": ax_candidates,
+                    "visionCandidates": vision_candidates,
+                    "visionGroups": vision_result.groups,
+                    "visionFrame": vision_result.vision_frame,
+                    "mixedCandidates": mixed_candidates,
+                    "trace": {
+                        **vision_result.trace,
+                        "dom_count": len(elements),
+                        "ax_count": len(ax_candidates),
+                        "vision_count": len(vision_candidates),
+                        "vision_group_count": len(vision_result.groups),
+                        "fusion_cluster_count": fusion_trace.get("fusion_cluster_count", len(mixed_candidates)),
+                        "fusion_input_count": fusion_trace.get("fusion_input_count", 0),
+                        "fusion_ms": fusion_ms,
+                        "mixed_count": len(mixed_candidates),
+                        "mixed_vision_supplement_count": len(
+                            [
+                                item
+                                for item in mixed_candidates
+                                if "vision" in set(item.get("sources") or [])
+                                or "vision_group" in set(item.get("sources") or [])
+                            ]
+                        ),
+                        "mix_strategy": mix_strategy,
+                        "vision_used": True,
+                        "vision_fallback_used": False,
+                        "dom_element_count": len(elements),
+                        **({"ax_error": ax_error} if ax_error else {}),
+                    },
+                }
+                if vision_result.annotated_screenshot:
+                    result["annotatedScreenshot"] = vision_result.annotated_screenshot
 
             if mode == "dom" and isinstance(result, dict):
                 result["mode"] = mode

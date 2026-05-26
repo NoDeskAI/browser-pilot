@@ -26,6 +26,9 @@ import {
   Tooltip, TooltipContent, TooltipProvider, TooltipTrigger,
 } from '@/components/ui/tooltip'
 import { Toggle } from '@/components/ui/toggle'
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle,
+} from '@/components/ui/dialog'
 import TruncatedTooltipValue from '@/components/TruncatedTooltipValue.vue'
 
 const { t } = useI18n()
@@ -94,6 +97,8 @@ const observePanelOpen = ref(false)
 const observeLoading = ref(false)
 const observeError = ref('')
 const observeResult = ref<Record<string, any> | null>(null)
+const annotatedScreenshotOpen = ref(false)
+const annotatedScreenshotFit = ref(true)
 
 const observeModes: ObserveMode[] = ['dom', 'vision', 'mix']
 
@@ -107,6 +112,7 @@ const fpProfile = computed(() => currentSession.value?.fingerprintProfile || nul
 const desktopPresets = computed(() => sessState.devicePresets.filter(p => p.category === 'desktop'))
 const mobilePresets = computed(() => sessState.devicePresets.filter(p => p.category === 'mobile'))
 const domElements = computed(() => observeResult.value?.elements || [])
+const axCandidates = computed(() => observeResult.value?.axCandidates || [])
 const visionCandidates = computed(() => observeResult.value?.visionCandidates || [])
 const visionGroups = computed(() => observeResult.value?.visionGroups || [])
 const mixedCandidates = computed(() => observeResult.value?.mixedCandidates || [])
@@ -147,10 +153,19 @@ const semanticSourceStats = computed(() => {
 })
 const observeSummary = computed(() => [
   { key: 'dom', label: 'DOM', value: domElements.value.length },
+  { key: 'ax', label: 'AX', value: axCandidates.value.length },
   { key: 'vision', label: 'Vision', value: visionCandidates.value.length },
   { key: 'groups', label: 'Groups', value: visionGroups.value.length },
   { key: 'mix', label: 'Mixed', value: mixedCandidates.value.length },
 ].filter(item => item.value > 0 || observeMode.value === item.key))
+const fusionStats = computed(() => {
+  const trace = observeTrace.value || {}
+  return [
+    { label: 'strategy', value: trace.mix_strategy },
+    { label: 'clusters', value: trace.fusion_cluster_count },
+    { label: 'fusion ms', value: trace.fusion_ms },
+  ].filter(item => item.value !== undefined && item.value !== null && item.value !== '')
+})
 
 const totalRecv = ref(0)
 const totalSent = ref(0)
@@ -641,16 +656,19 @@ async function runObserve() {
 }
 
 function candidateTitle(candidate: any): string {
-  const text = candidate?.textHint || candidate?.text || candidate?.domHint?.text || candidate?.attrs?.ariaLabel || candidate?.attrs?.placeholder
+  const text = candidate?.textHint || candidate?.text || candidate?.domHint?.text || candidate?.axHint?.name || candidate?.attrs?.ariaLabel || candidate?.attrs?.placeholder
   if (text) return String(text).slice(0, 80)
   return candidate?.label || candidate?.family || candidate?.tag || candidate?.source || 'candidate'
 }
 
 function candidateSubtitle(candidate: any): string {
   const parts = [
+    candidate?.sourceSummary,
+    Array.isArray(candidate?.sources) ? candidate.sources.join('+') : '',
     candidate?.tag,
     candidate?.family,
     candidate?.label,
+    candidate?.role,
     candidate?.rawLabel,
     candidate?.geometryHint ? `hint:${candidate.geometryHint}` : '',
     candidate?.semanticSource,
@@ -702,6 +720,10 @@ watch(qualityLevel, applyQuality)
 
 watch(inputBarOpen, (open) => {
   if (open) nextTick(() => inputRef.value?.focus())
+})
+
+watch(annotatedScreenshotOpen, (open) => {
+  if (open) annotatedScreenshotFit.value = true
 })
 </script>
 
@@ -1248,11 +1270,22 @@ watch(inputBarOpen, (open) => {
                 <h4 class="font-medium">{{ t('vnc.annotatedScreenshot') }}</h4>
                 <span v-if="unknownRatio" class="text-[11px] text-muted-foreground">{{ t('vnc.unknownRatio') }} {{ unknownRatio }}</span>
               </div>
-              <img
-                :src="annotatedScreenshot"
-                class="max-h-72 w-full rounded-md border border-border object-contain bg-black"
-                :alt="t('vnc.annotatedScreenshot')"
-              />
+              <button
+                type="button"
+                class="group relative block w-full overflow-hidden rounded-md border border-border bg-black text-left outline-none transition hover:border-cyan-400/70 focus-visible:ring-2 focus-visible:ring-cyan-400"
+                :aria-label="t('vnc.openAnnotatedScreenshot')"
+                @click="annotatedScreenshotOpen = true"
+              >
+                <img
+                  :src="annotatedScreenshot"
+                  class="max-h-72 w-full object-contain"
+                  :alt="t('vnc.annotatedScreenshot')"
+                />
+                <span class="absolute right-2 top-2 inline-flex items-center gap-1 rounded-md bg-black/70 px-2 py-1 text-[11px] text-white opacity-0 shadow transition group-hover:opacity-100 group-focus-visible:opacity-100">
+                  <Maximize class="size-3" />
+                  {{ t('vnc.openAnnotatedScreenshot') }}
+                </span>
+              </button>
               <div v-if="semanticSourceStats.length" class="mt-2 flex flex-wrap gap-1.5">
                 <Badge
                   v-for="stat in semanticSourceStats"
@@ -1292,6 +1325,33 @@ watch(inputBarOpen, (open) => {
               </div>
             </section>
 
+            <section v-if="axCandidates.length">
+              <div class="mb-2 flex items-center justify-between">
+                <h4 class="font-medium">{{ t('vnc.axCandidates') }}</h4>
+                <span class="text-[11px] text-muted-foreground">{{ t('vnc.sortedByScore') }}</span>
+              </div>
+              <div class="space-y-1.5">
+                <div
+                  v-for="candidate in axCandidates.slice(0, 12)"
+                  :key="candidate.id || `${candidate.role}-${formatBox(candidate)}`"
+                  class="rounded-md border border-amber-500/30 bg-amber-500/10 p-2"
+                >
+                  <div class="flex items-start justify-between gap-2">
+                    <div class="min-w-0">
+                      <div class="truncate font-medium">{{ candidateTitle(candidate) }}</div>
+                      <div class="mt-0.5 truncate text-[11px] text-muted-foreground">{{ candidateSubtitle(candidate) }}</div>
+                    </div>
+                    <Badge v-if="formatScore(candidate.score)" variant="outline" class="text-[10px]">{{ formatScore(candidate.score) }}</Badge>
+                  </div>
+                  <div class="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+                    <span v-if="formatPoint(candidate)">center {{ formatPoint(candidate) }}</span>
+                    <span v-if="formatBox(candidate)">bbox {{ formatBox(candidate) }}</span>
+                    <span v-if="candidate.axHint?.role">role {{ candidate.axHint.role }}</span>
+                  </div>
+                </div>
+              </div>
+            </section>
+
             <section v-if="visionCandidates.length">
               <div class="mb-2 flex items-center justify-between">
                 <h4 class="font-medium">{{ t('vnc.visionCandidates') }}</h4>
@@ -1321,24 +1381,39 @@ watch(inputBarOpen, (open) => {
             </section>
 
             <section v-if="mixedCandidates.length">
-              <h4 class="mb-2 font-medium">{{ t('vnc.mixedCandidates') }}</h4>
+              <div class="mb-2 flex items-center justify-between gap-2">
+                <h4 class="font-medium">{{ t('vnc.mixedCandidates') }}</h4>
+                <div v-if="fusionStats.length" class="flex flex-wrap justify-end gap-1">
+                  <Badge
+                    v-for="stat in fusionStats"
+                    :key="stat.label"
+                    variant="outline"
+                    class="text-[10px]"
+                  >
+                    {{ stat.label }} {{ stat.value }}
+                  </Badge>
+                </div>
+              </div>
               <div class="space-y-1.5">
                 <div
                   v-for="candidate in mixedCandidates.slice(0, 12)"
                   :key="candidate.id || `${candidate.kind || candidate.source}-${candidateTitle(candidate)}-${formatPoint(candidate)}`"
-                  class="rounded-md border border-border bg-muted/20 p-2"
+                  class="rounded-md border border-emerald-500/30 bg-emerald-500/10 p-2"
                 >
                   <div class="flex items-start justify-between gap-2">
                     <div class="min-w-0">
                       <div class="truncate font-medium">{{ candidateTitle(candidate) }}</div>
                       <div class="mt-0.5 truncate text-[11px] text-muted-foreground">{{ candidateSubtitle(candidate) }}</div>
                     </div>
-                    <Badge variant="outline" class="text-[10px]">{{ candidate.kind || candidate.source || candidate.tag || 'item' }}</Badge>
+                    <Badge variant="outline" class="text-[10px]">{{ candidate.sourceSummary || candidate.kind || candidate.source || candidate.tag || 'item' }}</Badge>
                   </div>
                   <div class="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
                     <span v-if="formatPoint(candidate)">center {{ formatPoint(candidate) }}</span>
                     <span v-if="formatBox(candidate)">bbox {{ formatBox(candidate) }}</span>
                     <span v-if="candidate.textHint">{{ candidate.textHint }}</span>
+                    <span v-if="candidate.axHint">AX hint</span>
+                    <span v-if="candidate.domHint">DOM hint</span>
+                    <span v-if="candidate.visionHint">Vision hint</span>
                   </div>
                 </div>
               </div>
@@ -1375,6 +1450,40 @@ watch(inputBarOpen, (open) => {
           </div>
         </div>
       </aside>
+
+      <Dialog v-model:open="annotatedScreenshotOpen">
+        <DialogContent
+          class="flex h-[94dvh] w-[96vw] max-w-[96vw] grid-rows-[auto_minmax(0,1fr)] flex-col gap-3 overflow-hidden p-3 sm:max-w-[96vw]"
+        >
+          <DialogHeader class="flex-row items-center justify-between gap-3 pr-9">
+            <DialogTitle class="flex items-center gap-2 text-sm">
+              <ScanSearch class="size-4 text-cyan-400" />
+              {{ t('vnc.annotatedScreenshotPreview') }}
+            </DialogTitle>
+            <Button
+              variant="outline"
+              size="sm"
+              class="h-7 shrink-0 text-xs"
+              @click="annotatedScreenshotFit = !annotatedScreenshotFit"
+            >
+              <Maximize v-if="annotatedScreenshotFit" class="size-3.5" />
+              <Minimize v-else class="size-3.5" />
+              {{ annotatedScreenshotFit ? t('vnc.annotatedScreenshotOriginal') : t('vnc.annotatedScreenshotFit') }}
+            </Button>
+          </DialogHeader>
+          <div
+            class="min-h-0 flex-1 overflow-auto rounded-md border border-border bg-black p-2"
+            :class="annotatedScreenshotFit ? 'flex items-center justify-center' : ''"
+          >
+            <img
+              v-if="annotatedScreenshot"
+              :src="annotatedScreenshot"
+              :class="annotatedScreenshotFit ? 'max-h-full max-w-full object-contain' : 'mx-auto max-w-none'"
+              :alt="t('vnc.annotatedScreenshotPreview')"
+            />
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
 
     <!-- Bottom input bar -->
