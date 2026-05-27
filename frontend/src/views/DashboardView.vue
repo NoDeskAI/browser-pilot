@@ -133,24 +133,6 @@ function leaseStatusKindClass(lease: ActiveSessionLease | null | undefined): str
   return lease ? leaseOperatorKindClass(lease) : 'border-border bg-muted/50 text-muted-foreground'
 }
 
-function leaseStatusKindHoverClass(lease: ActiveSessionLease | null | undefined): string {
-  if (!lease) return 'hover:bg-muted/50'
-  const kind = leaseOperatorKind(lease)
-  if (kind === 'user') return 'hover:bg-emerald-500/10'
-  if (kind === 'agent') return 'hover:bg-sky-500/10'
-  if (kind === 'system') return 'hover:bg-violet-500/10'
-  return 'hover:bg-muted/50'
-}
-
-function leaseStatusKindOverlayClass(lease: ActiveSessionLease | null | undefined): string {
-  if (!lease) return 'bg-muted text-muted-foreground'
-  const kind = leaseOperatorKind(lease)
-  if (kind === 'user') return 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300'
-  if (kind === 'agent') return 'bg-sky-50 text-sky-700 dark:bg-sky-950 dark:text-sky-300'
-  if (kind === 'system') return 'bg-violet-50 text-violet-700 dark:bg-violet-950 dark:text-violet-300'
-  return 'bg-muted text-muted-foreground'
-}
-
 const valueTextEls = new Map<string, HTMLElement>()
 const valueResizeObservers = new Map<string, ResizeObserver>()
 const truncatedValueKeys = ref<Record<string, boolean>>({})
@@ -616,41 +598,13 @@ async function onPauseContainer(id: string) {
                 <span class="text-[11px] whitespace-nowrap">{{ t('sessionLease.operatorLabel') }}</span>
               </div>
               <div class="ml-auto flex min-w-0 max-w-[calc(100%-80px)] items-center justify-end gap-1.5">
-                <Tooltip :disabled="!hasValueTooltip(`lease-kind:${s.id}`, leaseStatusKindLabel(s.activeLease))">
-                  <TooltipTrigger as-child>
-                    <button
-                      type="button"
-                      class="group/value relative shrink-0 rounded transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                      :class="leaseStatusKindHoverClass(s.activeLease)"
-                      @click.stop="copyValue(leaseStatusKindLabel(s.activeLease), `lease-kind:${s.id}`)"
-                      @mouseenter="updateValueTruncation(`lease-kind:${s.id}`)"
-                      @focus="updateValueTruncation(`lease-kind:${s.id}`)"
-                    >
-                      <Badge
-                        variant="outline"
-                        class="px-1.5 py-0 text-[10px] font-medium"
-                        :class="leaseStatusKindClass(s.activeLease)"
-                      >
-                        <span :ref="(el) => setValueTextRef(`lease-kind:${s.id}`, el)">{{ leaseStatusKindLabel(s.activeLease) }}</span>
-                      </Badge>
-                      <span
-                        v-if="copiedValueKey === `lease-kind:${s.id}`"
-                        class="pointer-events-none absolute right-0.5 top-1/2 z-10 inline-flex size-3.5 -translate-y-1/2 items-center justify-center rounded-[3px]"
-                        :class="leaseStatusKindOverlayClass(s.activeLease)"
-                      >
-                        <Check class="size-2.5" />
-                      </span>
-                      <span
-                        v-else
-                        class="pointer-events-none absolute right-0.5 top-1/2 z-10 inline-flex size-3.5 -translate-y-1/2 items-center justify-center rounded-[3px] opacity-0 transition-opacity group-hover/value:opacity-100 group-focus-visible/value:opacity-100"
-                        :class="leaseStatusKindOverlayClass(s.activeLease)"
-                      >
-                        <Copy class="size-2.5" />
-                      </span>
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent>{{ leaseStatusKindLabel(s.activeLease) }}</TooltipContent>
-                </Tooltip>
+                <Badge
+                  variant="outline"
+                  class="shrink-0 px-1.5 py-0 text-[10px] font-medium"
+                  :class="leaseStatusKindClass(s.activeLease)"
+                >
+                  {{ leaseStatusKindLabel(s.activeLease) }}
+                </Badge>
                 <Tooltip v-if="s.activeLease" :disabled="!hasValueTooltip(`lease:${s.id}`, leaseStatusDisplayName(s.activeLease), leaseStatusTitle(s.activeLease))">
                   <TooltipTrigger as-child>
                     <button
