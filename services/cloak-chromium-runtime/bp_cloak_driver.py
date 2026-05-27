@@ -22,6 +22,34 @@ class DriverState:
         self.page = None
         self.cdp = None
         self.started = False
+        self.handles = {}
+        self.timeouts = {"script": 30000, "pageLoad": 60000, "implicit": 0}
+
+    def reset_page_state(self) -> None:
+        self.page = None
+        self.cdp = None
+        self.handles = {}
+
+    def handle_for_page(self, page) -> str:
+        for handle, known_page in self.handles.items():
+            if known_page is page:
+                return handle
+        handle = f"page-{len(self.handles)}"
+        self.handles[handle] = page
+        return handle
+
+    def open_pages(self) -> list[tuple[str, Any]]:
+        if not self.context:
+            return []
+        for page in self.context.pages:
+            if not page.is_closed():
+                self.handle_for_page(page)
+        return [(handle, page) for handle, page in self.handles.items() if not page.is_closed()]
+
+    def remember_new_page(self, page) -> None:
+        self.handle_for_page(page)
+        self.page = page
+        self.cdp = None
 
     async def ensure_started(self):
         async with self.lock:
@@ -56,8 +84,10 @@ class DriverState:
                 viewport={"width": width, "height": height},
                 args=args,
             )
+            self.context.on("page", self.remember_new_page)
             pages = self.context.pages
             self.page = pages[0] if pages else await self.context.new_page()
+            self.handle_for_page(self.page)
             self.cdp = await self.context.new_cdp_session(self.page)
             self.started = True
             return self.page
@@ -77,16 +107,20 @@ class DriverState:
 
     async def set_active_by_handle(self, handle: str) -> None:
         await self.ensure_started()
-        pages = self.context.pages
-        if not handle.startswith("page-"):
+        pages = dict(self.open_pages())
+        page = pages.get(handle)
+        if page is None and handle.startswith("page-"):
+            try:
+                idx = int(handle.split("-", 1)[1])
+            except (IndexError, ValueError) as exc:
+                raise webdriver_bad_request("no such window", "Unknown window handle") from exc
+            open_pages = [page for _, page in self.open_pages()]
+            page = open_pages[idx] if 0 <= idx < len(open_pages) else None
+        if page is None:
             raise webdriver_bad_request("no such window", "Unknown window handle")
-        try:
-            idx = int(handle.split("-", 1)[1])
-        except (IndexError, ValueError) as exc:
-            raise webdriver_bad_request("no such window", "Unknown window handle") from exc
-        if idx < 0 or idx >= len(pages) or pages[idx].is_closed():
+        if page.is_closed():
             raise webdriver_bad_request("no such window", "Window handle not found")
-        self.page = pages[idx]
+        self.page = page
         self.cdp = await self.context.new_cdp_session(self.page)
         await self.page.bring_to_front()
 
@@ -126,15 +160,25 @@ async def status(_request: web.Request) -> web.Response:
 
 async def create_session(_request: web.Request) -> web.Response:
     await state.ensure_started()
-    return ok({"sessionId": SESSION_ID, "capabilities": {"browserName": "chrome", "browserVersion": "cloak"}})
+    return ok(
+        {
+            "sessionId": SESSION_ID,
+            "capabilities": {
+                "browserName": "chrome",
+                "browserVersion": "cloak",
+                "platformName": "linux",
+                "acceptInsecureCerts": True,
+                "setWindowRect": True,
+            },
+        }
+    )
 
 
 async def delete_session(_request: web.Request) -> web.Response:
     if state.context:
         await state.context.close()
     state.context = None
-    state.page = None
-    state.cdp = None
+    state.reset_page_state()
     state.started = False
     return ok(None)
 
@@ -151,9 +195,75 @@ async def set_url(request: web.Request) -> web.Response:
     return ok(None)
 
 
+async def refresh_page(_request: web.Request) -> web.Response:
+    page = await state.active_page()
+    await page.reload(wait_until="domcontentloaded", timeout=state.timeouts.get("pageLoad", 60000))
+    return ok(None)
+
+
+async def back_page(_request: web.Request) -> web.Response:
+    page = await state.active_page()
+    await page.go_back(wait_until="domcontentloaded", timeout=state.timeouts.get("pageLoad", 60000))
+    return ok(None)
+
+
+async def forward_page(_request: web.Request) -> web.Response:
+    page = await state.active_page()
+    await page.go_forward(wait_until="domcontentloaded", timeout=state.timeouts.get("pageLoad", 60000))
+    return ok(None)
+
+
 async def get_title(_request: web.Request) -> web.Response:
     page = await state.active_page()
     return ok(await page.title())
+
+
+async def get_source(_request: web.Request) -> web.Response:
+    page = await state.active_page()
+    return ok(await page.content())
+
+
+async def get_timeouts(_request: web.Request) -> web.Response:
+    return ok(dict(state.timeouts))
+
+
+async def set_timeouts(request: web.Request) -> web.Response:
+    body = await request.json()
+    for key in ("script", "pageLoad", "implicit"):
+        if key in body and body[key] is not None:
+            state.timeouts[key] = int(body[key])
+    return ok(None)
+
+
+async def get_cookies(_request: web.Request) -> web.Response:
+    await state.ensure_started()
+    return ok(await state.context.cookies())
+
+
+async def add_cookie(request: web.Request) -> web.Response:
+    body = await request.json()
+    cookie = body.get("cookie") if isinstance(body, dict) else None
+    if not isinstance(cookie, dict):
+        return error("invalid argument", "Missing cookie", 400)
+    await state.ensure_started()
+    await state.context.add_cookies([cookie])
+    return ok(None)
+
+
+async def delete_all_cookies(_request: web.Request) -> web.Response:
+    await state.ensure_started()
+    await state.context.clear_cookies()
+    return ok(None)
+
+
+async def delete_cookie(request: web.Request) -> web.Response:
+    name = request.match_info.get("name", "")
+    await state.ensure_started()
+    cookies = [cookie for cookie in await state.context.cookies() if cookie.get("name") != name]
+    await state.context.clear_cookies()
+    if cookies:
+        await state.context.add_cookies(cookies)
+    return ok(None)
 
 
 async def execute_sync(request: web.Request) -> web.Response:
@@ -236,17 +346,19 @@ async def cdp_execute(request: web.Request) -> web.Response:
 
 async def window_handles(_request: web.Request) -> web.Response:
     await state.ensure_started()
-    return ok([f"page-{i}" for i, page in enumerate(state.context.pages) if not page.is_closed()])
+    return ok([handle for handle, _ in state.open_pages()])
 
 
 async def get_window(_request: web.Request) -> web.Response:
     await state.ensure_started()
-    pages = state.context.pages
-    try:
-        idx = pages.index(state.page)
-    except ValueError:
-        idx = 0
-    return ok(f"page-{idx}")
+    if state.page and not state.page.is_closed():
+        return ok(state.handle_for_page(state.page))
+    open_pages = state.open_pages()
+    if not open_pages:
+        state.page = await state.context.new_page()
+        return ok(state.handle_for_page(state.page))
+    state.page = open_pages[0][1]
+    return ok(open_pages[0][0])
 
 
 async def set_window(request: web.Request) -> web.Response:
@@ -258,20 +370,33 @@ async def set_window(request: web.Request) -> web.Response:
 async def close_window(_request: web.Request) -> web.Response:
     page = await state.active_page()
     await page.close()
-    pages = [page for page in state.context.pages if not page.is_closed()]
-    if pages:
-        state.page = pages[0]
+    open_pages = state.open_pages()
+    if open_pages:
+        state.page = open_pages[0][1]
     else:
         state.page = await state.context.new_page()
-        pages = [state.page]
+        state.handle_for_page(state.page)
     state.cdp = await state.context.new_cdp_session(state.page)
-    return ok([f"page-{i}" for i, page in enumerate(state.context.pages) if not page.is_closed()])
+    return ok([handle for handle, _ in state.open_pages()])
 
 
 async def current_window_rect(_request: web.Request) -> web.Response:
     width = int(os.getenv("SE_SCREEN_WIDTH", "1280") or "1280")
     height = int(os.getenv("SE_SCREEN_HEIGHT", "800") or "800")
+    page = await state.active_page()
+    viewport = page.viewport_size or {}
+    width = int(viewport.get("width") or width)
+    height = int(viewport.get("height") or height)
     return ok({"x": 0, "y": 0, "width": width, "height": height})
+
+
+async def set_window_rect(request: web.Request) -> web.Response:
+    body = await request.json()
+    page = await state.active_page()
+    width = int(body.get("width") or os.getenv("SE_SCREEN_WIDTH", "1280") or "1280")
+    height = int(body.get("height") or os.getenv("SE_SCREEN_HEIGHT", "800") or "800")
+    await page.set_viewport_size({"width": max(320, width), "height": max(240, height)})
+    return await current_window_rect(request)
 
 
 def build_app() -> web.Application:
@@ -281,7 +406,17 @@ def build_app() -> web.Application:
     app.router.add_delete("/session/{sid}", delete_session)
     app.router.add_get("/session/{sid}/url", get_url)
     app.router.add_post("/session/{sid}/url", set_url)
+    app.router.add_post("/session/{sid}/refresh", refresh_page)
+    app.router.add_post("/session/{sid}/back", back_page)
+    app.router.add_post("/session/{sid}/forward", forward_page)
     app.router.add_get("/session/{sid}/title", get_title)
+    app.router.add_get("/session/{sid}/source", get_source)
+    app.router.add_get("/session/{sid}/timeouts", get_timeouts)
+    app.router.add_post("/session/{sid}/timeouts", set_timeouts)
+    app.router.add_get("/session/{sid}/cookie", get_cookies)
+    app.router.add_post("/session/{sid}/cookie", add_cookie)
+    app.router.add_delete("/session/{sid}/cookie", delete_all_cookies)
+    app.router.add_delete("/session/{sid}/cookie/{name}", delete_cookie)
     app.router.add_post("/session/{sid}/execute/sync", execute_sync)
     app.router.add_get("/session/{sid}/screenshot", screenshot)
     app.router.add_post("/session/{sid}/actions", actions)
@@ -292,6 +427,7 @@ def build_app() -> web.Application:
     app.router.add_post("/session/{sid}/window", set_window)
     app.router.add_delete("/session/{sid}/window", close_window)
     app.router.add_get("/session/{sid}/window/rect", current_window_rect)
+    app.router.add_post("/session/{sid}/window/rect", set_window_rect)
     return app
 
 
