@@ -5,6 +5,7 @@ import asyncio
 import base64
 import json
 import os
+import socket
 import uuid
 from typing import Any
 
@@ -65,11 +66,13 @@ class DriverState:
             seed = os.getenv("CLOAK_FINGERPRINT_SEED") or f"bp_{uuid.uuid4().hex[:24]}"
             profile_dir = os.getenv("CLOAK_PROFILE_DIR", "/home/seluser/chrome-data/cloak")
             os.makedirs(profile_dir, exist_ok=True)
+            remove_stale_profile_locks(profile_dir)
 
             args = [
                 f"--fingerprint={seed}",
                 f"--window-size={width},{height}",
                 "--remote-allow-origins=*",
+                "--disable-session-crashed-bubble",
             ]
 
             self.context = await launch_persistent_context_async(
@@ -128,6 +131,43 @@ class DriverState:
 state = DriverState()
 
 
+def remove_stale_profile_locks(profile_dir: str) -> None:
+    """Remove Chromium profile locks left by a previous container/process.
+
+    Browser Pilot persists the Cloak profile across container restarts so the
+    session behaves like normal Chrome. If Chromium is killed while the profile
+    is mounted, Singleton* symlinks can point to a PID from the old container
+    and block the next launch before the home page can be opened.
+    """
+
+    lock_path = os.path.join(profile_dir, "SingletonLock")
+    try:
+        target = os.readlink(lock_path)
+    except OSError:
+        target = ""
+
+    stale = True
+    if target:
+        try:
+            host, pid_text = target.rsplit("-", 1)
+            pid = int(pid_text)
+            stale = host != socket.gethostname() or not os.path.exists(f"/proc/{pid}")
+        except Exception:
+            stale = True
+
+    if not stale:
+        return
+
+    for name in ("SingletonLock", "SingletonSocket", "SingletonCookie"):
+        path = os.path.join(profile_dir, name)
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
+
+
 @web.middleware
 async def webdriver_error_middleware(request: web.Request, handler):
     try:
@@ -175,11 +215,11 @@ async def create_session(_request: web.Request) -> web.Response:
 
 
 async def delete_session(_request: web.Request) -> web.Response:
-    if state.context:
-        await state.context.close()
-    state.context = None
-    state.reset_page_state()
-    state.started = False
+    # Browser Pilot creates short-lived WebDriver control sessions for each
+    # action. Selenium Chrome only releases ChromeDriver here; the browser
+    # window stays alive. Keep the Cloak context alive too, otherwise every
+    # navigate/observe call closes the page and the next action returns to
+    # about:blank.
     return ok(None)
 
 

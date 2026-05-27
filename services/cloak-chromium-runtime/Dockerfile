@@ -4,6 +4,7 @@ USER root
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     fluxbox \
+    hsetroot \
     novnc \
     websockify \
     x11-utils \
