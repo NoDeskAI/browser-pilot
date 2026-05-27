@@ -5,7 +5,7 @@ import { useI18n } from 'vue-i18n'
 import { useSessions } from '../composables/useSessions'
 import { useNetworkEgress } from '../composables/useNetworkEgress'
 import { useNotify } from '../composables/useNotify'
-import type { ActiveSessionLease, DeleteSessionFileOptions } from '../types'
+import type { ActiveSessionLease, DeleteSessionFileOptions, Session } from '../types'
 import { Plus, Play, Pause, Trash2, Monitor, Globe, Hash, Clock, RefreshCw, Loader2, Network, ArrowUpRight, UserCog, Copy, Check } from 'lucide-vue-next'
 import { formatSessionLeaseOperator, getSessionLeaseOperatorKind } from '../lib/sessionLease'
 import { Button } from '@/components/ui/button'
@@ -133,10 +133,86 @@ function leaseStatusKindClass(lease: ActiveSessionLease | null | undefined): str
   return lease ? leaseOperatorKindClass(lease) : 'border-border bg-muted/50 text-muted-foreground'
 }
 
+function leaseStatusKindHoverClass(lease: ActiveSessionLease | null | undefined): string {
+  if (!lease) return 'hover:bg-muted/50'
+  const kind = leaseOperatorKind(lease)
+  if (kind === 'user') return 'hover:bg-emerald-500/10'
+  if (kind === 'agent') return 'hover:bg-sky-500/10'
+  if (kind === 'system') return 'hover:bg-violet-500/10'
+  return 'hover:bg-muted/50'
+}
+
+function leaseStatusKindOverlayClass(lease: ActiveSessionLease | null | undefined): string {
+  if (!lease) return 'bg-muted text-muted-foreground'
+  const kind = leaseOperatorKind(lease)
+  if (kind === 'user') return 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300'
+  if (kind === 'agent') return 'bg-sky-50 text-sky-700 dark:bg-sky-950 dark:text-sky-300'
+  if (kind === 'system') return 'bg-violet-50 text-violet-700 dark:bg-violet-950 dark:text-violet-300'
+  return 'bg-muted text-muted-foreground'
+}
+
+const valueTextEls = new Map<string, HTMLElement>()
+const valueResizeObservers = new Map<string, ResizeObserver>()
+const truncatedValueKeys = ref<Record<string, boolean>>({})
+
+function setValueTruncated(key: string, truncated: boolean) {
+  if (truncatedValueKeys.value[key] === truncated) return
+  truncatedValueKeys.value = { ...truncatedValueKeys.value, [key]: truncated }
+}
+
+function updateValueTruncation(key: string) {
+  const el = valueTextEls.get(key)
+  setValueTruncated(key, Boolean(el && el.scrollWidth > el.clientWidth + 1))
+}
+
+function updateAllValueTruncation() {
+  valueTextEls.forEach((_el, key) => updateValueTruncation(key))
+}
+
+function setValueTextRef(key: string, el: unknown) {
+  valueResizeObservers.get(key)?.disconnect()
+  valueResizeObservers.delete(key)
+
+  if (!(el instanceof HTMLElement)) {
+    valueTextEls.delete(key)
+    setValueTruncated(key, false)
+    return
+  }
+
+  valueTextEls.set(key, el)
+  void nextTick(() => updateValueTruncation(key))
+
+  if (typeof ResizeObserver !== 'undefined') {
+    const observer = new ResizeObserver(() => updateValueTruncation(key))
+    observer.observe(el)
+    valueResizeObservers.set(key, observer)
+  }
+}
+
+function normalizedValueText(value: unknown): string {
+  if (value === null || value === undefined || value === '') return '-'
+  return String(value)
+}
+
+function hasValueTooltip(key: string, display: unknown, content: unknown = display): boolean {
+  const displayText = normalizedValueText(display)
+  const contentText = normalizedValueText(content)
+  return contentText !== '-' && (Boolean(truncatedValueKeys.value[key]) || contentText !== displayText)
+}
+
+function networkEgressTooltip(session: Session): string {
+  return session.networkEgressHealthError || session.networkEgressProxyUrl || session.networkEgressName || t('networkEgress.direct')
+}
+
 watch(autoRefresh, (on) => {
   localStorage.setItem('bp_auto_refresh', String(on))
   on ? startTimer() : stopTimer()
 })
+
+watch(() => sessions.sessions, async () => {
+  await nextTick()
+  updateAllValueTruncation()
+}, { deep: true })
 
 onMounted(async () => {
   document.addEventListener('visibilitychange', refreshWhenVisible)
@@ -161,6 +237,9 @@ onUnmounted(() => {
   stopTimer()
   document.removeEventListener('visibilitychange', refreshWhenVisible)
   window.removeEventListener('focus', refreshWhenFocused)
+  valueResizeObservers.forEach(observer => observer.disconnect())
+  valueResizeObservers.clear()
+  valueTextEls.clear()
 })
 
 const editingId = ref<string | null>(null)
@@ -413,14 +492,22 @@ async function onPauseContainer(id: string) {
                 @keydown.escape.prevent="editingId = null"
                 @click.stop
               />
-              <h3
-                v-else
-                class="text-base font-medium truncate tracking-tight group-hover:text-primary transition-colors"
-                @dblclick.stop="startEdit(s.id, s.name)"
-                :title="s.name + '\n' + t('session.dblClickRename')"
-              >
-                {{ s.name }}
-              </h3>
+              <Tooltip v-else :disabled="!hasValueTooltip(`name:${s.id}`, s.name)">
+                <TooltipTrigger as-child>
+                  <h3
+                    :ref="(el) => setValueTextRef(`name:${s.id}`, el)"
+                    class="text-base font-medium truncate tracking-tight group-hover:text-primary transition-colors"
+                    @dblclick.stop="startEdit(s.id, s.name)"
+                    @mouseenter="updateValueTruncation(`name:${s.id}`)"
+                  >
+                    {{ s.name }}
+                  </h3>
+                </TooltipTrigger>
+                <TooltipContent class="max-w-[280px] flex-col items-start gap-0.5 break-all">
+                  <span>{{ s.name }}</span>
+                  <span class="text-[11px] opacity-70">{{ t('session.dblClickRename') }}</span>
+                </TooltipContent>
+              </Tooltip>
             </div>
             <Badge
               variant="outline"
@@ -442,54 +529,86 @@ async function onPauseContainer(id: string) {
                 <Hash class="size-3.5" />
                 <span class="text-[11px] whitespace-nowrap">ID</span>
               </div>
-              <button
-                type="button"
-                class="group/value ml-auto flex min-w-0 max-w-[calc(100%-80px)] items-center justify-end gap-1 rounded px-1.5 py-0.5 text-right text-xs font-mono text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                :class="copiedValueKey === `id:${s.id}` ? 'bg-green-500/10 text-green-600 dark:text-green-400' : ''"
-                @click.stop="copyValue(s.id, `id:${s.id}`)"
-                :title="s.id"
-              >
-                <span class="min-w-0 truncate">{{ formatSessionId(s.id) }}</span>
-                <Check v-if="copiedValueKey === `id:${s.id}`" class="size-3 shrink-0" />
-                <Copy v-else class="size-3 shrink-0 opacity-0 transition-opacity group-hover/value:opacity-70" />
-              </button>
+              <Tooltip :disabled="!hasValueTooltip(`id:${s.id}`, formatSessionId(s.id), s.id)">
+                <TooltipTrigger as-child>
+                  <button
+                    type="button"
+                    class="group/value relative ml-auto block min-w-0 max-w-[calc(100%-80px)] rounded px-1.5 py-0.5 text-right text-xs font-mono text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    :class="copiedValueKey === `id:${s.id}` ? 'bg-green-500/10 text-green-600 dark:text-green-400' : ''"
+                    @click.stop="copyValue(s.id, `id:${s.id}`)"
+                    @mouseenter="updateValueTruncation(`id:${s.id}`)"
+                    @focus="updateValueTruncation(`id:${s.id}`)"
+                  >
+                    <span :ref="(el) => setValueTextRef(`id:${s.id}`, el)" class="block min-w-0 truncate">{{ formatSessionId(s.id) }}</span>
+                    <span v-if="copiedValueKey === `id:${s.id}`" class="pointer-events-none absolute right-0 top-1/2 inline-flex size-5 -translate-y-1/2 items-center justify-center rounded bg-background">
+                      <Check class="size-3" />
+                    </span>
+                    <span v-else class="pointer-events-none absolute right-0 top-1/2 inline-flex size-5 -translate-y-1/2 items-center justify-center rounded bg-muted opacity-0 transition-opacity group-hover/value:opacity-100 group-focus-visible/value:opacity-100">
+                      <Copy class="size-3" />
+                    </span>
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent class="max-w-[280px] break-all font-mono">{{ s.id }}</TooltipContent>
+              </Tooltip>
             </div>
             <div class="flex items-center gap-2 min-w-0">
               <div class="flex items-center gap-1.5 text-muted-foreground shrink-0 w-[72px]">
                 <Globe class="size-3.5" />
                 <span class="text-[11px] whitespace-nowrap">URL</span>
               </div>
-              <button
-                type="button"
-                class="group/value ml-auto flex min-w-0 max-w-[calc(100%-80px)] items-center justify-end gap-1 rounded px-1.5 py-0.5 text-right text-xs text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                :class="copiedValueKey === `url:${s.id}` ? 'bg-green-500/10 text-green-600 dark:text-green-400' : ''"
-                @click.stop="copyValue(s.currentUrl || '-', `url:${s.id}`)"
-                :title="s.currentUrl || '-'"
-              >
-                <span class="min-w-0 truncate">{{ formatUrl(s.currentUrl) || '-' }}</span>
-                <Check v-if="copiedValueKey === `url:${s.id}`" class="size-3 shrink-0" />
-                <Copy v-else class="size-3 shrink-0 opacity-0 transition-opacity group-hover/value:opacity-70" />
-              </button>
+              <Tooltip :disabled="!hasValueTooltip(`url:${s.id}`, formatUrl(s.currentUrl) || '-', s.currentUrl || '-')">
+                <TooltipTrigger as-child>
+                  <button
+                    type="button"
+                    class="group/value relative ml-auto block min-w-0 max-w-[calc(100%-80px)] rounded px-1.5 py-0.5 text-right text-xs text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    :class="copiedValueKey === `url:${s.id}` ? 'bg-green-500/10 text-green-600 dark:text-green-400' : ''"
+                    @click.stop="copyValue(s.currentUrl || '-', `url:${s.id}`)"
+                    @mouseenter="updateValueTruncation(`url:${s.id}`)"
+                    @focus="updateValueTruncation(`url:${s.id}`)"
+                  >
+                    <span :ref="(el) => setValueTextRef(`url:${s.id}`, el)" class="block min-w-0 truncate">{{ formatUrl(s.currentUrl) || '-' }}</span>
+                    <span v-if="copiedValueKey === `url:${s.id}`" class="pointer-events-none absolute right-0 top-1/2 inline-flex size-5 -translate-y-1/2 items-center justify-center rounded bg-background">
+                      <Check class="size-3" />
+                    </span>
+                    <span v-else class="pointer-events-none absolute right-0 top-1/2 inline-flex size-5 -translate-y-1/2 items-center justify-center rounded bg-muted opacity-0 transition-opacity group-hover/value:opacity-100 group-focus-visible/value:opacity-100">
+                      <Copy class="size-3" />
+                    </span>
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent class="max-w-[280px] break-all">{{ s.currentUrl || '-' }}</TooltipContent>
+              </Tooltip>
             </div>
             <div class="flex items-center gap-2 min-w-0">
               <div class="flex items-center gap-1.5 text-muted-foreground shrink-0 w-[72px]">
                 <Network class="size-3.5" />
                 <span class="text-[11px] whitespace-nowrap">{{ t('networkEgress.shortLabel') }}</span>
               </div>
-              <button
-                type="button"
-                class="group/value ml-auto flex min-w-0 max-w-[calc(100%-80px)] items-center justify-end gap-1 rounded px-1.5 py-0.5 text-right text-xs transition-colors hover:bg-muted/50 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                :class="[
-                  s.networkEgressStatus === 'unhealthy' || s.networkEgressStatus === 'unsupported' ? 'text-destructive' : 'text-muted-foreground',
-                  copiedValueKey === `network:${s.id}` ? 'bg-green-500/10 text-green-600 dark:text-green-400' : ''
-                ]"
-                @click.stop="copyValue(s.networkEgressName || t('networkEgress.direct'), `network:${s.id}`)"
-                :title="s.networkEgressHealthError || s.networkEgressProxyUrl || s.networkEgressName || t('networkEgress.direct')"
-              >
-                <span class="min-w-0 truncate">{{ s.networkEgressName || t('networkEgress.direct') }}</span>
-                <Check v-if="copiedValueKey === `network:${s.id}`" class="size-3 shrink-0" />
-                <Copy v-else class="size-3 shrink-0 opacity-0 transition-opacity group-hover/value:opacity-70" />
-              </button>
+              <Tooltip :disabled="!hasValueTooltip(`network:${s.id}`, s.networkEgressName || t('networkEgress.direct'), networkEgressTooltip(s))">
+                <TooltipTrigger as-child>
+                  <button
+                    type="button"
+                    class="group/value relative ml-auto block min-w-0 max-w-[calc(100%-80px)] rounded px-1.5 py-0.5 text-right text-xs transition-colors hover:bg-muted/50 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    :class="[
+                      s.networkEgressStatus === 'unhealthy' || s.networkEgressStatus === 'unsupported' ? 'text-destructive' : 'text-muted-foreground',
+                      copiedValueKey === `network:${s.id}` ? 'bg-green-500/10 text-green-600 dark:text-green-400' : ''
+                    ]"
+                    @click.stop="copyValue(s.networkEgressName || t('networkEgress.direct'), `network:${s.id}`)"
+                    @mouseenter="updateValueTruncation(`network:${s.id}`)"
+                    @focus="updateValueTruncation(`network:${s.id}`)"
+                  >
+                    <span :ref="(el) => setValueTextRef(`network:${s.id}`, el)" class="block min-w-0 truncate">{{ s.networkEgressName || t('networkEgress.direct') }}</span>
+                    <span v-if="copiedValueKey === `network:${s.id}`" class="pointer-events-none absolute right-0 top-1/2 inline-flex size-5 -translate-y-1/2 items-center justify-center rounded bg-background">
+                      <Check class="size-3" />
+                    </span>
+                    <span v-else class="pointer-events-none absolute right-0 top-1/2 inline-flex size-5 -translate-y-1/2 items-center justify-center rounded bg-muted opacity-0 transition-opacity group-hover/value:opacity-100 group-focus-visible/value:opacity-100">
+                      <Copy class="size-3" />
+                    </span>
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent class="max-w-[280px] break-all">
+                  {{ s.networkEgressHealthError || s.networkEgressProxyUrl || s.networkEgressName || t('networkEgress.direct') }}
+                </TooltipContent>
+              </Tooltip>
             </div>
             <div class="flex items-center gap-2 min-w-0">
               <div class="flex items-center gap-1.5 text-muted-foreground shrink-0 w-[72px]">
@@ -497,35 +616,62 @@ async function onPauseContainer(id: string) {
                 <span class="text-[11px] whitespace-nowrap">{{ t('sessionLease.operatorLabel') }}</span>
               </div>
               <div class="ml-auto flex min-w-0 max-w-[calc(100%-80px)] items-center justify-end gap-1.5">
-                <button
-                  type="button"
-                  class="group/value min-w-0 rounded transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  :class="copiedValueKey === `lease-kind:${s.id}` ? 'bg-green-500/10' : ''"
-                  @click.stop="copyValue(leaseStatusKindLabel(s.activeLease), `lease-kind:${s.id}`)"
-                  :title="leaseStatusKindLabel(s.activeLease)"
-                >
-                  <Badge
-                    variant="outline"
-                    class="max-w-full px-1.5 py-0 text-[10px] font-medium"
-                    :class="leaseStatusKindClass(s.activeLease)"
-                  >
-                    <span class="min-w-0 truncate">{{ leaseStatusKindLabel(s.activeLease) }}</span>
-                    <Check v-if="copiedValueKey === `lease-kind:${s.id}`" class="ml-1 size-3 shrink-0" />
-                    <Copy v-else class="ml-1 size-3 shrink-0 opacity-0 transition-opacity group-hover/value:opacity-70" />
-                  </Badge>
-                </button>
-                <button
-                  v-if="s.activeLease"
-                  type="button"
-                  class="group/value flex min-w-0 items-center justify-end gap-1 rounded px-1.5 py-0.5 text-right text-xs text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  :class="copiedValueKey === `lease:${s.id}` ? 'bg-green-500/10 text-green-600 dark:text-green-400' : ''"
-                  @click.stop="copyValue(leaseStatusTitle(s.activeLease), `lease:${s.id}`)"
-                  :title="leaseStatusTitle(s.activeLease)"
-                >
-                  <span class="min-w-0 truncate">{{ leaseStatusDisplayName(s.activeLease) }}</span>
-                  <Check v-if="copiedValueKey === `lease:${s.id}`" class="size-3 shrink-0" />
-                  <Copy v-else class="size-3 shrink-0 opacity-0 transition-opacity group-hover/value:opacity-70" />
-                </button>
+                <Tooltip :disabled="!hasValueTooltip(`lease-kind:${s.id}`, leaseStatusKindLabel(s.activeLease))">
+                  <TooltipTrigger as-child>
+                    <button
+                      type="button"
+                      class="group/value relative shrink-0 rounded transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      :class="leaseStatusKindHoverClass(s.activeLease)"
+                      @click.stop="copyValue(leaseStatusKindLabel(s.activeLease), `lease-kind:${s.id}`)"
+                      @mouseenter="updateValueTruncation(`lease-kind:${s.id}`)"
+                      @focus="updateValueTruncation(`lease-kind:${s.id}`)"
+                    >
+                      <Badge
+                        variant="outline"
+                        class="px-1.5 py-0 text-[10px] font-medium"
+                        :class="leaseStatusKindClass(s.activeLease)"
+                      >
+                        <span :ref="(el) => setValueTextRef(`lease-kind:${s.id}`, el)">{{ leaseStatusKindLabel(s.activeLease) }}</span>
+                      </Badge>
+                      <span
+                        v-if="copiedValueKey === `lease-kind:${s.id}`"
+                        class="pointer-events-none absolute right-0.5 top-1/2 z-10 inline-flex size-3.5 -translate-y-1/2 items-center justify-center rounded-[3px]"
+                        :class="leaseStatusKindOverlayClass(s.activeLease)"
+                      >
+                        <Check class="size-2.5" />
+                      </span>
+                      <span
+                        v-else
+                        class="pointer-events-none absolute right-0.5 top-1/2 z-10 inline-flex size-3.5 -translate-y-1/2 items-center justify-center rounded-[3px] opacity-0 transition-opacity group-hover/value:opacity-100 group-focus-visible/value:opacity-100"
+                        :class="leaseStatusKindOverlayClass(s.activeLease)"
+                      >
+                        <Copy class="size-2.5" />
+                      </span>
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent>{{ leaseStatusKindLabel(s.activeLease) }}</TooltipContent>
+                </Tooltip>
+                <Tooltip v-if="s.activeLease" :disabled="!hasValueTooltip(`lease:${s.id}`, leaseStatusDisplayName(s.activeLease), leaseStatusTitle(s.activeLease))">
+                  <TooltipTrigger as-child>
+                    <button
+                      type="button"
+                      class="group/value relative block min-w-0 rounded px-1.5 py-0.5 text-right text-xs text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      :class="copiedValueKey === `lease:${s.id}` ? 'bg-green-500/10 text-green-600 dark:text-green-400' : ''"
+                      @click.stop="copyValue(leaseStatusTitle(s.activeLease), `lease:${s.id}`)"
+                      @mouseenter="updateValueTruncation(`lease:${s.id}`)"
+                      @focus="updateValueTruncation(`lease:${s.id}`)"
+                    >
+                      <span :ref="(el) => setValueTextRef(`lease:${s.id}`, el)" class="block min-w-0 truncate">{{ leaseStatusDisplayName(s.activeLease) }}</span>
+                      <span v-if="copiedValueKey === `lease:${s.id}`" class="pointer-events-none absolute right-0 top-1/2 inline-flex size-5 -translate-y-1/2 items-center justify-center rounded bg-background">
+                        <Check class="size-3" />
+                      </span>
+                      <span v-else class="pointer-events-none absolute right-0 top-1/2 inline-flex size-5 -translate-y-1/2 items-center justify-center rounded bg-muted opacity-0 transition-opacity group-hover/value:opacity-100 group-focus-visible/value:opacity-100">
+                        <Copy class="size-3" />
+                      </span>
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent class="max-w-[280px] break-all">{{ leaseStatusTitle(s.activeLease) }}</TooltipContent>
+                </Tooltip>
               </div>
             </div>
           </div>
