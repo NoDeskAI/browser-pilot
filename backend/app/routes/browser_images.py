@@ -4,6 +4,7 @@ import asyncio
 import logging
 import platform
 import re
+import shlex
 import time
 import uuid
 from datetime import datetime, timezone
@@ -39,6 +40,7 @@ _cloak_build_state: dict = {
     "stage": "",
     "progress": 0,
 }
+_cloak_build_lock = asyncio.Lock()
 
 
 def _now_iso() -> str:
@@ -122,7 +124,7 @@ def _image_tag_for(ver_tag: str, image_id: str) -> str:
 
 
 async def _docker_image_exists(image_tag: str) -> bool:
-    _, _, rc = await _run(f"docker image inspect {image_tag}", timeout=20)
+    _, _, rc = await _run(f"docker image inspect {shlex.quote(image_tag)}", timeout=20)
     return rc == 0
 
 
@@ -156,7 +158,7 @@ async def _cloak_runtime_image_payload() -> dict:
             started_at=_cloak_build_state.get("started_at"),
             updated_at=_cloak_build_state.get("updated_at"),
             log=build_log,
-            manual_command=f"docker build -t {image_tag} {_CLOAK_BUILD_DIR}",
+            manual_command=f"docker build -t {shlex.quote(image_tag)} {shlex.quote(_CLOAK_BUILD_DIR)}",
         ),
     }
 
@@ -368,7 +370,7 @@ async def _do_build_cloak_runtime() -> None:
             "progress": 8,
         }
     )
-    cmd = f"docker build -t {image_tag} {_CLOAK_BUILD_DIR}"
+    cmd = f"docker build -t {shlex.quote(image_tag)} {shlex.quote(_CLOAK_BUILD_DIR)}"
     logger.info("Building Cloak runtime image: %s", cmd)
     stdout, stderr, rc = await _run(cmd, timeout=_CLOAK_BUILD_TIMEOUT)
     log_text = (stderr or stdout or "").strip()
@@ -409,23 +411,24 @@ async def build_cloak_runtime_image(
 
 
 async def _start_cloak_runtime_build():
-    if _cloak_build_state.get("status") in {"pending", "building"}:
-        raise HTTPException(409, "Cloak Chromium runtime image is already being built.")
-    if await _docker_image_exists(CLOAK_BROWSER_IMAGE_NAME):
+    async with _cloak_build_lock:
+        if _cloak_build_state.get("status") in {"pending", "building"}:
+            raise HTTPException(409, "Cloak Chromium runtime image is already being built.")
+        if await _docker_image_exists(CLOAK_BROWSER_IMAGE_NAME):
+            return await _cloak_runtime_image_payload()
+        _cloak_build_state.update(
+            {
+                "status": "pending",
+                "build_log": "Cloak Chromium runtime image build queued.",
+                "created_at": _now_iso(),
+                "started_at": time.time(),
+                "updated_at": _now_iso(),
+                "stage": "queued",
+                "progress": 3,
+            }
+        )
+        asyncio.create_task(_do_build_cloak_runtime())
         return await _cloak_runtime_image_payload()
-    _cloak_build_state.update(
-        {
-            "status": "pending",
-            "build_log": "Cloak Chromium runtime image build queued.",
-            "created_at": _now_iso(),
-            "started_at": time.time(),
-            "updated_at": _now_iso(),
-            "stage": "queued",
-            "progress": 3,
-        }
-    )
-    asyncio.create_task(_do_build_cloak_runtime())
-    return await _cloak_runtime_image_payload()
 
 
 @router.post("/api/browser-images/build")

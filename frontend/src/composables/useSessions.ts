@@ -214,7 +214,7 @@ async function createSession(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   })
-  const data = await res.json()
+  const data = await res.json().catch(() => null)
   if (!res.ok) {
     throw new Error(data?.detail || i18n.global.t('app.sessionCreateError'))
   }

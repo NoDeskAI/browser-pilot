@@ -4,6 +4,7 @@ import json
 import logging
 import re
 import secrets
+import shlex
 import string
 import asyncio
 from datetime import datetime, timezone
@@ -201,7 +202,7 @@ async def _resolve_browser_image(pool, tenant_id: str, requested: str | None):
 
 async def _ensure_cloak_runtime_image() -> None:
     _, stderr, rc = await run_runtime_command(
-        f"docker image inspect {CLOAK_BROWSER_IMAGE_NAME}",
+        f"docker image inspect {shlex.quote(CLOAK_BROWSER_IMAGE_NAME)}",
         timeout=20,
     )
     if rc != 0:

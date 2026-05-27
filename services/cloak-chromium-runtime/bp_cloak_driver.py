@@ -79,10 +79,13 @@ class DriverState:
         await self.ensure_started()
         pages = self.context.pages
         if not handle.startswith("page-"):
-            raise web.HTTPBadRequest(text=json.dumps({"value": {"error": "no such window", "message": "Unknown window handle"}}))
-        idx = int(handle.split("-", 1)[1])
+            raise webdriver_bad_request("no such window", "Unknown window handle")
+        try:
+            idx = int(handle.split("-", 1)[1])
+        except (IndexError, ValueError) as exc:
+            raise webdriver_bad_request("no such window", "Unknown window handle") from exc
         if idx < 0 or idx >= len(pages) or pages[idx].is_closed():
-            raise web.HTTPBadRequest(text=json.dumps({"value": {"error": "no such window", "message": "Window handle not found"}}))
+            raise webdriver_bad_request("no such window", "Window handle not found")
         self.page = pages[idx]
         self.cdp = await self.context.new_cdp_session(self.page)
         await self.page.bring_to_front()
@@ -107,6 +110,13 @@ def ok(value: Any = None) -> web.Response:
 
 def error(error_name: str, message: str, status: int = 500) -> web.Response:
     return web.json_response({"value": {"error": error_name, "message": message, "stacktrace": ""}}, status=status)
+
+
+def webdriver_bad_request(error_name: str, message: str) -> web.HTTPBadRequest:
+    return web.HTTPBadRequest(
+        text=json.dumps({"value": {"error": error_name, "message": message, "stacktrace": ""}}),
+        content_type="application/json",
+    )
 
 
 async def status(_request: web.Request) -> web.Response:

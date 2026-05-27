@@ -1182,7 +1182,7 @@ async def create_container(
             f"{dns_args + ' ' if dns_args else ''}"
             f"-v {vol_name}:/home/seluser/chrome-data "
             f"{env_args} "
-            f"{runtime_image}"
+            f"{shlex.quote(runtime_image)}"
         )
         stdout, stderr, rc = await _run(cmd, timeout=30)
         if rc == 0:
