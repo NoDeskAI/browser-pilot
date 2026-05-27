@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed, watch, ref, nextTick, type ComponentPublicInstance } from 'vue'
+import { computed, watch, ref, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useSessions } from '../composables/useSessions'
 import { useNotify } from '../composables/useNotify'
 import { api } from '../lib/api'
-import { Play, Pause, Trash2, ChevronRight, Monitor, Key, Loader2, Copy, Check, CornerDownLeft } from 'lucide-vue-next'
+import type { DeleteSessionFileOptions } from '../types'
+import { Play, Pause, Trash2, ChevronRight, Monitor, Key, Loader2, Copy, Check, FolderOpen } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -13,13 +14,11 @@ import { Badge } from '@/components/ui/badge'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import NoVNCViewer from '../components/NoVNCViewer.vue'
 import BrowserLogPanel from '../components/BrowserLogPanel.vue'
+import SessionFilesDialog from '../components/SessionFilesDialog.vue'
+import SessionDeleteDialog from '../components/SessionDeleteDialog.vue'
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog'
-import {
-  AlertDialog, AlertDialogCancel, AlertDialogContent,
-  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
-} from '@/components/ui/alert-dialog'
 
 const route = useRoute()
 const router = useRouter()
@@ -39,7 +38,7 @@ const inputRef = ref<HTMLInputElement>()
 const deleteDialogOpen = ref(false)
 const deleting = ref(false)
 const containerActionLoading = ref(false)
-const deleteButtonRef = ref<Element | ComponentPublicInstance | null>(null)
+const filesDialogOpen = ref(false)
 
 // Session Token
 const tokenDialogOpen = ref(false)
@@ -85,7 +84,7 @@ async function copySessionToken() {
   setTimeout(() => { tokenCopied.value = false }, 2000)
 }
 
-watch(() => route.params.id as string | undefined, async (id) => {
+watch(() => [route.params.id as string | undefined, route.query.files] as const, async ([id, filesQuery]) => {
   if (!id) return
   if (!sessions.sessions.some(s => s.id === id)) {
     await fetchSessions()
@@ -97,6 +96,9 @@ watch(() => route.params.id as string | undefined, async (id) => {
   }
   if (sessions.activeId !== id) {
     await switchSession(id)
+  }
+  if (filesQuery === '1') {
+    filesDialogOpen.value = true
   }
 }, { immediate: true })
 
@@ -116,36 +118,22 @@ function commitEdit() {
   }
 }
 
-async function onDeleteSession() {
+async function onDeleteSession(options: DeleteSessionFileOptions) {
   if (!activeSession.value || deleting.value) return
   deleting.value = true
   try {
-    await deleteSession(activeSession.value.id)
-    notify.success(t('app.sessionDeleted'))
+    const result = await deleteSession(activeSession.value.id, options)
+    if (result.files?.warning === 'file_object_delete_failed') {
+      notify.warning(t('sessionFiles.deleteObjectWarning'))
+    } else {
+      notify.success(t('app.sessionDeleted'))
+    }
     deleteDialogOpen.value = false
     router.replace('/')
   } catch {
     notify.error(t('app.sessionDeleteError'))
   } finally {
     deleting.value = false
-  }
-}
-
-function focusDeleteButton() {
-  const focus = () => {
-    const target = deleteButtonRef.value
-    const el = target instanceof HTMLElement
-      ? target
-      : target && '$el' in target
-        ? target.$el
-        : null
-    if (el instanceof HTMLElement) el.focus()
-  }
-
-  if (typeof requestAnimationFrame === 'function') {
-    requestAnimationFrame(focus)
-  } else {
-    setTimeout(focus, 0)
   }
 }
 
@@ -251,6 +239,19 @@ async function onPauseContainer() {
           <TooltipTrigger as-child>
             <Button
               variant="outline" size="sm" class="h-8 gap-1.5 text-muted-foreground hover:text-foreground"
+              @click="filesDialogOpen = true"
+            >
+              <FolderOpen class="size-3.5" />
+              {{ t('sessionFiles.button') }}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>{{ t('sessionFiles.buttonHint') }}</TooltipContent>
+        </Tooltip>
+
+        <Tooltip>
+          <TooltipTrigger as-child>
+            <Button
+              variant="outline" size="sm" class="h-8 gap-1.5 text-muted-foreground hover:text-foreground"
               @click="tokenDialogOpen = true"
             >
               <Key class="size-3.5" />
@@ -260,37 +261,28 @@ async function onPauseContainer() {
           <TooltipContent>{{ t('session.generateTokenHint') }}</TooltipContent>
         </Tooltip>
 
-        <AlertDialog :open="deleteDialogOpen" @update:open="v => { if (v || !deleting) deleteDialogOpen = v }">
-          <AlertDialogTrigger as-child>
-            <Button variant="outline" size="sm" class="h-8 px-2.5 text-muted-foreground hover:text-destructive hover:bg-destructive/10 hover:border-destructive/20 transition-colors">
-              <Trash2 class="size-3.5" />
-            </Button>
-          </AlertDialogTrigger>
-          <AlertDialogContent @open-auto-focus.prevent="focusDeleteButton">
-            <AlertDialogHeader>
-              <AlertDialogTitle>{{ t('session.deleteConfirm') }}</AlertDialogTitle>
-              <AlertDialogDescription>{{ t('session.deleteDescription') }}</AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel :disabled="deleting">
-                {{ t('session.cancel') }}
-                <kbd v-if="!deleting" data-slot="kbd">
-                  {{ t('session.shortcutEscape') }}
-                </kbd>
-              </AlertDialogCancel>
-              <Button ref="deleteButtonRef" variant="destructive" :disabled="deleting" @click="onDeleteSession">
-                <Loader2 v-if="deleting" class="size-4 animate-spin" />
-                {{ deleting ? t('session.deleting') : t('session.confirmDelete') }}
-                <kbd v-if="!deleting" data-slot="kbd" data-icon="true">
-                  <CornerDownLeft aria-hidden="true" />
-                  <span class="sr-only">{{ t('session.shortcutEnter') }}</span>
-                </kbd>
-              </Button>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
+        <Button
+          variant="outline"
+          size="sm"
+          class="h-8 px-2.5 text-muted-foreground hover:text-destructive hover:bg-destructive/10 hover:border-destructive/20 transition-colors"
+          :title="t('session.deleteSession')"
+          :aria-label="t('session.deleteSession')"
+          @click="deleteDialogOpen = true"
+        >
+          <Trash2 class="size-3.5" />
+        </Button>
       </div>
     </header>
+
+    <SessionDeleteDialog
+      v-if="activeSession"
+      v-model:open="deleteDialogOpen"
+      :session-id="activeSession.id"
+      :session-name="activeSession.name"
+      :deleting="deleting"
+      :active-lease="activeSession.activeLease"
+      @confirm="onDeleteSession"
+    />
 
     <!-- Session Token Dialog -->
     <Dialog :open="tokenDialogOpen" @update:open="(v: boolean) => { if (!v) closeTokenDialog() }">
@@ -341,12 +333,23 @@ async function onPauseContainer() {
         <p class="text-xs mt-1 opacity-60 mb-4 max-w-sm text-center">
           {{ activeSession?.containerStatus === 'paused' ? t('app.browserHibernatedHint') : t('app.containerStoppedHint') }}
         </p>
+        <Button
+          v-if="activeSession?.containerStatus !== 'starting'"
+          class="gap-1.5"
+          :disabled="containerActionLoading"
+          @click="onStartContainer"
+        >
+          <Loader2 v-if="containerActionLoading" class="size-3.5 animate-spin" />
+          <Play v-else class="size-3.5" />
+          {{ activeSession?.containerStatus === 'paused' ? t('session.resumeFromHibernate') : t('session.startContainer') }}
+        </Button>
       </div>
       <div v-else-if="sessions.activeId && !vncUrl && sessions.containerLoading" class="absolute inset-0 flex flex-col items-center justify-center text-muted-foreground">
         <Loader2 class="size-8 mb-3 animate-spin opacity-70" />
         <p class="text-sm">{{ t('app.startingBrowser') }}</p>
         <p class="text-xs mt-1 opacity-60 max-w-sm text-center">{{ t('app.startingBrowserHint') }}</p>
       </div>
+      <SessionFilesDialog v-model:open="filesDialogOpen" :session-id="sessions.activeId" />
     </div>
     <BrowserLogPanel :session-id="sessions.activeId" />
   </div>

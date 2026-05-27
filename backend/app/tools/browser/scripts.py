@@ -76,6 +76,12 @@ return (function() {
       attrs: attrs(el),
       x: Math.round(ox + rect.left + rect.width / 2),
       y: Math.round(oy + rect.top + rect.height / 2),
+      bbox: {
+        x: Math.round(ox + rect.left),
+        y: Math.round(oy + rect.top),
+        w: Math.round(rect.width),
+        h: Math.round(rect.height)
+      },
       scope: scope
     });
   }

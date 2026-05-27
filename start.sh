@@ -20,17 +20,121 @@ BACKEND_PID_FILE="$LOG_DIR/backend.pid"
 FRONTEND_PID_FILE="$LOG_DIR/frontend.pid"
 BACKEND_LOG="$LOG_DIR/backend.log"
 FRONTEND_LOG="$LOG_DIR/frontend.log"
+MODE=foreground
+CLI_EDITION=""
+EDITION_SOURCE=""
 
 # ------------------------------------------------------------------
 usage() {
     cat <<'EOF'
 用法:
-  ./start.sh           前台 watch 模式（Ctrl+C 停止）
-  ./start.sh -d        后台 daemon 模式
-  ./start.sh stop      停止后台进程
-  ./start.sh status    查看进程状态
+  ./start.sh [ce|ee]            前台 watch 模式（Ctrl+C 停止）
+  ./start.sh [ce|ee] -d         后台 daemon 模式
+  ./start.sh --edition ce|-e ce 指定 CE 版
+  ./start.sh --edition ee|-e ee 指定 EE 版
+  ./start.sh stop               停止后台进程
+  ./start.sh status             查看进程状态
+
+说明:
+  传 ce|ee 时强制指定版本。
+  不传 ce|ee 时检查 ee/backend/__init__.py 和 ee/frontend/index.ts；都有才按 EE，否则按 CE。
 EOF
 }
+
+die_usage() {
+    echo "$1" >&2
+    usage >&2
+    exit 1
+}
+
+normalize_edition() {
+    local value normalized
+    value="${1:-}"
+    normalized=$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]')
+    case "$normalized" in
+        ce|ee) printf '%s' "$normalized" ;;
+        *) return 1 ;;
+    esac
+}
+
+set_cli_edition() {
+    local normalized
+    normalized=$(normalize_edition "$1") || die_usage "无效 edition: $1（只能是 ce 或 ee）"
+    if [[ -n "$CLI_EDITION" && "$CLI_EDITION" != "$normalized" ]]; then
+        die_usage "edition 只能指定一次"
+    fi
+    CLI_EDITION="$normalized"
+}
+
+set_mode() {
+    local mode="$1"
+    if [[ "$MODE" != "foreground" && "$MODE" != "$mode" ]]; then
+        die_usage "启动模式只能指定一个"
+    fi
+    MODE="$mode"
+}
+
+resolve_edition() {
+    if [[ -n "$CLI_EDITION" ]]; then
+        export EDITION="$CLI_EDITION"
+        EDITION_SOURCE="参数"
+        return
+    fi
+
+    if [[ -f "$SCRIPT_DIR/ee/backend/__init__.py" && -f "$SCRIPT_DIR/ee/frontend/index.ts" ]]; then
+        export EDITION=ee
+        EDITION_SOURCE="ee目录探测"
+        return
+    fi
+
+    export EDITION=ce
+    EDITION_SOURCE="ee目录探测"
+}
+
+parse_args() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            ce|CE|ee|EE)
+                set_cli_edition "$1"
+                shift
+                ;;
+            --edition)
+                [[ $# -ge 2 ]] || die_usage "--edition 需要指定 ce 或 ee"
+                set_cli_edition "$2"
+                shift 2
+                ;;
+            --edition=*)
+                set_cli_edition "${1#--edition=}"
+                shift
+                ;;
+            -e)
+                [[ $# -ge 2 ]] || die_usage "-e 需要指定 ce 或 ee"
+                set_cli_edition "$2"
+                shift 2
+                ;;
+            -d|--daemon)
+                set_mode daemon
+                shift
+                ;;
+            stop|status)
+                set_mode "$1"
+                shift
+                ;;
+            -h|--help)
+                set_mode help
+                shift
+                ;;
+            *)
+                die_usage "未知参数: $1"
+                ;;
+        esac
+    done
+    case "$MODE" in
+        foreground|daemon) resolve_edition ;;
+    esac
+}
+
+parse_args "$@"
 
 # ------------------------------------------------------------------
 _is_running() {
@@ -88,6 +192,24 @@ _ensure_postgres() {
     echo "[postgres] ready"
 }
 
+_ensure_object_storage() {
+    echo "[s3] 确保内置 S3 兼容对象存储运行中..."
+    docker compose up -d minio
+    docker compose up minio-init
+    echo "[s3] ready"
+}
+
+_ensure_deps() {
+    if [[ ! -d backend/.venv ]]; then
+        echo "[backend] 安装 Python 依赖 (uv sync)..."
+        (cd backend && uv sync)
+    fi
+    if [[ ! -d frontend/node_modules ]]; then
+        echo "[frontend] 安装 Node 依赖 (npm install)..."
+        (cd frontend && npm install)
+    fi
+}
+
 _infer_postgres_env_from_database_url() {
     if [[ -z "${DATABASE_URL:-}" ]]; then
         return
@@ -131,33 +253,51 @@ PY
     fi
 }
 
+_ensure_local_compose_runtime_env() {
+    if [[ -z "${BROWSER_RUNTIME_CONTROL_TOKEN:-}" ]]; then
+        if [[ -n "${BROWSER_RUNTIME_CONTROL_URL:-}" ]]; then
+            echo "缺少启动配置: BROWSER_RUNTIME_CONTROL_TOKEN" >&2
+            echo "已配置 BROWSER_RUNTIME_CONTROL_URL 时必须同时设置 BROWSER_RUNTIME_CONTROL_TOKEN。" >&2
+            exit 1
+        fi
+        export BROWSER_RUNTIME_CONTROL_TOKEN="browserpilot-local-start-runtime-token"
+        echo "[runtime] 未配置 BROWSER_RUNTIME_CONTROL_TOKEN，本地 start.sh 使用临时占位值用于 Docker Compose 解析"
+    fi
+}
+
 _require_database_env() {
     _infer_postgres_env_from_database_url
 
     local missing=()
     local key
-    for key in POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB DATABASE_URL; do
+    for key in POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB DATABASE_URL MINIO_ROOT_USER MINIO_ROOT_PASSWORD MINIO_BUCKET; do
         if [[ -z "${!key:-}" ]]; then
             missing+=("$key")
         fi
     done
 
     if (( ${#missing[@]} > 0 )); then
-        echo "缺少数据库配置: ${missing[*]}" >&2
+        echo "缺少启动配置: ${missing[*]}" >&2
         echo "请先执行: cp .env.example .env" >&2
-        echo "然后按需修改 .env 中的 DATABASE_URL、POSTGRES_USER、POSTGRES_PASSWORD、POSTGRES_DB。" >&2
+        echo "然后按需修改 .env 中的 DATABASE_URL、POSTGRES_*、MINIO_*（内置 S3 兼容对象存储）。" >&2
         exit 1
     fi
 }
 
 _start_processes() {
     _require_database_env
+    _ensure_local_compose_runtime_env
+    export MINIO_STORAGE_BOOTSTRAP="${MINIO_STORAGE_BOOTSTRAP:-true}"
+    export MINIO_ENDPOINT="${MINIO_ENDPOINT:-http://localhost:9000}"
+    echo "[edition] $EDITION ($EDITION_SOURCE)"
+    _ensure_deps
     _ensure_postgres
+    _ensure_object_storage
 
     : > "$BACKEND_LOG"
     : > "$FRONTEND_LOG"
 
-    (cd backend && uvicorn app.main:app --host 0.0.0.0 --port "$BACKEND_PORT" --reload) >> "$BACKEND_LOG" 2>&1 &
+    (cd backend && uv run uvicorn app.main:app --host 0.0.0.0 --port "$BACKEND_PORT" --reload) >> "$BACKEND_LOG" 2>&1 &
     local backend_pid=$!
     echo $backend_pid > "$BACKEND_PID_FILE"
 
@@ -217,11 +357,10 @@ do_daemon() {
 }
 
 # ------------------------------------------------------------------
-case "${1:-}" in
-    stop)    do_stop ;;
-    status)  do_status ;;
-    -d)      do_daemon ;;
-    "")      do_foreground ;;
-    -h|--help) usage ;;
-    *)       echo "未知参数: $1"; usage; exit 1 ;;
+case "$MODE" in
+    stop)       do_stop ;;
+    status)     do_status ;;
+    daemon)     do_daemon ;;
+    foreground) do_foreground ;;
+    help)       usage ;;
 esac

@@ -75,19 +75,25 @@ services/
 We use [Conventional Commits](https://www.conventionalcommits.org/):
 
 ```
-feat(scope): add new feature
-fix(scope): fix a bug
-refactor(scope): restructure without behavior change
-docs: update documentation
-style: formatting, no logic change
+<type>(<scope>): <subject>
 ```
 
-Examples from this repo:
+`type` must be one of `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `chore`, `revert`, or `build`.
+`scope` is optional. The subject should briefly describe the change in Chinese or English.
+
+Enable the repository commit hook before committing:
+
+```bash
+scripts/setup-git-hooks.sh
+```
+
+Examples:
 
 ```
-feat: implement session hibernation (docker pause/unpause)
-fix(novnc): remove RFB clipboard listener to fix Chinese encoding
-refactor: multi-session architecture + CDP logging + stealth
+feat(start): 支持通过参数选择 CE/EE 版本
+fix(novnc): 修复中文剪贴板编码问题
+docs(cli): 补齐 Agent Device 接入文档
+feat(start): add CE/EE edition selection
 ```
 
 ## License

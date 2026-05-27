@@ -4,7 +4,7 @@ import logging
 
 from fastapi import FastAPI
 
-from app.config import EDITION
+from app.config import EDITION, ensure_project_root_importable
 
 logger = logging.getLogger("edition")
 
@@ -12,6 +12,7 @@ logger = logging.getLogger("edition")
 def register_ee(app: FastAPI) -> None:
     if EDITION != "ee":
         return
+    ensure_project_root_importable()
     from ee.backend import register_routes, register_middleware
     register_middleware(app)
     register_routes(app)

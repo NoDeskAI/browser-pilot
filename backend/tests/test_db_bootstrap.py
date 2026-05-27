@@ -6,9 +6,17 @@ from app import db
 class FakePool:
     def __init__(self):
         self.closed = False
+        self.rows = {}
+        self.executed = []
 
     async def close(self):
         self.closed = True
+
+    async def fetchrow(self, _query, key):
+        return self.rows.get(key)
+
+    async def execute(self, query, *args):
+        self.executed.append((query, args))
 
 
 def reset_db_state():
@@ -132,6 +140,7 @@ def test_attempt_init_marks_ready_after_successful_migration(monkeypatch):
 
     monkeypatch.setattr(db, "_run_migrations", fake_run_migrations)
     monkeypatch.setattr(db.asyncpg, "create_pool", fake_create_pool)
+    monkeypatch.setattr(db, "_ensure_default_storage_config", lambda: _noop_async())
 
     result = asyncio.run(db._attempt_init("postgresql://user:pass@localhost/db", 1))
     state = db.get_bootstrap_state()
@@ -248,3 +257,121 @@ def test_run_migrations_wraps_upgrade_in_advisory_lock(monkeypatch):
     assert "pg_advisory_unlock" in calls[2][0]
     assert calls[3] == ("commit", {})
     assert calls[-1] == ("dispose", {})
+
+
+async def _noop_async():
+    return None
+
+
+def test_default_s3_storage_config_uses_bundled_s3_config(monkeypatch):
+    monkeypatch.setattr(db.config, "BUNDLED_S3_STORAGE_BOOTSTRAP", True)
+    monkeypatch.setattr(db.config, "BUNDLED_S3_ACCESS_KEY", "browserpilot")
+    monkeypatch.setattr(db.config, "BUNDLED_S3_SECRET_KEY", "secret")
+    monkeypatch.setattr(db.config, "BUNDLED_S3_BUCKET", "browser-pilot")
+    monkeypatch.setattr(db.config, "BUNDLED_S3_ENDPOINT", "http://localhost:9000")
+    monkeypatch.setattr(db.config, "BUNDLED_S3_PUBLIC_ENDPOINT", "http://files.localhost:9000")
+
+    config = db._default_s3_storage_config()
+
+    assert config == {
+        "storage": "s3",
+        "s3Bucket": "browser-pilot",
+        "s3Region": "us-east-1",
+        "s3AccessKey": "browserpilot",
+        "s3SecretKey": "secret",
+        "s3Endpoint": "http://localhost:9000",
+        "s3PublicEndpoint": "http://files.localhost:9000",
+        "s3Presign": True,
+        "s3PresignExpires": 3600,
+    }
+
+
+def test_default_s3_storage_config_skips_without_bootstrap(monkeypatch):
+    monkeypatch.setattr(db.config, "BUNDLED_S3_STORAGE_BOOTSTRAP", False)
+
+    assert db._default_s3_storage_config() is None
+
+
+def test_ensure_default_storage_config_does_not_override_existing(monkeypatch):
+    pool = FakePool()
+    pool.rows["storage_config"] = {
+        "value": {
+            "storage": "s3",
+            "s3Bucket": "external-bucket",
+            "s3Region": "us-east-1",
+            "s3AccessKey": "external-access",
+            "s3SecretKey": "external-secret",
+            "s3Endpoint": "https://s3.example.com",
+        }
+    }
+    db._pool = pool
+    monkeypatch.setattr(
+        db,
+        "_default_s3_storage_config",
+        lambda: {"storage": "s3", "s3Bucket": "browser-pilot"},
+    )
+
+    asyncio.run(db._ensure_default_storage_config())
+
+    assert pool.executed == []
+
+
+def test_ensure_default_storage_config_preserves_builtin(monkeypatch):
+    pool = FakePool()
+    pool.rows["storage_config"] = {"value": {"storage": "builtin"}}
+    db._pool = pool
+    monkeypatch.setattr(
+        db,
+        "_default_s3_storage_config",
+        lambda: {"storage": "s3", "s3Bucket": "browser-pilot"},
+    )
+
+    asyncio.run(db._ensure_default_storage_config())
+
+    assert pool.executed == []
+
+
+def test_ensure_default_storage_config_repairs_empty_s3_config(monkeypatch):
+    pool = FakePool()
+    pool.rows["storage_config"] = {
+        "value": {
+            "storage": "s3",
+            "s3Bucket": "",
+            "s3Region": "",
+            "s3AccessKey": "",
+            "s3SecretKey": "",
+            "s3Endpoint": "",
+        }
+    }
+    db._pool = pool
+    monkeypatch.setattr(
+        db,
+        "_default_s3_storage_config",
+        lambda: {"storage": "s3", "s3Bucket": "browser-pilot", "s3Endpoint": "http://localhost:9000"},
+    )
+
+    asyncio.run(db._ensure_default_storage_config())
+
+    assert len(pool.executed) == 1
+    assert pool.executed[0][1] == (
+        "storage_config",
+        '{"storage": "s3", "s3Bucket": "browser-pilot", "s3Endpoint": "http://localhost:9000"}',
+    )
+
+
+def test_ensure_default_storage_config_inserts_when_missing(monkeypatch):
+    pool = FakePool()
+    db._pool = pool
+    monkeypatch.setattr(
+        db,
+        "_default_s3_storage_config",
+        lambda: {"storage": "s3", "s3Bucket": "browser-pilot"},
+    )
+
+    asyncio.run(db._ensure_default_storage_config())
+
+    assert len(pool.executed) == 1
+    assert pool.executed[0][1] == (
+        "storage_config",
+        '{"storage": "s3", "s3Bucket": "browser-pilot"}',
+    )

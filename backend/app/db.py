@@ -17,6 +17,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.pool import NullPool
 
+from app import config
 from app.config import require_database_url
 
 logger = logging.getLogger("db")
@@ -254,6 +255,7 @@ async def _attempt_init(database_url: str, attempt: int) -> str:
     try:
         info = await _run_migrations(database_url)
         _pool = await asyncpg.create_pool(database_url, min_size=1, max_size=5, init=_init_connection)
+        await _ensure_default_storage_config()
         current = info.current_revision_after or info.current_revision
         _set_bootstrap_state(
             "ready",
@@ -299,6 +301,88 @@ async def _attempt_init(database_url: str, attempt: int) -> str:
             await _pool.close()
             _pool = None
         return "retry"
+
+
+def _default_s3_storage_config() -> dict[str, Any] | None:
+    if not config.BUNDLED_S3_STORAGE_BOOTSTRAP:
+        return None
+    missing = [
+        key
+        for key, value in {
+            "BUNDLED_S3_ACCESS_KEY": config.BUNDLED_S3_ACCESS_KEY,
+            "BUNDLED_S3_SECRET_KEY": config.BUNDLED_S3_SECRET_KEY,
+            "BUNDLED_S3_BUCKET": config.BUNDLED_S3_BUCKET,
+        }.items()
+        if not value
+    ]
+    if missing:
+        logger.warning("Skipping default S3 storage bootstrap; missing %s", missing)
+        return None
+    return {
+        "storage": "s3",
+        "s3Bucket": config.BUNDLED_S3_BUCKET,
+        "s3Region": config.BUNDLED_S3_REGION,
+        "s3AccessKey": config.BUNDLED_S3_ACCESS_KEY,
+        "s3SecretKey": config.BUNDLED_S3_SECRET_KEY,
+        "s3Endpoint": config.BUNDLED_S3_ENDPOINT,
+        "s3PublicEndpoint": config.BUNDLED_S3_PUBLIC_ENDPOINT,
+        "s3Presign": True,
+        "s3PresignExpires": 3600,
+    }
+
+
+def _storage_config_needs_default_s3_repair(storage_config: dict[str, Any]) -> bool:
+    if not storage_config:
+        return True
+    mode = storage_config.get("storage")
+    if not mode:
+        return True
+    if mode == "builtin":
+        return False
+    if mode != "s3":
+        return False
+    required = (
+        "s3Bucket",
+        "s3Region",
+        "s3AccessKey",
+        "s3SecretKey",
+        "s3Endpoint",
+    )
+    return any(not str(storage_config.get(field) or "").strip() for field in required)
+
+
+async def _ensure_default_storage_config() -> None:
+    if _pool is None:
+        return
+    storage_config = _default_s3_storage_config()
+    if not storage_config:
+        return
+    try:
+        row = await _pool.fetchrow(
+            "SELECT value FROM app_state WHERE key = $1",
+            "storage_config",
+        )
+        action = "initialized"
+        if row:
+            value = row.get("value") if hasattr(row, "get") else row["value"]
+            existing = value if isinstance(value, dict) else json.loads(value or "{}")
+            if not _storage_config_needs_default_s3_repair(existing):
+                return
+            action = "repaired"
+        await _pool.execute(
+            """INSERT INTO app_state (key, value) VALUES ($1, $2)
+               ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value""",
+            "storage_config",
+            json.dumps(storage_config, ensure_ascii=False),
+        )
+        logger.info(
+            "Default S3 storage config %s bucket=%s endpoint=%s",
+            action,
+            storage_config["s3Bucket"],
+            storage_config["s3Endpoint"],
+        )
+    except Exception as exc:
+        logger.warning("Failed to initialize default S3 storage config: %s", exc)
 
 
 async def close_db() -> None:

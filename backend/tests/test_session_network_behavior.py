@@ -66,12 +66,21 @@ def _user():
     return SimpleNamespace(id="user-1", tenant_id="tenant-1", role="admin")
 
 
+def test_generate_session_id_uses_short_safe_base36_shape():
+    session_id = sessions._generate_session_id()
+
+    assert len(session_id) == 12
+    assert session_id[0].isalpha()
+    assert session_id.islower()
+    assert session_id.isalnum()
+
+
 def test_create_session_binds_network_timezone_without_changing_browser_lang(monkeypatch):
     pool = FakePool([
         {"chrome_version": "147.0.0.0", "image_tag": "browser-pilot:test"},
     ])
     monkeypatch.setattr(sessions, "get_pool", lambda: pool)
-    monkeypatch.setattr(sessions.uuid, "uuid4", lambda: "session-1")
+    monkeypatch.setattr(sessions, "_generate_session_id", lambda: "session-1")
 
     async def fake_network(proxy_url, image_tag):
         assert proxy_url is None
@@ -96,9 +105,47 @@ def test_create_session_binds_network_timezone_without_changing_browser_lang(mon
 
     profile = result["fingerprintProfile"]
     assert result["browserLang"] == "fr-FR"
+    assert result["id"] == "session-1"
+    assert result["agentDevice"]["leaseId"] is None
+    assert result["agentDevice"]["currentOperator"] is None
+    assert result["agentDevice"]["action"] == "create_session"
+    assert result["agentDevice"]["nextStep"] == "inspect_or_acquire_lease"
     assert profile["timezone"] == "America/New_York"
     assert profile["network"]["timezone"] == "America/New_York"
     assert profile["navigator"]["languages"] == ["fr-FR", "fr", "en"]
+
+
+def test_create_session_retries_short_id_collision(monkeypatch):
+    pool = FakePool([
+        {"chrome_version": "147.0.0.0", "image_tag": "browser-pilot:test"},
+    ])
+    attempted_ids = []
+    generated_ids = iter(["a11111111111", "b22222222222"])
+    monkeypatch.setattr(sessions, "get_pool", lambda: pool)
+    monkeypatch.setattr(sessions, "_generate_session_id", lambda: next(generated_ids))
+
+    async def fake_execute(*args):
+        attempted_ids.append(args[1])
+        if len(attempted_ids) == 1:
+            raise sessions.asyncpg.exceptions.UniqueViolationError("duplicate key")
+        return "OK"
+
+    async def fake_generate_profile(tenant_id, browser_lang, chrome_version=None):
+        return _profile(browser_lang)
+
+    monkeypatch.setattr(pool, "execute", fake_execute)
+    monkeypatch.setattr(sessions, "generate_profile", fake_generate_profile)
+
+    result = asyncio.run(
+        sessions.create_session(
+            sessions.CreateSessionBody(name="test", browserLang="zh-CN"),
+            _user(),
+        )
+    )
+
+    assert attempted_ids == ["a11111111111", "b22222222222"]
+    assert result["id"] == "b22222222222"
+    assert result["agentDevice"]["deviceInstanceId"] == "b22222222222"
 
 
 def test_create_session_uses_declared_network_without_container_probe(monkeypatch):
@@ -107,7 +154,7 @@ def test_create_session_uses_declared_network_without_container_probe(monkeypatc
     ])
     calls = {}
     monkeypatch.setattr(sessions, "get_pool", lambda: pool)
-    monkeypatch.setattr(sessions.uuid, "uuid4", lambda: "session-1")
+    monkeypatch.setattr(sessions, "_generate_session_id", lambda: "session-1")
 
     def fake_declared_network(proxy_url, image_tag):
         calls["proxy_url"] = proxy_url
@@ -168,7 +215,7 @@ def test_create_session_prefers_exact_chrome_version(monkeypatch):
     ])
     captured = {}
     monkeypatch.setattr(sessions, "get_pool", lambda: pool)
-    monkeypatch.setattr(sessions.uuid, "uuid4", lambda: "session-1")
+    monkeypatch.setattr(sessions, "_generate_session_id", lambda: "session-1")
 
     async def fake_network(proxy_url, image_tag):
         captured["image_tag"] = image_tag
@@ -205,7 +252,7 @@ def test_create_session_keeps_major_version_fallback(monkeypatch):
     ])
     captured = {}
     monkeypatch.setattr(sessions, "get_pool", lambda: pool)
-    monkeypatch.setattr(sessions.uuid, "uuid4", lambda: "session-1")
+    monkeypatch.setattr(sessions, "_generate_session_id", lambda: "session-1")
 
     async def fake_network(proxy_url, image_tag):
         captured["image_tag"] = image_tag
@@ -232,17 +279,12 @@ def test_create_session_keeps_major_version_fallback(monkeypatch):
     }
 
 
-def test_change_proxy_endpoint_is_removed(monkeypatch):
-    pool = FakePool([
-        {"tenant_id": "tenant-1"},
-    ])
-    monkeypatch.setattr(sessions, "get_pool", lambda: pool)
-
-    with pytest.raises(sessions.HTTPException) as exc:
-        asyncio.run(sessions.change_proxy("session-1", _user()))
-
-    assert exc.value.status_code == 410
-    assert "Manual HTTP/SOCKS proxy has been removed" in exc.value.detail
+def test_change_proxy_endpoint_is_removed():
+    assert not any(
+        getattr(route, "path", "") == "/api/sessions/{session_id}/proxy"
+        and "POST" in (getattr(route, "methods", set()) or set())
+        for route in sessions.router.routes
+    )
 
 
 def test_create_session_rejects_manual_proxy(monkeypatch):
@@ -256,6 +298,73 @@ def test_create_session_rejects_manual_proxy(monkeypatch):
 
     assert exc.value.status_code == 422
     assert "Manual HTTP/SOCKS proxy is no longer supported" in exc.value.detail
+
+
+def test_start_session_container_is_not_lease_gated(monkeypatch):
+    profile = _profile("zh-CN")
+    pool = FakePool([
+        {
+            "fingerprint_profile": profile,
+            "network_egress_id": None,
+            "network_egress_name": None,
+            "network_egress_type": None,
+        }
+    ])
+
+    async def fake_verify(_session_id, _user):
+        return None
+
+    async def fail_begin_compatible_action(*_args, **_kwargs):
+        raise AssertionError("starting a container must not require an active device lease")
+
+    async def fake_begin_control_action(session_id, user, *, action, side_effect_level):
+        return sessions.agent_devices.AgentDeviceActionContext(
+            session_id=session_id,
+            action=action,
+            actor=f"user:{user.id}",
+            actor_owner_user_id=user.id,
+            lease=None,
+            side_effect_level=side_effect_level,
+        )
+
+    async def fake_ensure(_session_id):
+        return {"selenium_port": 4444, "vnc_port": 7900}
+
+    async def fake_runtime(_session_id, fp, **_kwargs):
+        return fp
+
+    async def fake_complete(ctx, response, **kwargs):
+        return sessions.agent_devices._agent_device_response(
+            response,
+            device_instance_id=ctx.session_id,
+            actor=ctx.actor,
+            lease=ctx.lease,
+            action=ctx.action,
+            status=kwargs.get("status", "succeeded"),
+            side_effect_level=ctx.side_effect_level,
+            retry_safety=kwargs.get("retry_safety", "unknown"),
+            audit_event_id="audit-1",
+            next_step=kwargs.get("next_step", "continue"),
+            evidence_status="not_required",
+        )
+
+    monkeypatch.setattr(sessions, "verify_session_access", fake_verify)
+    monkeypatch.setattr(sessions, "get_pool", lambda: pool)
+    monkeypatch.setattr(sessions, "ensure_container_running", fake_ensure)
+    monkeypatch.setattr(sessions, "_activate_file_capture", lambda session_id: asyncio.sleep(0))
+    monkeypatch.setattr(sessions, "_with_runtime_health_wait", fake_runtime)
+    monkeypatch.setattr(sessions, "_file_capture_payload", lambda session_id, container_status: asyncio.sleep(0, {"status": "running"}))
+    monkeypatch.setattr(sessions.agent_devices, "begin_compatible_action", fail_begin_compatible_action)
+    monkeypatch.setattr(sessions.agent_devices, "begin_control_action", fake_begin_control_action)
+    monkeypatch.setattr(sessions.agent_devices, "complete_compatible_action", fake_complete)
+
+    result = asyncio.run(sessions.start_session_container("session-1", _user()))
+
+    assert result["ok"] is True
+    assert result["ports"] == {"selenium_port": 4444, "vnc_port": 7900}
+    assert result["agentDevice"]["leaseId"] is None
+    assert result["agentDevice"]["currentOperator"] is None
+    assert result["agentDevice"]["action"] == "session.container.start"
 
 
 def test_regenerate_fingerprint_preserves_network_and_does_not_fallback_to_utc(monkeypatch):
@@ -287,6 +396,8 @@ def test_regenerate_fingerprint_preserves_network_and_does_not_fallback_to_utc(m
     monkeypatch.setattr(sessions, "generate_profile", fake_generate_profile)
     monkeypatch.setattr(sessions, "_resolve_session_network", fake_network)
     monkeypatch.setattr(sessions, "recreate_container", fake_recreate_container)
+    monkeypatch.setattr(sessions, "stop_download_watcher", lambda session_id: asyncio.sleep(0))
+    monkeypatch.setattr(sessions, "_activate_file_capture", lambda session_id: asyncio.sleep(0))
 
     result = asyncio.run(
         sessions.regenerate_fingerprint(
@@ -946,6 +1057,7 @@ def test_explicit_refresh_stores_observed_network_without_syncing_timezone(monke
     monkeypatch.setattr(sessions, "get_pool", lambda: pool)
     monkeypatch.setattr(sessions, "_with_runtime_health", fake_runtime)
     monkeypatch.setattr(sessions, "sync_fingerprint_profile_to_container", fake_sync)
+    monkeypatch.setattr(sessions, "_activate_file_capture", lambda session_id: asyncio.sleep(0))
 
     result = asyncio.run(sessions.refresh_network_profile("session-1", _user()))
 

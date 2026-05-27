@@ -16,6 +16,7 @@ import httpx
 
 from app.config import (
     BROWSER_GL_MODE,
+    BROWSER_RUNTIME_BACKEND_URL,
     DOCKER_HOST_ADDR,
     CONTAINER_PREFIX as _PREFIX,
     NETWORK_EGRESS_DOCKER_NETWORK,
@@ -39,6 +40,7 @@ from app.network_egress import (
     start_session_egress_gateway,
     stop_session_egress_gateway,
 )
+from app.runtime_control import run_runtime_command as _run
 
 logger = logging.getLogger("container")
 
@@ -338,25 +340,6 @@ def _select_network_consensus(networks: list[dict[str, Any]], warnings: list[str
 
     selected["warnings"] = warnings
     return selected
-
-
-async def _run(cmd: str, timeout: float = 30) -> tuple[str, str, int]:
-    proc = await asyncio.create_subprocess_shell(
-        cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    try:
-        stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-    except asyncio.TimeoutError:
-        proc.kill()
-        await proc.wait()
-        return "", f"timeout after {timeout}s", -1
-    return (
-        stdout_b.decode("utf-8", errors="replace").strip(),
-        stderr_b.decode("utf-8", errors="replace").strip(),
-        proc.returncode or 0,
-    )
 
 
 async def exec_in_container(session_id: str, cmd: str, timeout: float = 10) -> str:
@@ -1124,6 +1107,15 @@ async def create_container(
         env["FINGERPRINT_PROFILE"] = base64.b64encode(
             json.dumps(fingerprint_profile, separators=(",", ":")).encode()
         ).decode()
+    try:
+        from app.file_capture import issue_file_capture_token
+
+        env["BP_BACKEND_URL"] = BROWSER_RUNTIME_BACKEND_URL
+        env["BP_SESSION_ID"] = session_id
+        env["BP_FILE_CAPTURE_TOKEN"] = await issue_file_capture_token(session_id)
+        env["BP_DOWNLOAD_DIR"] = "/home/seluser/Downloads"
+    except Exception as exc:
+        logger.warning("File capture runtime token setup failed for %s: %s", session_id, exc)
     if not image_name:
         raise RuntimeError(
             "No browser image available. Build one in Settings > Browser Images."

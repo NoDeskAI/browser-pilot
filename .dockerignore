@@ -16,5 +16,4 @@ __pycache__/
 *.pyc
 
 skills/
-services/
 .DS_Store

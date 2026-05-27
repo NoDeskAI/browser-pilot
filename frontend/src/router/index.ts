@@ -6,7 +6,9 @@ const router = createRouter({
   routes: [
     { path: '/', component: () => import('../views/DashboardView.vue'), meta: { requiresAuth: true } },
     { path: '/s/:id', component: () => import('../views/MainView.vue'), meta: { requiresAuth: true } },
-    { path: '/settings', component: () => import('../views/SettingsView.vue'), meta: { requiresAuth: true } },
+    { path: '/files', component: () => import('../views/FilesView.vue'), meta: { requiresAuth: true } },
+    { path: '/agent-devices', component: () => import('../views/AgentDevicesView.vue'), meta: { requiresAuth: true } },
+    { path: '/settings/:section?', component: () => import('../views/SettingsView.vue'), meta: { requiresAuth: true } },
     { path: '/users', component: () => import('../views/UsersView.vue'), meta: { requiresAuth: true } },
     { path: '/account', component: () => import('../views/AccountView.vue'), meta: { requiresAuth: true } },
     {

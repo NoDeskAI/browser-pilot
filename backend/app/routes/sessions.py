@@ -3,16 +3,19 @@ from __future__ import annotations
 import json
 import logging
 import re
-import uuid
+import secrets
+import string
 import asyncio
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+import asyncpg
+from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app import db
+from app import agent_devices
 from app.auth.dependencies import CurrentUser, get_current_user, get_session_aware_user, require_role, verify_session_access
 from app.container import (
     ensure_container_running,
@@ -29,6 +32,8 @@ from app.container import (
 )
 from app.db import get_pool
 from app.device_presets import DEVICE_PRESETS, DEFAULT_PRESET, get_preset
+from app.download_watcher import configure_download_behavior, start_download_watcher, stop_download_watcher
+from app.file_capture import get_file_capture_status, mark_file_capture_status
 from app.fingerprint import (
     PoolEmptyError,
     attach_network_profile,
@@ -44,16 +49,58 @@ from app.network_egress import (
 logger = logging.getLogger("routes.sessions")
 router = APIRouter()
 
+SESSION_ID_LENGTH = 12
+SESSION_ID_RETRY_LIMIT = 5
+SESSION_ID_FIRST_CHARS = string.ascii_lowercase
+SESSION_ID_CHARS = string.ascii_lowercase + string.digits
+
+
+def _generate_session_id(length: int = SESSION_ID_LENGTH) -> str:
+    if length < 1:
+        raise ValueError("session id length must be at least 1")
+    first = secrets.choice(SESSION_ID_FIRST_CHARS)
+    rest = "".join(secrets.choice(SESSION_ID_CHARS) for _ in range(length - 1))
+    return f"{first}{rest}"
+
+
+def _row_value(row, key: str, default=None):
+    try:
+        return row[key]
+    except (KeyError, IndexError, TypeError):
+        return default
+
+
+async def _activate_file_capture(session_id: str) -> None:
+    start_download_watcher(session_id)
+    try:
+        await configure_download_behavior(session_id)
+    except Exception as exc:
+        logger.warning("Download behavior configuration failed for %s: %s", session_id, exc)
+
+
+async def _file_capture_payload(session_id: str, *, container_status: str | None = None) -> dict[str, Any]:
+    try:
+        return await get_file_capture_status(session_id, container_status=container_status)
+    except Exception as exc:
+        return {
+            "status": "unavailable",
+            "lastHeartbeatAt": None,
+            "lastError": str(exc),
+            "warnings": ["file_capture_status_unavailable"],
+        }
+
 
 async def _verify_session_tenant(session_id: str, user: CurrentUser) -> None:
     """Raise 404 if session doesn't belong to the user's tenant."""
     pool = get_pool()
     row = await pool.fetchrow(
-        "SELECT tenant_id FROM sessions WHERE id = $1", session_id,
+        "SELECT tenant_id, user_id FROM sessions WHERE id = $1", session_id,
     )
     if not row:
         raise HTTPException(status_code=404, detail="Session not found")
     if row["tenant_id"] and row["tenant_id"] != user.tenant_id:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if user.role == "member" and _row_value(row, "user_id") != user.id:
         raise HTTPException(status_code=404, detail="Session not found")
 
 
@@ -68,6 +115,11 @@ class CreateSessionBody(BaseModel):
 
 class UpdateSessionBody(BaseModel):
     name: str
+
+
+class DeleteSessionBody(BaseModel):
+    fileDeleteMode: Literal["none", "selected", "all"] = "none"
+    deleteFileIds: list[str] = Field(default_factory=list)
 
 
 class DevicePresetBody(BaseModel):
@@ -178,6 +230,46 @@ def _session_proxy_url(row) -> str:
     if not _row_get(row, "network_egress_id"):
         return ""
     return _row_get(row, "proxy_url", "") or ""
+
+
+def _iso_or_none(value: Any) -> str | None:
+    if value is None:
+        return None
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return str(value)
+
+
+def _active_lease_payload_from_row(row) -> dict[str, Any] | None:
+    lease_id = _row_get(row, "lease_id")
+    if not lease_id:
+        return None
+    current_operator = _row_get(row, "current_operator", "") or ""
+    operator_type = "unknown"
+    operator_name = None
+    if current_operator.startswith("token:"):
+        operator_type = "api_token"
+        operator_name = _row_get(row, "lease_token_name")
+    elif current_operator.startswith("user:"):
+        operator_type = "user"
+        operator_name = _row_get(row, "lease_owner_name") or _row_get(row, "lease_owner_email")
+    elif current_operator.startswith("runtime:file_capture:"):
+        operator_type = "runtime_file_capture"
+    elif current_operator.startswith("system:"):
+        operator_type = "system"
+
+    return {
+        "id": lease_id,
+        "leaseId": lease_id,
+        "leaseMode": _row_get(row, "lease_mode"),
+        "taskId": _row_get(row, "lease_task_id"),
+        "currentOperator": current_operator,
+        "operatorOwnerUserId": _row_get(row, "operator_owner_user_id"),
+        "operatorType": operator_type,
+        "operatorName": operator_name,
+        "expiresAt": _iso_or_none(_row_get(row, "lease_expires_at")),
+        "updatedAt": _iso_or_none(_row_get(row, "lease_updated_at")),
+    }
 
 
 async def _resolve_session_network(proxy_url: str | None, image_tag: str | None) -> dict:
@@ -410,9 +502,25 @@ async def list_sessions(user: CurrentUser = Depends(get_current_user)):
                    e.name AS network_egress_name,
                    e.type AS network_egress_type,
                    e.status AS network_egress_status,
-                   e.health_error AS network_egress_health_error
+                   e.health_error AS network_egress_health_error,
+                   l.id AS lease_id,
+                   l.lease_mode,
+                   l.task_id AS lease_task_id,
+                   l.current_operator,
+                   l.operator_owner_user_id,
+                   l.expires_at AS lease_expires_at,
+                   l.updated_at AS lease_updated_at,
+                   tok.name AS lease_token_name,
+                   ou.name AS lease_owner_name,
+                   ou.email AS lease_owner_email
             FROM sessions s
             LEFT JOIN network_egress_profiles e ON e.id = s.network_egress_id
+            LEFT JOIN agent_device_leases l
+              ON l.device_instance_id = s.id
+             AND l.status = 'active'
+             AND (l.expires_at IS NULL OR l.expires_at > NOW())
+            LEFT JOIN api_tokens tok ON l.current_operator = 'token:' || tok.id
+            LEFT JOIN users ou ON l.operator_owner_user_id = ou.id
             WHERE s.tenant_id = $1
             ORDER BY s.updated_at DESC
         """, user.tenant_id)
@@ -424,9 +532,25 @@ async def list_sessions(user: CurrentUser = Depends(get_current_user)):
                    e.name AS network_egress_name,
                    e.type AS network_egress_type,
                    e.status AS network_egress_status,
-                   e.health_error AS network_egress_health_error
+                   e.health_error AS network_egress_health_error,
+                   l.id AS lease_id,
+                   l.lease_mode,
+                   l.task_id AS lease_task_id,
+                   l.current_operator,
+                   l.operator_owner_user_id,
+                   l.expires_at AS lease_expires_at,
+                   l.updated_at AS lease_updated_at,
+                   tok.name AS lease_token_name,
+                   ou.name AS lease_owner_name,
+                   ou.email AS lease_owner_email
             FROM sessions s
             LEFT JOIN network_egress_profiles e ON e.id = s.network_egress_id
+            LEFT JOIN agent_device_leases l
+              ON l.device_instance_id = s.id
+             AND l.status = 'active'
+             AND (l.expires_at IS NULL OR l.expires_at > NOW())
+            LEFT JOIN api_tokens tok ON l.current_operator = 'token:' || tok.id
+            LEFT JOIN users ou ON l.operator_owner_user_id = ou.id
             WHERE s.tenant_id = $1 AND s.user_id = $2
             ORDER BY s.updated_at DESC
         """, user.tenant_id, user.id)
@@ -470,6 +594,8 @@ async def list_sessions(user: CurrentUser = Depends(get_current_user)):
             "proxyUrl": _session_proxy_url(r),
             "fingerprintProfile": fp_response,
             "browserLang": r["browser_lang"] or "zh-CN",
+            "activeLease": _active_lease_payload_from_row(r),
+            "fileCapture": await _file_capture_payload(sid, container_status=container_status),
             **egress_payload,
         }
 
@@ -492,7 +618,6 @@ async def create_session(body: CreateSessionBody, user: CurrentUser = Depends(ge
         raise HTTPException(422, "Manual HTTP/SOCKS proxy is no longer supported. Use a Clash or OpenVPN network egress profile.")
 
     pool = get_pool()
-    session_id = str(uuid.uuid4())
     preset_id = body.devicePreset if body.devicePreset in DEVICE_PRESETS else DEFAULT_PRESET
     safe_lang = re.sub(r"[^a-zA-Z0-9_-]", "", body.browserLang or "zh-CN") or "zh-CN"
 
@@ -526,35 +651,61 @@ async def create_session(body: CreateSessionBody, user: CurrentUser = Depends(ge
     fp_profile["screen"]["width"] = preset_data["width"]
     fp_profile["screen"]["height"] = preset_data["height"]
 
-    await pool.execute(
-        """
-        INSERT INTO sessions
-            (id, name, device_preset, proxy_url, network_egress_id, tenant_id, user_id,
-             fingerprint_profile, browser_lang, chrome_version)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10)
-        """,
-        session_id,
-        body.name,
-        preset_id,
-        effective_egress.proxy_url,
-        effective_egress.id,
-        user.tenant_id,
-        user.id,
-        fp_profile,
-        safe_lang,
-        resolved_chrome_version,
-    )
+    session_id = ""
+    last_collision: Exception | None = None
+    for attempt in range(SESSION_ID_RETRY_LIMIT):
+        session_id = _generate_session_id()
+        try:
+            await pool.execute(
+                """
+                INSERT INTO sessions
+                    (id, name, device_preset, proxy_url, network_egress_id, tenant_id, user_id,
+                     fingerprint_profile, browser_lang, chrome_version)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10)
+                """,
+                session_id,
+                body.name,
+                preset_id,
+                effective_egress.proxy_url,
+                effective_egress.id,
+                user.tenant_id,
+                user.id,
+                fp_profile,
+                safe_lang,
+                resolved_chrome_version,
+            )
+            break
+        except asyncpg.exceptions.UniqueViolationError as exc:
+            last_collision = exc
+            logger.warning(
+                "Session id collision while creating session, retrying (%s/%s)",
+                attempt + 1,
+                SESSION_ID_RETRY_LIMIT,
+            )
+    else:
+        raise HTTPException(status_code=500, detail="Could not allocate session id") from last_collision
+
     logger.info("Session created: %s (%s) preset=%s lang=%s chrome=%s", session_id, body.name, preset_id, safe_lang, resolved_chrome_version or "default")
-    return {
-        "id": session_id,
-        "name": body.name,
-        "devicePreset": preset_id,
-        "proxyUrl": effective_egress.proxy_url,
-        "fingerprintProfile": fp_profile,
-        "browserLang": safe_lang,
-        "chromeVersion": resolved_chrome_version,
-        **_egress_payload(effective_egress),
-    }
+    return agent_devices.control_action_response(
+        {
+            "id": session_id,
+            "name": body.name,
+            "devicePreset": preset_id,
+            "proxyUrl": effective_egress.proxy_url,
+            "fingerprintProfile": fp_profile,
+            "browserLang": safe_lang,
+            "chromeVersion": resolved_chrome_version,
+            **_egress_payload(effective_egress),
+        },
+        device_id=session_id,
+        user=user,
+        lease=None,
+        action="create_session",
+        status="succeeded",
+        audit_event_id=None,
+        next_step="inspect_or_acquire_lease",
+        state_changed=True,
+    )
 
 
 @router.get("/api/sessions/{session_id}")
@@ -589,6 +740,7 @@ async def get_session(session_id: str, user: CurrentUser = Depends(get_session_a
             pass
     egress_payload = _egress_payload_from_row(row)
     fp_response = await _with_runtime_health(session_id, fp)
+    container_status = await get_container_status(session_id)
     _apply_fingerprint_readiness(
         fp_response,
         egress_type=egress_payload["networkEgressType"],
@@ -605,8 +757,21 @@ async def get_session(session_id: str, user: CurrentUser = Depends(get_session_a
         "proxyUrl": _session_proxy_url(row),
         "fingerprintProfile": fp_response,
         "browserLang": row["browser_lang"] or "zh-CN",
+        "fileCapture": await _file_capture_payload(session_id, container_status=container_status),
         **egress_payload,
     }
+
+
+@router.get("/api/sessions/{session_id}/files")
+async def list_session_files_route(
+    session_id: str,
+    user: CurrentUser = Depends(get_session_aware_user),
+):
+    await verify_session_access(session_id, user)
+    from app.file_service import list_session_files
+
+    files = await list_session_files(session_id)
+    return {"files": files}
 
 
 @router.patch("/api/sessions/{session_id}")
@@ -621,13 +786,27 @@ async def update_session(session_id: str, body: UpdateSessionBody, user: Current
 
 
 @router.delete("/api/sessions/{session_id}")
-async def delete_session(session_id: str, user: CurrentUser = Depends(get_current_user)):
+async def delete_session(
+    session_id: str,
+    body: DeleteSessionBody | None = Body(None),
+    user: CurrentUser = Depends(get_current_user),
+):
     await _verify_session_tenant(session_id, user)
     pool = get_pool()
+    from app.file_service import handle_session_delete_files
+
+    delete_body = body or DeleteSessionBody()
+    file_result = await handle_session_delete_files(
+        session_id,
+        user,
+        file_delete_mode=delete_body.fileDeleteMode,
+        delete_file_ids=delete_body.deleteFileIds,
+    )
+    await stop_download_watcher(session_id)
     await remove_container(session_id)
     await pool.execute("DELETE FROM sessions WHERE id = $1", session_id)
     logger.info("Session deleted: %s", session_id)
-    return {"ok": True}
+    return {"ok": True, "files": file_result}
 
 
 # -----------------------------------------------------------------------
@@ -637,8 +816,12 @@ async def delete_session(session_id: str, user: CurrentUser = Depends(get_curren
 @router.post("/api/sessions/{session_id}/container/start")
 async def start_session_container(session_id: str, user: CurrentUser = Depends(get_session_aware_user)):
     await verify_session_access(session_id, user)
+    ctx = await agent_devices.begin_control_action(
+        session_id, user, action="session.container.start", side_effect_level="internal"
+    )
     try:
         ports = await ensure_container_running(session_id)
+        await _activate_file_capture(session_id)
         pool = get_pool()
         row = await pool.fetchrow(
             """
@@ -658,39 +841,77 @@ async def start_session_container(session_id: str, user: CurrentUser = Depends(g
         )
         if row:
             _apply_row_fingerprint_readiness(fp, row)
-        return {"ok": True, "ports": ports, "fingerprintProfile": fp}
+        return await agent_devices.complete_compatible_action(
+            ctx,
+            {
+                "ok": True,
+                "ports": ports,
+                "fingerprintProfile": fp,
+                "fileCapture": await _file_capture_payload(session_id, container_status="running"),
+            },
+            summary="Started browser container",
+            details={"ports": ports},
+        )
     except Exception as exc:
         logger.error("Container start failed for %s: %s", session_id, exc)
-        return {"ok": False, "error": str(exc)}
+        return await agent_devices.fail_compatible_action(ctx, str(exc))
 
 
 @router.post("/api/sessions/{session_id}/container/stop")
 async def stop_session_container(session_id: str, user: CurrentUser = Depends(get_session_aware_user)):
     await verify_session_access(session_id, user)
+    ctx, rejected = await agent_devices.begin_compatible_action(
+        session_id, user, action="session.container.stop", side_effect_level="external"
+    )
+    if rejected:
+        return rejected
     try:
+        await stop_download_watcher(session_id)
         await stop_container(session_id)
-        return {"ok": True}
+        await mark_file_capture_status(session_id, "unavailable", "container_stopped")
+        return await agent_devices.complete_compatible_action(
+            ctx,
+            {"ok": True},
+            summary="Stopped browser container",
+        )
     except Exception as exc:
         logger.error("Container stop failed for %s: %s", session_id, exc)
-        return {"ok": False, "error": str(exc)}
+        return await agent_devices.fail_compatible_action(ctx, str(exc))
 
 
 @router.post("/api/sessions/{session_id}/container/pause")
 async def pause_session_container(session_id: str, user: CurrentUser = Depends(get_session_aware_user)):
     await verify_session_access(session_id, user)
+    ctx, rejected = await agent_devices.begin_compatible_action(
+        session_id, user, action="session.container.pause", side_effect_level="external"
+    )
+    if rejected:
+        return rejected
     try:
+        await stop_download_watcher(session_id)
         await pause_container(session_id)
-        return {"ok": True}
+        await mark_file_capture_status(session_id, "unavailable", "container_paused")
+        return await agent_devices.complete_compatible_action(
+            ctx,
+            {"ok": True},
+            summary="Paused browser container",
+        )
     except Exception as exc:
         logger.error("Container pause failed for %s: %s", session_id, exc)
-        return {"ok": False, "error": str(exc)}
+        return await agent_devices.fail_compatible_action(ctx, str(exc))
 
 
 @router.post("/api/sessions/{session_id}/container/unpause")
 async def unpause_session_container(session_id: str, user: CurrentUser = Depends(get_session_aware_user)):
     await verify_session_access(session_id, user)
+    ctx, rejected = await agent_devices.begin_compatible_action(
+        session_id, user, action="session.container.unpause", side_effect_level="external"
+    )
+    if rejected:
+        return rejected
     try:
         ports = await ensure_container_running(session_id)
+        await _activate_file_capture(session_id)
         pool = get_pool()
         row = await pool.fetchrow(
             """
@@ -710,10 +931,20 @@ async def unpause_session_container(session_id: str, user: CurrentUser = Depends
         )
         if row:
             _apply_row_fingerprint_readiness(fp, row)
-        return {"ok": True, "ports": ports, "fingerprintProfile": fp}
+        return await agent_devices.complete_compatible_action(
+            ctx,
+            {
+                "ok": True,
+                "ports": ports,
+                "fingerprintProfile": fp,
+                "fileCapture": await _file_capture_payload(session_id, container_status="running"),
+            },
+            summary="Unpaused browser container",
+            details={"ports": ports},
+        )
     except Exception as exc:
         logger.error("Container unpause failed for %s: %s", session_id, exc)
-        return {"ok": False, "error": str(exc)}
+        return await agent_devices.fail_compatible_action(ctx, str(exc))
 
 
 # -----------------------------------------------------------------------
@@ -773,6 +1004,7 @@ async def change_device_preset(session_id: str, body: DevicePresetBody, user: Cu
     fp_ua = fp_profile.get("navigator", {}).get("userAgent") if isinstance(fp_profile, dict) else None
     from app.tools.browser.session import invalidate_session_cache
     invalidate_session_cache(session_id)
+    await stop_download_watcher(session_id)
     ports = await recreate_container(
         session_id,
         width=preset_data["width"],
@@ -783,14 +1015,9 @@ async def change_device_preset(session_id: str, body: DevicePresetBody, user: Cu
         browser_lang=row["browser_lang"] or "zh-CN",
         image_name=image_name,
     )
+    await _activate_file_capture(session_id)
     fp_response = await _with_runtime_health(session_id, fp_profile)
     return {"ok": True, "ports": ports, "devicePreset": body.preset, "fingerprintProfile": fp_response}
-
-
-@router.post("/api/sessions/{session_id}/proxy")
-async def change_proxy(session_id: str, user: CurrentUser = Depends(get_current_user)):
-    await _verify_session_tenant(session_id, user)
-    raise HTTPException(410, "Manual HTTP/SOCKS proxy has been removed. Use Clash or OpenVPN network egress.")
 
 
 @router.post("/api/sessions/{session_id}/network-egress")
@@ -839,6 +1066,7 @@ async def change_network_egress(
     fp_ua = fp_profile.get("navigator", {}).get("userAgent") if isinstance(fp_profile, dict) else None
     from app.tools.browser.session import invalidate_session_cache
     invalidate_session_cache(session_id)
+    await stop_download_watcher(session_id)
     ports = await recreate_container(
         session_id,
         width=preset_data["width"],
@@ -849,6 +1077,7 @@ async def change_network_egress(
         browser_lang=row["browser_lang"] or "zh-CN",
         image_name=image_name,
     )
+    await _activate_file_capture(session_id)
     fp_response = await _with_runtime_health(session_id, fp_profile)
     return {
         "ok": True,
@@ -905,6 +1134,7 @@ async def regenerate_fingerprint(session_id: str, body: FingerprintActionBody, u
 
     fp_ua = fp_profile.get("navigator", {}).get("userAgent") if isinstance(fp_profile, dict) else None
 
+    await stop_download_watcher(session_id)
     ports = await recreate_container(
         session_id,
         width=preset_data["width"],
@@ -915,6 +1145,7 @@ async def regenerate_fingerprint(session_id: str, body: FingerprintActionBody, u
         browser_lang=row["browser_lang"] or "zh-CN",
         image_name=image_name,
     )
+    await _activate_file_capture(session_id)
     fp_response = await _with_runtime_health(session_id, fp_profile)
     return {
         "ok": True,
@@ -933,6 +1164,7 @@ async def regenerate_fingerprint(session_id: str, body: FingerprintActionBody, u
 async def refresh_network_profile(session_id: str, user: CurrentUser = Depends(get_session_aware_user)):
     await verify_session_access(session_id, user)
     ports = await ensure_container_running(session_id)
+    await _activate_file_capture(session_id)
     observed = await resolve_network_via_browser(ports, session_id=session_id, mode="deep")
     observed_payload = _stable_network_payload(observed)
     observed_payload["observedAt"] = datetime.now(timezone.utc).isoformat()

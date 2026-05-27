@@ -6,8 +6,8 @@ import { setLocale, getLocale } from '../i18n'
 import { useSessions } from '../composables/useSessions'
 import { useAuth } from '../composables/useAuth'
 import {
-  LayoutGrid, Settings, Users, SquareTerminal, LogOut, Languages, User as UserIcon,
-  Sun, Moon
+  LayoutGrid, Settings, Users, SquareTerminal, LogOut, Languages, User as UserIcon, FolderOpen,
+  Sun, Moon, ShieldCheck
 } from 'lucide-vue-next'
 import { useDark, useToggle } from '@vueuse/core'
 import {
@@ -65,6 +65,24 @@ function toggleLocale() {
           <span class="hidden md:inline">{{ t('session.sessions') }}</span>
         </button>
         <button
+          @click="router.push('/files')"
+          class="flex items-center gap-2 px-2 md:px-3 py-1.5 rounded-md text-sm transition-colors"
+          :class="route.path === '/files' ? 'bg-accent text-accent-foreground font-medium' : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'"
+          :title="t('files.title')"
+        >
+          <FolderOpen class="size-4 shrink-0" />
+          <span class="hidden md:inline">{{ t('files.nav') }}</span>
+        </button>
+        <button
+          @click="router.push('/agent-devices')"
+          class="flex items-center gap-2 px-2 md:px-3 py-1.5 rounded-md text-sm transition-colors"
+          :class="route.path.startsWith('/agent-devices') ? 'bg-accent text-accent-foreground font-medium' : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'"
+          :title="t('agentDevices.title')"
+        >
+          <ShieldCheck class="size-4 shrink-0" />
+          <span class="hidden md:inline">{{ t('agentDevices.nav') }}</span>
+        </button>
+        <button
           v-if="showUsersLink"
           @click="router.push('/users')"
           class="flex items-center gap-2 px-2 md:px-3 py-1.5 rounded-md text-sm transition-colors"
@@ -108,7 +126,7 @@ function toggleLocale() {
         <button
           @click="router.push('/settings')"
           class="flex items-center gap-2 px-2 md:px-3 py-1.5 rounded-md text-sm transition-colors"
-          :class="route.path === '/settings' ? 'bg-accent text-accent-foreground font-medium' : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'"
+          :class="route.path.startsWith('/settings') ? 'bg-accent text-accent-foreground font-medium' : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'"
           :title="t('app.settings')"
         >
           <Settings class="size-4 shrink-0" />

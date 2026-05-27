@@ -14,6 +14,13 @@ from app.db import get_pool
 logger = logging.getLogger("auth")
 
 
+def _row_value(row, key: str, default=None):
+    try:
+        return row[key]
+    except (KeyError, IndexError, TypeError):
+        return default
+
+
 @dataclass
 class CurrentUser:
     id: str
@@ -23,6 +30,7 @@ class CurrentUser:
     role: str  # superadmin | admin | member
     created_at: str
     session_scope: str | None = field(default=None)
+    api_token_id: str | None = field(default=None)
 
 
 def _extract_token(request: Request) -> str | None:
@@ -38,7 +46,7 @@ async def _resolve_api_token(raw: str) -> CurrentUser | None:
     pool = get_pool()
     row = await pool.fetchrow(
         """
-        SELECT t.user_id, t.tenant_id, t.session_id,
+        SELECT t.id AS api_token_id, t.user_id, t.tenant_id, t.session_id,
                u.email, u.name, u.role, u.created_at
         FROM api_tokens t JOIN users u ON t.user_id = u.id
         WHERE t.token_hash = $1 AND u.is_active = TRUE
@@ -59,6 +67,7 @@ async def _resolve_api_token(raw: str) -> CurrentUser | None:
         role=row["role"],
         created_at=row["created_at"].isoformat(),
         session_scope=row["session_id"],
+        api_token_id=row["api_token_id"],
     )
 
 
@@ -126,6 +135,17 @@ async def get_optional_user(request: Request) -> CurrentUser | None:
         return None
 
 
+async def get_optional_session_aware_user(request: Request) -> CurrentUser | None:
+    """Like get_session_aware_user but returns None when no usable token exists."""
+    raw = _extract_token(request)
+    if not raw:
+        return None
+    try:
+        return await _resolve_user(request)
+    except HTTPException:
+        return None
+
+
 def require_role(allowed: Sequence[str]):
     """Return a dependency that checks the user has one of the allowed roles."""
     async def _check(user: CurrentUser = Depends(get_current_user)) -> CurrentUser:
@@ -147,8 +167,10 @@ async def verify_session_access(session_id: str, user: CurrentUser) -> None:
         return
 
     pool = get_pool()
-    row = await pool.fetchrow("SELECT tenant_id FROM sessions WHERE id = $1", session_id)
+    row = await pool.fetchrow("SELECT tenant_id, user_id FROM sessions WHERE id = $1", session_id)
     if not row:
         raise HTTPException(status_code=404, detail="Session not found")
     if row["tenant_id"] and row["tenant_id"] != user.tenant_id:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if user.role == "member" and _row_value(row, "user_id") != user.id:
         raise HTTPException(status_code=404, detail="Session not found")

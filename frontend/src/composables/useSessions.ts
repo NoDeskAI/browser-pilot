@@ -1,5 +1,5 @@
 import { reactive, readonly } from 'vue'
-import type { Session, DevicePreset } from '../types'
+import type { Session, DevicePreset, DeleteSessionFileOptions, DeleteSessionResult } from '../types'
 import i18n from '../i18n'
 import { toast } from 'vue-sonner'
 import { api } from '../lib/api'
@@ -103,6 +103,12 @@ function clearStartingSoon(id: string): void {
   }, 15000)
 }
 
+function assertContainerStarted(data: any): void {
+  if (!data?.ok || !data?.ports) {
+    throw new Error(data?.error || 'Container start failed')
+  }
+}
+
 async function fetchDevicePresets(): Promise<void> {
   try {
     const res = await api('/api/device-presets')
@@ -150,6 +156,7 @@ async function fetchSessions(): Promise<void> {
         networkEgressHealthError: s.networkEgressHealthError || '',
         fingerprintProfile: s.fingerprintProfile || local?.fingerprintProfile || null,
         browserLang: s.browserLang || 'zh-CN',
+        activeLease: s.activeLease || null,
       }
     })
     for (const id of [...startingSessionIds]) {
@@ -212,6 +219,19 @@ async function createSession(name?: string, chromeVersion?: string, networkEgres
     networkEgressHealthError: data.networkEgressHealthError || '',
     fingerprintProfile: data.fingerprintProfile || null,
     browserLang: data.browserLang || browserLang,
+    activeLease: data.agentDevice?.leaseId
+      ? {
+          id: data.agentDevice.leaseId,
+          leaseId: data.agentDevice.leaseId,
+          leaseMode: data.agentDevice.leaseMode,
+          taskId: data.agentDevice.taskId,
+          currentOperator: data.agentDevice.currentOperator || data.agentDevice.operator || '',
+          operatorType: data.agentDevice.operator?.startsWith('user:') ? 'user' : 'unknown',
+          operatorName: null,
+          expiresAt: data.agentDevice.expiresAt,
+          updatedAt: null,
+        }
+      : null,
   }
   state.sessions.unshift(session)
   return session
@@ -231,22 +251,18 @@ async function _startContainerForSession(id: string): Promise<void> {
   try {
     const res = await api(`/api/sessions/${id}/container/start`, { method: 'POST' })
     const data = await res.json()
-    if (data.ok && data.ports) {
-      started = true
-      state.activePorts = {
-        seleniumPort: data.ports.selenium_port,
-        vncPort: data.ports.vnc_port,
-      }
-      const s = state.sessions.find(s => s.id === id)
-      if (s) {
-        s.containerStatus = 'running'
-        s.ports = data.ports
-        if (data.fingerprintProfile) s.fingerprintProfile = data.fingerprintProfile
-        applyNetworkEgressFields(s, data)
-      }
-    } else {
-      const current = state.sessions.find(s => s.id === id)
-      if (current) current.containerStatus = restoreContainerStatus(previousStatus)
+    assertContainerStarted(data)
+    started = true
+    state.activePorts = {
+      seleniumPort: data.ports.selenium_port,
+      vncPort: data.ports.vnc_port,
+    }
+    const s = state.sessions.find(s => s.id === id)
+    if (s) {
+      s.containerStatus = 'running'
+      s.ports = data.ports
+      if (data.fingerprintProfile) s.fingerprintProfile = data.fingerprintProfile
+      applyNetworkEgressFields(s, data)
     }
   } catch {
     const current = state.sessions.find(s => s.id === id)
@@ -269,11 +285,11 @@ async function switchSession(id: string): Promise<void> {
       seleniumPort: s.ports.selenium_port,
       vncPort: s.ports.vnc_port,
     }
-  } else if (s && s.containerStatus === 'paused') {
-    state.activePorts = null
-  } else {
+  } else if (s?.containerStatus === 'starting') {
     state.activePorts = null
     await _startContainerForSession(id)
+  } else {
+    state.activePorts = null
   }
 }
 
@@ -291,23 +307,19 @@ async function startContainer(id: string): Promise<void> {
   try {
     const res = await api(`/api/sessions/${id}/container/start`, { method: 'POST' })
     const data = await res.json()
-    if (data.ok && data.ports) {
-      started = true
-      if (s) {
-        s.containerStatus = 'running'
-        s.ports = data.ports
-        if (data.fingerprintProfile) s.fingerprintProfile = data.fingerprintProfile
-        applyNetworkEgressFields(s, data)
+    assertContainerStarted(data)
+    started = true
+    if (s) {
+      s.containerStatus = 'running'
+      s.ports = data.ports
+      if (data.fingerprintProfile) s.fingerprintProfile = data.fingerprintProfile
+      applyNetworkEgressFields(s, data)
+    }
+    if (isActive) {
+      state.activePorts = {
+        seleniumPort: data.ports.selenium_port,
+        vncPort: data.ports.vnc_port,
       }
-      if (isActive) {
-        state.activePorts = {
-          seleniumPort: data.ports.selenium_port,
-          vncPort: data.ports.vnc_port,
-        }
-      }
-    } else {
-      const current = state.sessions.find(s => s.id === id)
-      if (current) current.containerStatus = restoreContainerStatus(previousStatus)
     }
   } catch (err) {
     const current = state.sessions.find(s => s.id === id)
@@ -504,14 +516,23 @@ async function overrideNetworkProfile(id: string, network: Record<string, any>):
   }
 }
 
-async function deleteSession(id: string): Promise<void> {
-  await api(`/api/sessions/${id}`, { method: 'DELETE' })
+async function deleteSession(id: string, options?: DeleteSessionFileOptions): Promise<DeleteSessionResult> {
+  const request: RequestInit = { method: 'DELETE' }
+  if (options) {
+    request.headers = { 'Content-Type': 'application/json' }
+    request.body = JSON.stringify(options)
+  }
+  const res = await api(`/api/sessions/${id}`, request)
+  if (!res.ok) throw new Error(await res.text())
+  const data = await res.json().catch(() => ({ ok: true })) as DeleteSessionResult
+  if (data.ok === false) throw new Error('Session delete failed')
   startingSessionIds.delete(id)
   state.sessions = state.sessions.filter(s => s.id !== id)
   if (state.activeId === id) {
     state.activePorts = null
     state.activeId = null
   }
+  return data
 }
 
 async function renameSession(id: string, name: string): Promise<void> {

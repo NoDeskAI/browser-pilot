@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { ref, watch, nextTick, onMounted, onUnmounted, type ComponentPublicInstance } from 'vue'
-import { useRouter } from 'vue-router'
+import { ref, watch, nextTick, onMounted, onUnmounted } from 'vue'
+import { RouterLink, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useSessions } from '../composables/useSessions'
 import { useNetworkEgress } from '../composables/useNetworkEgress'
 import { useNotify } from '../composables/useNotify'
-import { Plus, Play, Pause, Trash2, Monitor, Globe, Hash, Clock, RefreshCw, Loader2, Network, CornerDownLeft } from 'lucide-vue-next'
+import type { ActiveSessionLease, DeleteSessionFileOptions, Session } from '../types'
+import { Plus, Play, Pause, Trash2, Monitor, Globe, Hash, Clock, RefreshCw, Loader2, Network, ArrowUpRight, UserCog, Copy, Check } from 'lucide-vue-next'
+import { formatSessionLeaseOperator, getSessionLeaseOperatorKind } from '../lib/sessionLease'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
@@ -13,16 +15,13 @@ import { Card } from '@/components/ui/card'
 import { Switch } from '@/components/ui/switch'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import SessionDeleteDialog from '../components/SessionDeleteDialog.vue'
 import {
   Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog'
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select'
-import {
-  AlertDialog, AlertDialogCancel, AlertDialogContent,
-  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
-} from '@/components/ui/alert-dialog'
 
 const { t } = useI18n()
 const router = useRouter()
@@ -45,6 +44,7 @@ const DIRECT_EGRESS_VALUE = '__direct__'
 
 const isMac = navigator.platform.includes('Mac')
 const shortcutLabel = isMac ? '⌘N' : 'Ctrl+N'
+const browserImagesSettingsPath = '/settings/browser-images'
 
 const autoRefresh = ref(localStorage.getItem('bp_auto_refresh') === 'true')
 let refreshTimer: ReturnType<typeof setInterval> | null = null
@@ -87,10 +87,114 @@ function refreshWhenFocused() {
   }
 }
 
+function leaseOperatorLabel(lease: ActiveSessionLease): string {
+  return formatSessionLeaseOperator(lease, t)
+}
+
+function leaseOperatorKind(lease: ActiveSessionLease) {
+  return getSessionLeaseOperatorKind(lease)
+}
+
+function leaseOperatorKindLabel(lease: ActiveSessionLease): string {
+  const kind = leaseOperatorKind(lease)
+  if (kind === 'user') return t('sessionLease.userKind')
+  if (kind === 'agent') return t('sessionLease.agentKind')
+  if (kind === 'system') return t('sessionLease.systemKind')
+  return t('sessionLease.unknownKind')
+}
+
+function leaseOperatorDisplayName(lease: ActiveSessionLease): string {
+  const name = lease.operatorName?.trim()
+  if (name) return name
+  return leaseOperatorLabel(lease)
+}
+
+function leaseOperatorKindClass(lease: ActiveSessionLease): string {
+  const kind = leaseOperatorKind(lease)
+  if (kind === 'user') return 'border-emerald-500/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+  if (kind === 'agent') return 'border-sky-500/25 bg-sky-500/10 text-sky-700 dark:text-sky-300'
+  if (kind === 'system') return 'border-violet-500/25 bg-violet-500/10 text-violet-700 dark:text-violet-300'
+  return 'border-border bg-muted/50 text-muted-foreground'
+}
+
+function leaseStatusTitle(lease: ActiveSessionLease | null | undefined): string {
+  return lease ? leaseOperatorLabel(lease) : t('sessionLease.unoccupied')
+}
+
+function leaseStatusKindLabel(lease: ActiveSessionLease | null | undefined): string {
+  return lease ? leaseOperatorKindLabel(lease) : t('sessionLease.unoccupiedKind')
+}
+
+function leaseStatusDisplayName(lease: ActiveSessionLease | null | undefined): string {
+  return lease ? leaseOperatorDisplayName(lease) : t('sessionLease.unoccupied')
+}
+
+function leaseStatusKindClass(lease: ActiveSessionLease | null | undefined): string {
+  return lease ? leaseOperatorKindClass(lease) : 'border-border bg-muted/50 text-muted-foreground'
+}
+
+const valueTextEls = new Map<string, HTMLElement>()
+const valueResizeObservers = new Map<string, ResizeObserver>()
+const truncatedValueKeys = ref<Record<string, boolean>>({})
+
+function setValueTruncated(key: string, truncated: boolean) {
+  if (truncatedValueKeys.value[key] === truncated) return
+  truncatedValueKeys.value = { ...truncatedValueKeys.value, [key]: truncated }
+}
+
+function updateValueTruncation(key: string) {
+  const el = valueTextEls.get(key)
+  setValueTruncated(key, Boolean(el && el.scrollWidth > el.clientWidth + 1))
+}
+
+function updateAllValueTruncation() {
+  valueTextEls.forEach((_el, key) => updateValueTruncation(key))
+}
+
+function setValueTextRef(key: string, el: unknown) {
+  valueResizeObservers.get(key)?.disconnect()
+  valueResizeObservers.delete(key)
+
+  if (!(el instanceof HTMLElement)) {
+    valueTextEls.delete(key)
+    setValueTruncated(key, false)
+    return
+  }
+
+  valueTextEls.set(key, el)
+  void nextTick(() => updateValueTruncation(key))
+
+  if (typeof ResizeObserver !== 'undefined') {
+    const observer = new ResizeObserver(() => updateValueTruncation(key))
+    observer.observe(el)
+    valueResizeObservers.set(key, observer)
+  }
+}
+
+function normalizedValueText(value: unknown): string {
+  if (value === null || value === undefined || value === '') return '-'
+  return String(value)
+}
+
+function hasValueTooltip(key: string, display: unknown, content: unknown = display): boolean {
+  const displayText = normalizedValueText(display)
+  const contentText = normalizedValueText(content)
+  return contentText !== '-' && (Boolean(truncatedValueKeys.value[key]) || contentText !== displayText)
+}
+
+function networkEgressTooltip(session: Session): string {
+  return session.networkEgressHealthError || session.networkEgressProxyUrl || session.networkEgressName || t('networkEgress.direct')
+}
+
 watch(autoRefresh, (on) => {
   localStorage.setItem('bp_auto_refresh', String(on))
   on ? startTimer() : stopTimer()
 })
+
+watch(() => sessions.sessions, async () => {
+  await nextTick()
+  updateAllValueTruncation()
+}, { deep: true })
 
 onMounted(async () => {
   document.addEventListener('visibilitychange', refreshWhenVisible)
@@ -115,15 +219,17 @@ onUnmounted(() => {
   stopTimer()
   document.removeEventListener('visibilitychange', refreshWhenVisible)
   window.removeEventListener('focus', refreshWhenFocused)
+  valueResizeObservers.forEach(observer => observer.disconnect())
+  valueResizeObservers.clear()
+  valueTextEls.clear()
 })
 
 const editingId = ref<string | null>(null)
 const editName = ref('')
 const inputRefs = ref<Record<string, HTMLInputElement>>({})
-const copiedId = ref<string | null>(null)
+const copiedValueKey = ref<string | null>(null)
 const deleteDialogOpen = ref<Record<string, boolean>>({})
 const deleting = ref<Record<string, boolean>>({})
-const deleteButtonRefs = ref<Record<string, Element | ComponentPublicInstance>>({})
 const creating = ref(false)
 const starting = ref<Record<string, boolean>>({})
 const pausing = ref<Record<string, boolean>>({})
@@ -138,13 +244,63 @@ function formatUrl(raw: string): string {
   }
 }
 
-function copyId(id: string) {
-  navigator.clipboard.writeText(id).then(() => {
-    copiedId.value = id
-    setTimeout(() => {
-      if (copiedId.value === id) copiedId.value = null
-    }, 1500)
-  })
+function formatSessionId(id: string): string {
+  return id.length <= 12 ? id : id.slice(0, 8)
+}
+
+function writeClipboardTextWithSelection(text: string): boolean {
+  const activeElement = document.activeElement instanceof HTMLElement ? document.activeElement : null
+  const selection = window.getSelection()
+  const ranges = selection
+    ? Array.from({ length: selection.rangeCount }, (_, i) => selection.getRangeAt(i))
+    : []
+  const textarea = document.createElement('textarea')
+  textarea.value = text
+  textarea.setAttribute('readonly', '')
+  textarea.style.position = 'fixed'
+  textarea.style.inset = '0 auto auto 0'
+  textarea.style.opacity = '0'
+  textarea.style.pointerEvents = 'none'
+  document.body.appendChild(textarea)
+  textarea.focus()
+  textarea.select()
+  textarea.setSelectionRange(0, textarea.value.length)
+
+  try {
+    return document.execCommand('copy')
+  } catch {
+    return false
+  } finally {
+    document.body.removeChild(textarea)
+    if (selection) {
+      selection.removeAllRanges()
+      ranges.forEach(range => selection.addRange(range))
+    }
+    activeElement?.focus()
+  }
+}
+
+async function writeClipboardText(text: string): Promise<boolean> {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text)
+      return true
+    } catch {
+      return writeClipboardTextWithSelection(text)
+    }
+  }
+  return writeClipboardTextWithSelection(text)
+}
+
+async function copyValue(value: string, key: string) {
+  const text = value.trim()
+  if (!text) return
+  copiedValueKey.value = key
+  notify.success(t('session.copied'))
+  void writeClipboardText(text)
+  setTimeout(() => {
+    if (copiedValueKey.value === key) copiedValueKey.value = null
+  }, 1500)
 }
 
 function formatRelativeTime(iso: string): string {
@@ -202,43 +358,21 @@ function commitEdit(id: string, oldName: string) {
   }
 }
 
-async function onDeleteSession(id: string) {
+async function onDeleteSession(id: string, options: DeleteSessionFileOptions) {
   if (deleting.value[id]) return
   deleting.value[id] = true
   try {
-    await deleteSession(id)
-    notify.success(t('app.sessionDeleted'))
+    const result = await deleteSession(id, options)
+    if (result.files?.warning === 'file_object_delete_failed') {
+      notify.warning(t('sessionFiles.deleteObjectWarning'))
+    } else {
+      notify.success(t('app.sessionDeleted'))
+    }
     deleteDialogOpen.value[id] = false
   } catch {
     notify.error(t('app.sessionDeleteError'))
   } finally {
     deleting.value[id] = false
-  }
-}
-
-function setDeleteButtonRef(id: string, el: Element | ComponentPublicInstance | null) {
-  if (el) {
-    deleteButtonRefs.value[id] = el
-  } else {
-    delete deleteButtonRefs.value[id]
-  }
-}
-
-function focusDeleteButton(id: string) {
-  const focus = () => {
-    const target = deleteButtonRefs.value[id]
-    const el = target instanceof HTMLElement
-      ? target
-      : target && '$el' in target
-        ? target.$el
-        : null
-    if (el instanceof HTMLElement) el.focus()
-  }
-
-  if (typeof requestAnimationFrame === 'function') {
-    requestAnimationFrame(focus)
-  } else {
-    setTimeout(focus, 0)
   }
 }
 
@@ -284,12 +418,20 @@ async function onPauseContainer(id: string) {
               {{ t('dashboard.autoRefresh') }}
             </label>
           </div>
-          <Button v-if="hasReadyImages" :disabled="creating" class="gap-2" @click="openCreateDialog">
-            <Loader2 v-if="creating" class="size-4 animate-spin" />
-            <Plus v-else class="size-4" />
-            {{ creating ? t('session.creating') : t('dashboard.create') }}
-            <kbd v-if="!creating" data-slot="kbd">{{ shortcutLabel }}</kbd>
-          </Button>
+          <Tooltip v-if="hasReadyImages">
+            <TooltipTrigger as-child>
+              <Button :disabled="creating" class="gap-2" @click="openCreateDialog">
+                <Loader2 v-if="creating" class="size-4 animate-spin" />
+                <Plus v-else class="size-4" />
+                {{ creating ? t('session.creating') : t('dashboard.create') }}
+                <kbd v-if="!creating" data-slot="kbd">{{ shortcutLabel }}</kbd>
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>
+              {{ t('dashboard.createHint') }}
+              <kbd v-if="!creating" data-slot="kbd">{{ shortcutLabel }}</kbd>
+            </TooltipContent>
+          </Tooltip>
           <Tooltip v-else>
             <TooltipTrigger as-child>
               <span class="inline-flex">
@@ -300,7 +442,16 @@ async function onPauseContainer(id: string) {
                 </Button>
               </span>
             </TooltipTrigger>
-            <TooltipContent>{{ t('dashboard.noImageHint') }}</TooltipContent>
+            <TooltipContent class="gap-2">
+              <span>{{ t('dashboard.noImageHint') }}</span>
+              <RouterLink
+                :to="browserImagesSettingsPath"
+                class="inline-flex items-center gap-0.5 rounded-sm font-medium underline underline-offset-2 outline-none transition-opacity hover:opacity-80 focus-visible:ring-2 focus-visible:ring-background/60"
+              >
+                {{ t('dashboard.configureImages') }}
+                <ArrowUpRight class="size-3" aria-hidden="true" />
+              </RouterLink>
+            </TooltipContent>
           </Tooltip>
         </div>
       </div>
@@ -323,14 +474,22 @@ async function onPauseContainer(id: string) {
                 @keydown.escape.prevent="editingId = null"
                 @click.stop
               />
-              <h3
-                v-else
-                class="text-base font-medium truncate tracking-tight group-hover:text-primary transition-colors"
-                @dblclick.stop="startEdit(s.id, s.name)"
-                :title="s.name + '\n' + t('session.dblClickRename')"
-              >
-                {{ s.name }}
-              </h3>
+              <Tooltip v-else :disabled="!hasValueTooltip(`name:${s.id}`, s.name)">
+                <TooltipTrigger as-child>
+                  <h3
+                    :ref="(el) => setValueTextRef(`name:${s.id}`, el)"
+                    class="text-base font-medium truncate tracking-tight group-hover:text-primary transition-colors"
+                    @dblclick.stop="startEdit(s.id, s.name)"
+                    @mouseenter="updateValueTruncation(`name:${s.id}`)"
+                  >
+                    {{ s.name }}
+                  </h3>
+                </TooltipTrigger>
+                <TooltipContent class="max-w-[280px] flex-col items-start gap-0.5 break-all">
+                  <span>{{ s.name }}</span>
+                  <span class="text-[11px] opacity-70">{{ t('session.dblClickRename') }}</span>
+                </TooltipContent>
+              </Tooltip>
             </div>
             <Badge
               variant="outline"
@@ -347,41 +506,127 @@ async function onPauseContainer(id: string) {
           </div>
 
           <div class="px-4 pb-4 flex-1 flex flex-col gap-2.5 min-h-0 justify-center">
-            <div class="flex items-center gap-2">
-              <div class="flex items-center gap-1.5 text-muted-foreground shrink-0 w-10">
+            <div class="flex items-center gap-2 min-w-0">
+              <div class="flex items-center gap-1.5 text-muted-foreground shrink-0 w-[72px]">
                 <Hash class="size-3.5" />
-                <span class="text-[11px]">ID</span>
+                <span class="text-[11px] whitespace-nowrap">ID</span>
               </div>
-              <span
-                class="text-xs font-mono text-muted-foreground hover:text-foreground transition-colors cursor-pointer bg-muted/30 px-1.5 py-0.5 rounded"
-                :class="copiedId === s.id ? 'text-green-500 bg-green-500/10' : ''"
-                @click.stop="copyId(s.id)"
-                :title="t('session.copyId')"
-              >
-                {{ copiedId === s.id ? t('session.copied') : s.id.slice(0, 8) }}
-              </span>
+              <Tooltip :disabled="!hasValueTooltip(`id:${s.id}`, formatSessionId(s.id), s.id)">
+                <TooltipTrigger as-child>
+                  <button
+                    type="button"
+                    class="group/value relative ml-auto block min-w-0 max-w-[calc(100%-80px)] rounded px-1.5 py-0.5 text-right text-xs font-mono text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    :class="copiedValueKey === `id:${s.id}` ? 'bg-green-500/10 text-green-600 dark:text-green-400' : ''"
+                    @click.stop="copyValue(s.id, `id:${s.id}`)"
+                    @mouseenter="updateValueTruncation(`id:${s.id}`)"
+                    @focus="updateValueTruncation(`id:${s.id}`)"
+                  >
+                    <span :ref="(el) => setValueTextRef(`id:${s.id}`, el)" class="block min-w-0 truncate">{{ formatSessionId(s.id) }}</span>
+                    <span v-if="copiedValueKey === `id:${s.id}`" class="pointer-events-none absolute right-0 top-1/2 inline-flex size-5 -translate-y-1/2 items-center justify-center rounded bg-background">
+                      <Check class="size-3" />
+                    </span>
+                    <span v-else class="pointer-events-none absolute right-0 top-1/2 inline-flex size-5 -translate-y-1/2 items-center justify-center rounded bg-muted opacity-0 transition-opacity group-hover/value:opacity-100 group-focus-visible/value:opacity-100">
+                      <Copy class="size-3" />
+                    </span>
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent class="max-w-[280px] break-all font-mono">{{ s.id }}</TooltipContent>
+              </Tooltip>
             </div>
             <div class="flex items-center gap-2 min-w-0">
-              <div class="flex items-center gap-1.5 text-muted-foreground shrink-0 w-10">
+              <div class="flex items-center gap-1.5 text-muted-foreground shrink-0 w-[72px]">
                 <Globe class="size-3.5" />
-                <span class="text-[11px]">URL</span>
+                <span class="text-[11px] whitespace-nowrap">URL</span>
               </div>
-              <span class="text-xs text-muted-foreground truncate flex-1 min-w-0" :title="s.currentUrl">
-                {{ formatUrl(s.currentUrl) || '-' }}
-              </span>
+              <Tooltip :disabled="!hasValueTooltip(`url:${s.id}`, formatUrl(s.currentUrl) || '-', s.currentUrl || '-')">
+                <TooltipTrigger as-child>
+                  <button
+                    type="button"
+                    class="group/value relative ml-auto block min-w-0 max-w-[calc(100%-80px)] rounded px-1.5 py-0.5 text-right text-xs text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    :class="copiedValueKey === `url:${s.id}` ? 'bg-green-500/10 text-green-600 dark:text-green-400' : ''"
+                    @click.stop="copyValue(s.currentUrl || '-', `url:${s.id}`)"
+                    @mouseenter="updateValueTruncation(`url:${s.id}`)"
+                    @focus="updateValueTruncation(`url:${s.id}`)"
+                  >
+                    <span :ref="(el) => setValueTextRef(`url:${s.id}`, el)" class="block min-w-0 truncate">{{ formatUrl(s.currentUrl) || '-' }}</span>
+                    <span v-if="copiedValueKey === `url:${s.id}`" class="pointer-events-none absolute right-0 top-1/2 inline-flex size-5 -translate-y-1/2 items-center justify-center rounded bg-background">
+                      <Check class="size-3" />
+                    </span>
+                    <span v-else class="pointer-events-none absolute right-0 top-1/2 inline-flex size-5 -translate-y-1/2 items-center justify-center rounded bg-muted opacity-0 transition-opacity group-hover/value:opacity-100 group-focus-visible/value:opacity-100">
+                      <Copy class="size-3" />
+                    </span>
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent class="max-w-[280px] break-all">{{ s.currentUrl || '-' }}</TooltipContent>
+              </Tooltip>
             </div>
             <div class="flex items-center gap-2 min-w-0">
-              <div class="flex items-center gap-1.5 text-muted-foreground shrink-0 w-10">
+              <div class="flex items-center gap-1.5 text-muted-foreground shrink-0 w-[72px]">
                 <Network class="size-3.5" />
-                <span class="text-[11px]">{{ t('networkEgress.shortLabel') }}</span>
+                <span class="text-[11px] whitespace-nowrap">{{ t('networkEgress.shortLabel') }}</span>
               </div>
-              <span
-                class="text-xs truncate flex-1 min-w-0"
-                :class="s.networkEgressStatus === 'unhealthy' || s.networkEgressStatus === 'unsupported' ? 'text-destructive' : 'text-muted-foreground'"
-                :title="s.networkEgressHealthError || s.networkEgressProxyUrl || s.networkEgressName"
-              >
-                {{ s.networkEgressName || t('networkEgress.direct') }}
-              </span>
+              <Tooltip :disabled="!hasValueTooltip(`network:${s.id}`, s.networkEgressName || t('networkEgress.direct'), networkEgressTooltip(s))">
+                <TooltipTrigger as-child>
+                  <button
+                    type="button"
+                    class="group/value relative ml-auto block min-w-0 max-w-[calc(100%-80px)] rounded px-1.5 py-0.5 text-right text-xs transition-colors hover:bg-muted/50 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    :class="[
+                      s.networkEgressStatus === 'unhealthy' || s.networkEgressStatus === 'unsupported' ? 'text-destructive' : 'text-muted-foreground',
+                      copiedValueKey === `network:${s.id}` ? 'bg-green-500/10 text-green-600 dark:text-green-400' : ''
+                    ]"
+                    @click.stop="copyValue(s.networkEgressName || t('networkEgress.direct'), `network:${s.id}`)"
+                    @mouseenter="updateValueTruncation(`network:${s.id}`)"
+                    @focus="updateValueTruncation(`network:${s.id}`)"
+                  >
+                    <span :ref="(el) => setValueTextRef(`network:${s.id}`, el)" class="block min-w-0 truncate">{{ s.networkEgressName || t('networkEgress.direct') }}</span>
+                    <span v-if="copiedValueKey === `network:${s.id}`" class="pointer-events-none absolute right-0 top-1/2 inline-flex size-5 -translate-y-1/2 items-center justify-center rounded bg-background">
+                      <Check class="size-3" />
+                    </span>
+                    <span v-else class="pointer-events-none absolute right-0 top-1/2 inline-flex size-5 -translate-y-1/2 items-center justify-center rounded bg-muted opacity-0 transition-opacity group-hover/value:opacity-100 group-focus-visible/value:opacity-100">
+                      <Copy class="size-3" />
+                    </span>
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent class="max-w-[280px] break-all">
+                  {{ s.networkEgressHealthError || s.networkEgressProxyUrl || s.networkEgressName || t('networkEgress.direct') }}
+                </TooltipContent>
+              </Tooltip>
+            </div>
+            <div class="flex items-center gap-2 min-w-0">
+              <div class="flex items-center gap-1.5 text-muted-foreground shrink-0 w-[72px]">
+                <UserCog class="size-3.5" />
+                <span class="text-[11px] whitespace-nowrap">{{ t('sessionLease.operatorLabel') }}</span>
+              </div>
+              <div class="ml-auto flex min-w-0 max-w-[calc(100%-80px)] items-center justify-end gap-1.5">
+                <Badge
+                  variant="outline"
+                  class="shrink-0 px-1.5 py-0 text-[10px] font-medium"
+                  :class="leaseStatusKindClass(s.activeLease)"
+                >
+                  {{ leaseStatusKindLabel(s.activeLease) }}
+                </Badge>
+                <Tooltip v-if="s.activeLease" :disabled="!hasValueTooltip(`lease:${s.id}`, leaseStatusDisplayName(s.activeLease), leaseStatusTitle(s.activeLease))">
+                  <TooltipTrigger as-child>
+                    <button
+                      type="button"
+                      class="group/value relative block min-w-0 rounded px-1.5 py-0.5 text-right text-xs text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      :class="copiedValueKey === `lease:${s.id}` ? 'bg-green-500/10 text-green-600 dark:text-green-400' : ''"
+                      @click.stop="copyValue(leaseStatusTitle(s.activeLease), `lease:${s.id}`)"
+                      @mouseenter="updateValueTruncation(`lease:${s.id}`)"
+                      @focus="updateValueTruncation(`lease:${s.id}`)"
+                    >
+                      <span :ref="(el) => setValueTextRef(`lease:${s.id}`, el)" class="block min-w-0 truncate">{{ leaseStatusDisplayName(s.activeLease) }}</span>
+                      <span v-if="copiedValueKey === `lease:${s.id}`" class="pointer-events-none absolute right-0 top-1/2 inline-flex size-5 -translate-y-1/2 items-center justify-center rounded bg-background">
+                        <Check class="size-3" />
+                      </span>
+                      <span v-else class="pointer-events-none absolute right-0 top-1/2 inline-flex size-5 -translate-y-1/2 items-center justify-center rounded bg-muted opacity-0 transition-opacity group-hover/value:opacity-100 group-focus-visible/value:opacity-100">
+                        <Copy class="size-3" />
+                      </span>
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent class="max-w-[280px] break-all">{{ leaseStatusTitle(s.activeLease) }}</TooltipContent>
+                </Tooltip>
+              </div>
             </div>
           </div>
 
@@ -419,43 +664,25 @@ async function onPauseContainer(id: string) {
                 <TooltipContent>{{ s.containerStatus === 'starting' ? t('session.starting') : s.containerStatus === 'paused' ? t('session.resumeFromHibernate') : t('session.startContainer') }}</TooltipContent>
               </Tooltip>
 
-              <AlertDialog :open="deleteDialogOpen[s.id]" @update:open="v => { if (v || !deleting[s.id]) deleteDialogOpen[s.id] = v }">
-                <AlertDialogTrigger as-child>
-                  <Button variant="ghost" size="sm" class="size-7 p-0 text-muted-foreground hover:text-destructive" @click.stop>
-                    <Trash2 class="size-3.5" />
-                  </Button>
-                </AlertDialogTrigger>
-                <AlertDialogContent
-                  @click.stop
-                  @open-auto-focus.prevent="focusDeleteButton(s.id)"
-                >
-                  <AlertDialogHeader>
-                    <AlertDialogTitle>{{ t('session.deleteConfirm') }}</AlertDialogTitle>
-                    <AlertDialogDescription>{{ t('session.deleteDescription') }}</AlertDialogDescription>
-                  </AlertDialogHeader>
-                  <AlertDialogFooter>
-                    <AlertDialogCancel :disabled="deleting[s.id]">
-                      {{ t('session.cancel') }}
-                      <kbd v-if="!deleting[s.id]" data-slot="kbd">
-                        {{ t('session.shortcutEscape') }}
-                      </kbd>
-                    </AlertDialogCancel>
-                    <Button
-                      :ref="el => setDeleteButtonRef(s.id, el)"
-                      variant="destructive"
-                      :disabled="deleting[s.id]"
-                      @click="onDeleteSession(s.id)"
-                    >
-                      <Loader2 v-if="deleting[s.id]" class="size-4 animate-spin" />
-                      {{ deleting[s.id] ? t('session.deleting') : t('session.confirmDelete') }}
-                      <kbd v-if="!deleting[s.id]" data-slot="kbd" data-icon="true">
-                        <CornerDownLeft aria-hidden="true" />
-                        <span class="sr-only">{{ t('session.shortcutEnter') }}</span>
-                      </kbd>
-                    </Button>
-                  </AlertDialogFooter>
-                </AlertDialogContent>
-              </AlertDialog>
+              <Button
+                variant="ghost"
+                size="sm"
+                class="size-7 p-0 text-muted-foreground hover:text-destructive"
+                :title="t('session.deleteSession')"
+                :aria-label="t('session.deleteSession')"
+                @click.stop="deleteDialogOpen[s.id] = true"
+              >
+                <Trash2 class="size-3.5" />
+              </Button>
+              <SessionDeleteDialog
+                :open="!!deleteDialogOpen[s.id]"
+                :session-id="s.id"
+                :session-name="s.name"
+                :deleting="!!deleting[s.id]"
+                :active-lease="s.activeLease"
+                @update:open="v => { if (v || !deleting[s.id]) deleteDialogOpen[s.id] = v }"
+                @confirm="options => onDeleteSession(s.id, options)"
+              />
             </div>
           </div>
         </Card>
@@ -464,13 +691,32 @@ async function onPauseContainer(id: string) {
       <div v-else-if="!sessions.loading" class="py-32 flex flex-col items-center justify-center text-center">
         <Monitor class="size-12 mb-4 text-muted-foreground opacity-20" :stroke-width="1" />
         <h3 class="text-lg font-medium mb-2">{{ t('dashboard.empty') }}</h3>
-        <p class="text-sm text-muted-foreground max-w-sm mb-6">{{ t('dashboard.emptyHint') }}</p>
-        <Button v-if="hasReadyImages" :disabled="creating" class="gap-2" @click="openCreateDialog">
-          <Loader2 v-if="creating" class="size-4 animate-spin" />
-          <Plus v-else class="size-4" />
-          {{ creating ? t('session.creating') : t('dashboard.create') }}
-          <kbd v-if="!creating" data-slot="kbd">{{ shortcutLabel }}</kbd>
-        </Button>
+        <p v-if="hasReadyImages" class="text-sm text-muted-foreground max-w-sm mb-6">{{ t('dashboard.emptyHint') }}</p>
+        <p v-else class="text-sm text-muted-foreground max-w-sm mb-6">
+          <span>{{ t('dashboard.noImageEmptyPrefix') }}</span>
+          <RouterLink
+            :to="browserImagesSettingsPath"
+            class="inline-flex items-center gap-0.5 rounded-sm font-medium text-primary underline underline-offset-4 outline-none transition-colors hover:text-primary/80 focus-visible:ring-2 focus-visible:ring-ring/60"
+          >
+            {{ t('dashboard.configureImages') }}
+            <ArrowUpRight class="size-3.5" aria-hidden="true" />
+          </RouterLink>
+          <span>{{ t('dashboard.noImageEmptySuffix') }}</span>
+        </p>
+        <Tooltip v-if="hasReadyImages">
+          <TooltipTrigger as-child>
+            <Button :disabled="creating" class="gap-2" @click="openCreateDialog">
+              <Loader2 v-if="creating" class="size-4 animate-spin" />
+              <Plus v-else class="size-4" />
+              {{ creating ? t('session.creating') : t('dashboard.create') }}
+              <kbd v-if="!creating" data-slot="kbd">{{ shortcutLabel }}</kbd>
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>
+            {{ t('dashboard.createHint') }}
+            <kbd v-if="!creating" data-slot="kbd">{{ shortcutLabel }}</kbd>
+          </TooltipContent>
+        </Tooltip>
         <Tooltip v-else>
           <TooltipTrigger as-child>
             <span class="inline-flex">
@@ -480,7 +726,16 @@ async function onPauseContainer(id: string) {
               </Button>
             </span>
           </TooltipTrigger>
-          <TooltipContent>{{ t('dashboard.noImageHint') }}</TooltipContent>
+          <TooltipContent class="gap-2">
+            <span>{{ t('dashboard.noImageHint') }}</span>
+            <RouterLink
+              :to="browserImagesSettingsPath"
+              class="inline-flex items-center gap-0.5 rounded-sm font-medium underline underline-offset-2 outline-none transition-opacity hover:opacity-80 focus-visible:ring-2 focus-visible:ring-background/60"
+            >
+              {{ t('dashboard.configureImages') }}
+              <ArrowUpRight class="size-3" aria-hidden="true" />
+            </RouterLink>
+          </TooltipContent>
         </Tooltip>
       </div>
     </div>

@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+message_file="${1:?commit message file is required}"
+
+subject="$(
+    sed -n '
+        /^[[:space:]]*#/d
+        /^[[:space:]]*$/d
+        p
+        q
+    ' "$message_file"
+)"
+
+python3 - "$subject" <<'PY'
+import re
+import sys
+
+subject = sys.argv[1].strip()
+pattern = re.compile(
+    r"^(feat|fix|docs|style|refactor|perf|test|chore|revert|build)(\([a-z0-9._-]+\))?: .+$"
+)
+
+if not pattern.match(subject):
+    print("提交信息格式错误。", file=sys.stderr)
+    print("格式: <type>(<scope>): <subject>", file=sys.stderr)
+    print("type: feat / fix / docs / style / refactor / perf / test / chore / revert / build", file=sys.stderr)
+    print("示例: feat(start): 支持通过参数选择 CE/EE 版本", file=sys.stderr)
+    print("Example: feat(start): add CE/EE edition selection", file=sys.stderr)
+    sys.exit(1)
+PY

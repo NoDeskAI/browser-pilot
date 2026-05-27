@@ -25,26 +25,36 @@ A typical stateless automation sequence:
 bpilot session create --name "Task Name" --json
 # Read the returned "id".
 
-# 2. Start the target session when you need the VNC port.
+# 2. Optional: choose a managed network egress profile.
+bpilot network-egress list --json
+bpilot --session "<session-id>" session set-network "<egress-id-or-direct>"
+
+# 3. Start the target session when you need the VNC port.
 bpilot --session "<session-id>" session start
 
-# 3. Navigate. The container auto-starts if it is not running.
+# 4. Navigate. The container auto-starts if it is not running.
 bpilot --session "<session-id>" navigate https://example.com
 
-# 4. Observe the page.
-bpilot --session "<session-id>" observe --json
+# 5. Observe the page. Use --mode dom by default; switch to vision for visual cards/feeds.
+bpilot --session "<session-id>" observe --mode dom --json
 
-# 5. Interact.
+# 6. Interact.
 bpilot --session "<session-id>" click 640 380
 bpilot --session "<session-id>" click-element "a.login-btn"
 bpilot --session "<session-id>" type "hello world"
 bpilot --session "<session-id>" key Enter
 
-# 6. Verify result.
-bpilot --session "<session-id>" observe --json
+# 7. Verify result.
+bpilot --session "<session-id>" observe --mode dom --json
 
-# 7. Screenshot for visual confirmation.
+# 8. Screenshot for visual confirmation. Without --output, the JSON response
+# contains a signed file.url and no base64 screenshot payload.
+bpilot --session "<session-id>" screenshot --json
+# Use --output when you also need a local copy.
 bpilot --session "<session-id>" screenshot --output result.png
+
+# 9. Inspect files captured by the browser session.
+bpilot --session "<session-id>" files list --json
 ```
 
 ## Commands Reference
@@ -59,16 +69,36 @@ Add `--json` / `-j` to state-reading commands for machine-readable output.
 |---------|-------------|
 | `bpilot session list --json` | List all sessions with container status |
 | `bpilot session create --name NAME --json` | Create new session, returns ID |
+| `bpilot session create --name NAME --network-egress EGRESS_ID --json` | Create a session bound to a managed network egress profile |
 | `bpilot --session "<session-id>" session start` | Start container for the target session |
 | `bpilot --session "<session-id>" session stop` | Stop container for the target session |
-| `bpilot --session "<session-id>" session delete` | Delete session and container |
+| `bpilot --session "<session-id>" session set-network EGRESS_ID_OR_DIRECT` | Switch the target session network egress |
+| `bpilot --session "<session-id>" session delete` | Delete session and container; completed files are kept in Files |
+| `bpilot --session "<session-id>" session delete --delete-files` | Delete session, container, and all completed files for that session |
+
+### Network Egress
+
+| Command | Description |
+|---------|-------------|
+| `bpilot network-egress list --json` | List Direct plus managed Clash/OpenVPN profiles |
+| `bpilot network-egress create --name NAME --type clash --config-file ./clash.yaml --json` | Create a managed Clash profile |
+| `bpilot network-egress create --name NAME --type openvpn --config-url URL --json` | Create a managed OpenVPN profile from a URL |
+| `bpilot network-egress update EGRESS_ID --config-file ./clash.yaml --json` | Replace managed profile config |
+| `bpilot network-egress update EGRESS_ID --enable --json` | Enable a managed profile |
+| `bpilot network-egress update EGRESS_ID --disable --json` | Disable a managed profile |
+| `bpilot network-egress check EGRESS_ID --json` | Check a managed profile |
+| `bpilot network-egress delete EGRESS_ID --json` | Delete an unused managed profile |
+
+Read `networkEgressId`, `networkEgressName`, `networkEgressType`, `networkEgressStatus`, and `networkEgressHealthError` from `bpilot session list --json` to inspect a session's current network setting. Use `direct` with `session set-network` to clear a managed egress binding.
 
 ### Browser Primitives
 
 | Command | Description |
 |---------|-------------|
 | `bpilot --session "<session-id>" navigate <url>` | Navigate to URL |
-| `bpilot --session "<session-id>" observe --json` | Get page URL, title, visible text, and all interactive elements with coordinates |
+| `bpilot --session "<session-id>" observe --mode dom --json` | Get page URL, title, visible text, and DOM interactive elements with coordinates |
+| `bpilot --session "<session-id>" observe --mode vision --json` | Get YOLOv8 visual candidate boxes and groups with click-ready coordinates |
+| `bpilot --session "<session-id>" observe --mode mix --json` | Use DOM first and visual fallback when DOM observe returns no elements |
 | `bpilot --session "<session-id>" click <x> <y>` | Click at coordinates from observe |
 | `bpilot --session "<session-id>" click-element <selector>` | Click element by CSS selector |
 | `bpilot --session "<session-id>" type <text>` | Type into focused input |
@@ -77,8 +107,14 @@ Add `--json` / `-j` to state-reading commands for machine-readable output.
 | `bpilot --session "<session-id>" tabs --json` | List browser tabs |
 | `bpilot --session "<session-id>" switch-tab [--handle H \| --index I]` | Switch tab |
 | `bpilot --session "<session-id>" page-info --json` | Get current URL and title |
-| `bpilot --session "<session-id>" screenshot [--output FILE]` | Capture screenshot |
+| `bpilot --session "<session-id>" screenshot [--output FILE]` | Store screenshot in FileStore and return a signed file URL; `--output` also exports a local copy |
 | `bpilot --session "<session-id>" logs [--tail N]` | View container diagnostic logs |
+
+### Session Files
+
+| Command | Description |
+|---------|-------------|
+| `bpilot --session "<session-id>" files list --json` | List session files; each item includes `status` as `downloading` or `completed` |
 
 ### Configuration
 
@@ -122,4 +158,6 @@ bpilot --session "a1b2c3d4-..." screenshot --output qr-code.png
 - **Container auto-start**: Browser commands automatically start the container if it is not running. You only need `bpilot --session "<session-id>" session start` if you want the VNC port for visual monitoring.
 - **Anti-bot stealth**: Each container runs Chrome with fingerprint spoofing, human-like click/type patterns, and timezone override (Asia/Shanghai).
 - **Per-call sessions**: Each CLI command creates and destroys a WebDriver session to minimize detection. This adds small overhead per command but prevents anti-bot triggers.
-- **Observe before click**: Always run `bpilot --session "<session-id>" observe --json` to get current element coordinates before clicking. Coordinates change when the page updates.
+- **Observe before click**: Always run `bpilot --session "<session-id>" observe --json` to get current element coordinates before clicking. Coordinates change when the page updates. Use `--mode dom` for normal links/forms/buttons, `--mode vision` for image/video feeds and complex visual layouts, and `--mode mix` when you want DOM first with a visual fallback.
+- **Vision labels are weak hints**: Treat visual labels as candidate regions, not final semantic truth. Combine bbox position, nearby text, DOM hints, and task intent before clicking.
+- **Files**: For Agent workflows, inspect `bpilot --session "<session-id>" files list --json`. Use the file item `status` field to distinguish `downloading` from `completed`; completed items include the backend file `url`.

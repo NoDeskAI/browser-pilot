@@ -7,7 +7,6 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
       - egressdata:/app/data/network-egress
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -18,15 +17,58 @@ services:
       PROJECT_ROOT: /app
       DATABASE_URL: postgresql://${POSTGRES_USER:?copy .env.example to .env and set POSTGRES_USER}:${POSTGRES_PASSWORD:?copy .env.example to .env and set POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:?copy .env.example to .env and set POSTGRES_DB}
       DOCKER_HOST_ADDR: host.docker.internal
+      BROWSER_RUNTIME_BACKEND_URL: ${BROWSER_RUNTIME_BACKEND_URL:-http://host.docker.internal:8000}
+      BROWSER_RUNTIME_CONTROL_URL: http://runtime-worker:8001
+      BROWSER_RUNTIME_CONTROL_TOKEN: ${BROWSER_RUNTIME_CONTROL_TOKEN:?copy .env.example to .env and set BROWSER_RUNTIME_CONTROL_TOKEN}
+      BP_LEGACY_DOCKER_DOWNLOAD_WATCHER: ${BP_LEGACY_DOCKER_DOWNLOAD_WATCHER:-false}
       NETWORK_EGRESS_DOCKER_NETWORK: ${NETWORK_EGRESS_DOCKER_NETWORK:-browser-pilot-net}
       NETWORK_EGRESS_CONFIG_DIR: ${NETWORK_EGRESS_CONFIG_DIR:-/app/data/network-egress}
       NETWORK_EGRESS_CLASH_IMAGE: ${NETWORK_EGRESS_CLASH_IMAGE:-ghcr.io/metacubex/mihomo:latest}
       NETWORK_EGRESS_CLASH_PROXY_PORT: ${NETWORK_EGRESS_CLASH_PROXY_PORT:-7890}
       NETWORK_EGRESS_OPENVPN_IMAGE: ${NETWORK_EGRESS_OPENVPN_IMAGE:-browser-pilot-openvpn-egress:latest}
       NETWORK_EGRESS_OPENVPN_PROXY_PORT: ${NETWORK_EGRESS_OPENVPN_PROXY_PORT:-8888}
+      MINIO_STORAGE_BOOTSTRAP: "true"
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?copy .env.example to .env and set MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?copy .env.example to .env and set MINIO_ROOT_PASSWORD}
+      MINIO_BUCKET: ${MINIO_BUCKET:?copy .env.example to .env and set MINIO_BUCKET}
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_PUBLIC_ENDPOINT: ${MINIO_PUBLIC_ENDPOINT:-http://localhost:9000}
     depends_on:
       postgres:
         condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      runtime-worker:
+        condition: service_healthy
+
+  runtime-worker:
+    build:
+      context: .
+      args:
+        EDITION: ${EDITION:-ce}
+    command: uvicorn app.runtime_worker:app --host 0.0.0.0 --port 8001
+    expose:
+      - "8001"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - egressdata:/app/data/network-egress
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      PROJECT_ROOT: /app
+      BROWSER_RUNTIME_CONTROL_TOKEN: ${BROWSER_RUNTIME_CONTROL_TOKEN:?copy .env.example to .env and set BROWSER_RUNTIME_CONTROL_TOKEN}
+      BROWSER_RUNTIME_COMMAND_MAX_TIMEOUT: ${BROWSER_RUNTIME_COMMAND_MAX_TIMEOUT:-900}
+      NETWORK_EGRESS_CONFIG_DIR: ${NETWORK_EGRESS_CONFIG_DIR:-/app/data/network-egress}
+      NETWORK_EGRESS_DOCKER_NETWORK: ${NETWORK_EGRESS_DOCKER_NETWORK:-browser-pilot-net}
+      NETWORK_EGRESS_CLASH_IMAGE: ${NETWORK_EGRESS_CLASH_IMAGE:-ghcr.io/metacubex/mihomo:latest}
+      NETWORK_EGRESS_CLASH_PROXY_PORT: ${NETWORK_EGRESS_CLASH_PROXY_PORT:-7890}
+      NETWORK_EGRESS_OPENVPN_IMAGE: ${NETWORK_EGRESS_OPENVPN_IMAGE:-browser-pilot-openvpn-egress:latest}
+      NETWORK_EGRESS_OPENVPN_PROXY_PORT: ${NETWORK_EGRESS_OPENVPN_PROXY_PORT:-8888}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/healthz', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
   postgres:
     image: postgres:16-alpine
@@ -45,6 +87,38 @@ services:
       timeout: 3s
       retries: 5
 
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?copy .env.example to .env and set MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?copy .env.example to .env and set MINIO_ROOT_PASSWORD}
+    expose:
+      - "9000"
+    ports:
+      - "127.0.0.1:9000:9000"
+    volumes:
+      - miniodata:/data
+
+  minio-init:
+    image: minio/mc:latest
+    restart: "no"
+    depends_on:
+      minio:
+        condition: service_started
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?copy .env.example to .env and set MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?copy .env.example to .env and set MINIO_ROOT_PASSWORD}
+      MINIO_BUCKET: ${MINIO_BUCKET:?copy .env.example to .env and set MINIO_BUCKET}
+    entrypoint: >
+      /bin/sh -c '
+        until mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD"; do
+          sleep 1;
+        done;
+        mc mb --ignore-existing "local/$$MINIO_BUCKET";
+      '
+
   selenium:
     build:
       context: ./services/selenium-chrome
@@ -56,3 +130,4 @@ services:
 volumes:
   pgdata:
   egressdata:
+  miniodata:

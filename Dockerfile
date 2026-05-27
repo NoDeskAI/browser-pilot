@@ -26,6 +26,7 @@ WORKDIR /app
 ENV PROJECT_ROOT=/app
 ENV EDITION=${EDITION}
 COPY backend/ ./
+COPY services/ /app/services/
 RUN pip install --no-cache-dir .
 
 COPY --from=context /ctx/ee/ /app/ee/

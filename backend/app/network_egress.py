@@ -23,6 +23,7 @@ from app.config import (
     PROJECT_ROOT,
 )
 from app.db import get_pool
+from app.runtime_control import run_runtime_command as _run
 
 VALID_EGRESS_TYPES = {"direct", "clash", "openvpn"}
 MANAGED_EGRESS_TYPES = {"clash", "openvpn"}
@@ -61,25 +62,6 @@ class SessionEgressGateway:
     browser_proxy: str = ""
     full_tunnel: bool = False
     warnings: list[str] = field(default_factory=list)
-
-
-async def _run(cmd: str, timeout: float = 60) -> tuple[str, str, int]:
-    proc = await asyncio.create_subprocess_shell(
-        cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    try:
-        stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-    except asyncio.TimeoutError:
-        proc.kill()
-        await proc.wait()
-        return "", f"timeout after {timeout}s", -1
-    return (
-        stdout_b.decode("utf-8", errors="replace").strip(),
-        stderr_b.decode("utf-8", errors="replace").strip(),
-        proc.returncode or 0,
-    )
 
 
 def _config_root() -> Path:
