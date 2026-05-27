@@ -15,6 +15,7 @@ from urllib.parse import urlparse
 import httpx
 
 from app.config import (
+    BROWSER_GL_MODE,
     DOCKER_HOST_ADDR,
     CONTAINER_PREFIX as _PREFIX,
     NETWORK_EGRESS_DOCKER_NETWORK,
@@ -50,6 +51,7 @@ _STATIC_ENV = {
     "SE_NODE_SESSION_TIMEOUT": "86400",
     "SE_NODE_OVERRIDE_MAX_SESSIONS": "true",
     "SE_NODE_MAX_SESSIONS": "1",
+    "BROWSER_GL_MODE": BROWSER_GL_MODE,
 }
 
 GRID_READY_TIMEOUT = 15

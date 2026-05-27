@@ -44,6 +44,7 @@ API_BASE_URL = _env("API_BASE_URL", "http://localhost:8000")
 APP_TITLE = _env("APP_TITLE", "Browser Pilot")
 CLI_COMMAND_NAME = _env("CLI_COMMAND_NAME", "bpilot")
 CONTAINER_PREFIX = _env("CONTAINER_PREFIX", "bp")
+BROWSER_GL_MODE = _env("BROWSER_GL_MODE", "auto")
 
 # --- Declared network profile ---
 
