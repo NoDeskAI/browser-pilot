@@ -489,12 +489,14 @@ class CDPAgent:
       }});
     }}
   }}catch(e){{}}
-  var glVendor='',glRenderer='',glContextAvailable=false;
+  var glVendor='',glRenderer='',glContextAvailable=false,gl2ContextAvailable=false;
   try{{
     var canvas=document.createElement('canvas');
-    var gl=canvas.getContext('webgl')||canvas.getContext('experimental-webgl')||canvas.getContext('webgl2');
+    var gl2=canvas.getContext('webgl2');
+    var gl=gl2||canvas.getContext('webgl')||canvas.getContext('experimental-webgl');
     if(gl){{
       glContextAvailable=true;
+      gl2ContextAvailable=!!gl2;
       var dbg=gl.getExtension('WEBGL_debug_renderer_info');
       glVendor=dbg?gl.getParameter(dbg.UNMASKED_VENDOR_WEBGL):gl.getParameter(gl.VENDOR);
       glRenderer=dbg?gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL):gl.getParameter(gl.RENDERER);
@@ -520,6 +522,7 @@ class CDPAgent:
     uaDataPlatform:uadPlatform,
     highEntropy:high,
     webglContextAvailable:glContextAvailable,
+    webgl2ContextAvailable:gl2ContextAvailable,
     webglVendor:glVendor,
     webglRenderer:glRenderer,
     timezone:tz,
@@ -576,6 +579,7 @@ class CDPAgent:
             checks["navigator.platform"] = observed.get("platform") == expected["navigatorPlatform"]
             checks["navigator.userAgentData.platform"] = observed.get("uaDataPlatform") == expected["uaCHPlatform"]
             checks["webgl.contextAvailable"] = bool(observed.get("webglContextAvailable"))
+            checks["webgl2.contextAvailable"] = bool(observed.get("webgl2ContextAvailable"))
             checks["webgl.rendererSpoofMatched"] = (
                 bool(observed.get("webglContextAvailable"))
                 and observed.get("webglRenderer") == expected["webglRenderer"]
@@ -598,6 +602,8 @@ class CDPAgent:
             if not ok:
                 if key == "webgl.contextAvailable":
                     warnings.append(f"webgl_runtime_unavailable during {reason}")
+                elif key == "webgl2.contextAvailable":
+                    warnings.append(f"webgl2_runtime_unavailable during {reason}")
                 elif key == "webgl.rendererSpoofMatched":
                     if checks.get("webgl.contextAvailable"):
                         warnings.append(f"webgl_spoof_mismatch during {reason}")

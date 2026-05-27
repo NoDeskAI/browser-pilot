@@ -18,23 +18,44 @@ if [ -z "$CHROME_BIN" ]; then
 fi
 CHROME_REAL_VERSION=$("$CHROME_BIN" --version 2>/dev/null | grep -oP '[\d.]+' | head -1)
 CHROME_REAL_MAJOR=${CHROME_REAL_VERSION%%.*}
+CHROME_VERSION_TEXT=$("$CHROME_BIN" --version 2>/dev/null || true)
+KERNEL_ARCH=$(uname -m 2>/dev/null || echo "")
 REQUESTED_GL_MODE="${BROWSER_GL_MODE:-auto}"
 GL_MODE="$REQUESTED_GL_MODE"
-GL_ARGS=("--enable-webgl")
+GL_ARGS=("--enable-webgl" "--enable-webgl2")
 case "$GL_MODE" in
   auto|"")
-    GL_MODE="swiftshader"
+    if echo "$CHROME_VERSION_TEXT" | grep -qi "chromium" && echo "$KERNEL_ARCH" | grep -Eq "aarch64|arm64"; then
+      GL_MODE="angle-swiftshader"
+    else
+      GL_MODE="swiftshader"
+    fi
     ;;
-  native|swiftshader)
+  native|egl|swiftshader|angle|angle-swiftshader)
     ;;
   *)
     echo "WARN: unsupported BROWSER_GL_MODE=$REQUESTED_GL_MODE, falling back to auto" >&2
-    GL_MODE="swiftshader"
+    if echo "$CHROME_VERSION_TEXT" | grep -qi "chromium" && echo "$KERNEL_ARCH" | grep -Eq "aarch64|arm64"; then
+      GL_MODE="angle-swiftshader"
+    else
+      GL_MODE="swiftshader"
+    fi
     ;;
 esac
-if [ "$GL_MODE" = "swiftshader" ]; then
-  GL_ARGS+=("--ignore-gpu-blocklist" "--use-gl=swiftshader" "--enable-unsafe-swiftshader")
-fi
+case "$GL_MODE" in
+  egl)
+    GL_ARGS+=("--ignore-gpu-blocklist" "--use-gl=egl" "--use-cmd-decoder=validating" "--disable-gpu-rasterization")
+    ;;
+  angle)
+    GL_ARGS+=("--ignore-gpu-blocklist" "--use-gl=angle" "--use-cmd-decoder=validating" "--disable-gpu-rasterization")
+    ;;
+  angle-swiftshader)
+    GL_ARGS+=("--ignore-gpu-blocklist" "--use-gl=angle" "--use-angle=swiftshader" "--enable-unsafe-swiftshader" "--use-cmd-decoder=validating" "--disable-gpu-rasterization")
+    ;;
+  swiftshader)
+    GL_ARGS+=("--ignore-gpu-blocklist" "--use-gl=swiftshader" "--enable-unsafe-swiftshader" "--use-cmd-decoder=validating" "--disable-gpu-rasterization")
+    ;;
+esac
 /usr/bin/python3 - <<PY 2>/dev/null || true
 import json
 from pathlib import Path
