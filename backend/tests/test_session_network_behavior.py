@@ -279,6 +279,64 @@ def test_create_session_keeps_major_version_fallback(monkeypatch):
     }
 
 
+def test_create_session_rejects_cloak_runtime_without_runtime_image(monkeypatch):
+    monkeypatch.setattr(sessions, "get_pool", lambda: FakePool([]))
+
+    async def fake_runtime_command(cmd, timeout=30):
+        return "", "No such image: browser-pilot-cloak:latest", 1
+
+    monkeypatch.setattr(sessions, "run_runtime_command", fake_runtime_command)
+
+    with pytest.raises(sessions.HTTPException) as exc:
+        asyncio.run(
+            sessions.create_session(
+                sessions.CreateSessionBody(name="test", browserRuntime="cloak_chromium"),
+                _user(),
+            )
+        )
+
+    assert exc.value.status_code == 422
+    assert "Cloak Chromium runtime image is not built" in str(exc.value.detail)
+
+
+def test_create_session_accepts_cloak_runtime_with_runtime_image(monkeypatch):
+    pool = FakePool([])
+    captured = {}
+    monkeypatch.setattr(sessions, "get_pool", lambda: pool)
+    monkeypatch.setattr(sessions, "_generate_session_id", lambda: "session-1")
+
+    async def fake_runtime_command(cmd, timeout=30):
+        captured["runtime_check"] = cmd
+        return "[]", "", 0
+
+    async def fake_network(proxy_url, image_tag):
+        captured["image_tag"] = image_tag
+        return _network()
+
+    async def fake_generate_profile(tenant_id, browser_lang, chrome_version=None):
+        captured["chrome_version"] = chrome_version
+        return _profile(browser_lang)
+
+    monkeypatch.setattr(sessions, "run_runtime_command", fake_runtime_command)
+    monkeypatch.setattr(sessions, "_resolve_session_network", fake_network)
+    monkeypatch.setattr(sessions, "generate_profile", fake_generate_profile)
+
+    result = asyncio.run(
+        sessions.create_session(
+            sessions.CreateSessionBody(name="test", browserRuntime="cloak_chromium"),
+            _user(),
+        )
+    )
+
+    assert result["browserRuntime"] == "cloak_chromium"
+    assert result["chromeVersion"] is None
+    assert captured == {
+        "runtime_check": "docker image inspect browser-pilot-cloak:latest",
+        "image_tag": None,
+        "chrome_version": None,
+    }
+
+
 def test_change_proxy_endpoint_is_removed():
     assert not any(
         getattr(route, "path", "") == "/api/sessions/{session_id}/proxy"
@@ -489,6 +547,34 @@ def test_create_container_with_managed_egress_uses_gateway_namespace(monkeypatch
     assert "-e BROWSER_PROXY=http://127.0.0.1:7890" in commands[0]
 
 
+def test_create_container_cloak_runtime_uses_cloak_image_and_seed(monkeypatch):
+    commands = []
+    ports = iter([55100, 55101])
+
+    async def fake_run(cmd, timeout=30):
+        commands.append(cmd)
+        return "container-id", "", 0
+
+    monkeypatch.setattr(container, "_run", fake_run)
+    monkeypatch.setattr(container, "_find_free_port", lambda: next(ports))
+    monkeypatch.setattr(container, "ensure_docker_network", lambda: asyncio.sleep(0))
+    monkeypatch.setattr(container, "CLOAK_BROWSER_IMAGE_NAME", "browser-pilot-cloak:test")
+
+    asyncio.run(
+        container.create_container(
+            "session-1",
+            fingerprint_profile={"timezone": "Asia/Shanghai", "network": {"dnsServers": []}},
+            browser_runtime="cloak_chromium",
+        )
+    )
+
+    assert "browser-pilot-cloak:test" in commands[0]
+    assert "-e BP_BROWSER_RUNTIME=cloak_chromium" in commands[0]
+    assert "-e CLOAK_FINGERPRINT_SEED=bp_session1" in commands[0]
+    assert "-e BROWSER_TIMEZONE=Asia/Shanghai" in commands[0]
+    assert "-p 55100:4444" in commands[0]
+
+
 def test_get_container_ports_falls_back_to_session_gateway(monkeypatch):
     calls = []
 
@@ -538,7 +624,7 @@ def test_session_params_attach_declared_network_without_container_probe(monkeypa
     monkeypatch.setattr(container, "declared_network_profile", fake_declared_network)
     monkeypatch.setattr(container, "resolve_network_via_browser", fail_browser_network)
 
-    width, height, ua, proxy, fp_profile, lang, image_name = asyncio.run(
+    width, height, ua, proxy, fp_profile, lang, image_name, runtime = asyncio.run(
         container._session_container_params("session-1")
     )
 
@@ -547,6 +633,7 @@ def test_session_params_attach_declared_network_without_container_probe(monkeypa
     assert proxy is None
     assert lang == "zh-CN"
     assert image_name == "browser-pilot:test"
+    assert runtime == "standard_chrome"
     assert calls == {"proxy_url": None, "image_tag": "browser-pilot:test"}
     assert fp_profile["timezone"] == "Asia/Shanghai"
     assert pool.executed
@@ -562,7 +649,7 @@ def test_ensure_container_running_default_path_does_not_probe(monkeypatch):
         return "not_found"
 
     async def fake_params(session_id):
-        return 1920, 1080, "UA", None, profile, "zh-CN", "browser-pilot:test"
+        return 1920, 1080, "UA", None, profile, "zh-CN", "browser-pilot:test", "standard_chrome"
 
     async def fake_create(session_id, **kwargs):
         calls.append(("create", kwargs))
@@ -632,6 +719,7 @@ def test_recreate_container_default_path_does_not_probe(monkeypatch):
             width=1920,
             height=1080,
             fingerprint_profile={"network": _network("Asia/Shanghai", "CN")},
+            browser_runtime="standard_chrome",
         )
     )
 
@@ -647,6 +735,7 @@ def test_recreate_container_default_path_does_not_probe(monkeypatch):
             "fingerprint_profile": {"network": _network("Asia/Shanghai", "CN")},
             "browser_lang": "zh-CN",
             "image_name": None,
+            "browser_runtime": "standard_chrome",
         }),
         ("wait", 4444),
     ]

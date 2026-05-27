@@ -156,6 +156,7 @@ async function fetchSessions(): Promise<void> {
         networkEgressHealthError: s.networkEgressHealthError || '',
         fingerprintProfile: s.fingerprintProfile || local?.fingerprintProfile || null,
         browserLang: s.browserLang || 'zh-CN',
+        browserRuntime: s.browserRuntime || 'standard_chrome',
         activeLease: s.activeLease || null,
       }
     })
@@ -170,29 +171,42 @@ async function fetchSessions(): Promise<void> {
 const _LOCALE_TO_BROWSER_LANG: Record<string, string> = { zh: 'zh-CN', en: 'en-US' }
 
 async function fetchBrowserImages(): Promise<any[]> {
+  const data = await fetchBrowserImageState()
+  return (data.images || []).filter((i: any) => i.status === 'ready')
+}
+
+async function fetchBrowserImageState(): Promise<{ images: any[]; runtimeImages: any[] }> {
   try {
     const res = await api('/api/browser-images')
     const data = await res.json()
-    return (data.images || []).filter((i: any) => i.status === 'ready')
+    return {
+      images: data.images || [],
+      runtimeImages: data.runtimeImages || [],
+    }
   } catch {
-    return []
+    return { images: [], runtimeImages: [] }
   }
 }
 
-async function createSession(name?: string, chromeVersion?: string, networkEgressId?: string | null): Promise<Session> {
+async function createSession(
+  name?: string,
+  chromeVersion?: string,
+  networkEgressId?: string | null,
+  browserRuntime: 'standard_chrome' | 'cloak_chromium' = 'standard_chrome',
+): Promise<Session> {
   if (!name) name = i18n.global.t('session.defaultName')
   const browserLang = _LOCALE_TO_BROWSER_LANG[(i18n.global.locale as any).value] ?? 'en-US'
 
   let effectiveChromeVersion = chromeVersion
-  if (!effectiveChromeVersion) {
+  if (browserRuntime === 'standard_chrome' && !effectiveChromeVersion) {
     const readyImages = await fetchBrowserImages()
     if (readyImages.length > 0) {
       effectiveChromeVersion = readyImages[0].chromeVersion || String(readyImages[0].chromeMajor)
     }
   }
 
-  const body: Record<string, any> = { name, browserLang }
-  if (effectiveChromeVersion) body.chromeVersion = effectiveChromeVersion
+  const body: Record<string, any> = { name, browserLang, browserRuntime }
+  if (browserRuntime === 'standard_chrome' && effectiveChromeVersion) body.chromeVersion = effectiveChromeVersion
   if (networkEgressId) body.networkEgressId = networkEgressId
 
   const res = await api('/api/sessions', {
@@ -201,6 +215,9 @@ async function createSession(name?: string, chromeVersion?: string, networkEgres
     body: JSON.stringify(body),
   })
   const data = await res.json()
+  if (!res.ok) {
+    throw new Error(data?.detail || i18n.global.t('app.sessionCreateError'))
+  }
   const session: Session = {
     id: data.id,
     name: data.name,
@@ -219,6 +236,7 @@ async function createSession(name?: string, chromeVersion?: string, networkEgres
     networkEgressHealthError: data.networkEgressHealthError || '',
     fingerprintProfile: data.fingerprintProfile || null,
     browserLang: data.browserLang || browserLang,
+    browserRuntime: data.browserRuntime || browserRuntime,
     activeLease: data.agentDevice?.leaseId
       ? {
           id: data.agentDevice.leaseId,
@@ -596,5 +614,6 @@ export function useSessions() {
     syncObservedNetworkProfile,
     overrideNetworkProfile,
     fetchBrowserImages,
+    fetchBrowserImageState,
   }
 }

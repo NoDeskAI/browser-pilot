@@ -76,6 +76,7 @@ function manualCommandReferenceEn(c: string): string {
 ${c} session list                    # List all sessions
 ${c} session create --name "Task"    # Create session
 ${c} session create --name "Task" --network-egress <egress-id|direct> # Create with network egress
+${c} session create --name "Task" --runtime cloak_chromium # Create with Cloak Chromium runtime
 ${c} session use <session-id>        # Activate session
 ${c} session start <session-id>      # Start browser container
 ${c} session stop <session-id>       # Stop browser container
@@ -167,6 +168,7 @@ function manualCommandReferenceZh(c: string): string {
 ${c} session list                    # 列出所有会话
 ${c} session create --name "任务"    # 创建会话
 ${c} session create --name "任务" --network-egress <egress-id|direct> # 创建时指定网络出口
+${c} session create --name "任务" --runtime cloak_chromium # 使用 Cloak Chromium 运行时创建
 ${c} session use <session-id>        # 激活会话
 ${c} session start <session-id>      # 启动浏览器容器
 ${c} session stop <session-id>       # 停止浏览器容器
@@ -374,6 +376,7 @@ function agentCommandReferenceEn(c: string): string {
 ${c} session list --json                         # List all sessions
 ${c} session create --name "Task" --json         # Create session and read returned id
 ${c} session create --name "Task" --network-egress <egress-id|direct> --json # Create with network egress
+${c} session create --name "Task" --runtime cloak_chromium --json # Create with Cloak Chromium runtime
 ${c} --session "<session-id>" session start      # Start browser container
 ${c} --session "<session-id>" session stop       # Stop browser container
 ${c} --session "<session-id>" session set-network <egress-id|direct> # Switch network egress
@@ -462,6 +465,7 @@ function agentCommandReferenceZh(c: string): string {
 ${c} session list --json                         # 列出所有会话
 ${c} session create --name "任务" --json         # 创建会话并读取返回的 id
 ${c} session create --name "任务" --network-egress <egress-id|direct> --json # 创建时指定网络出口
+${c} session create --name "任务" --runtime cloak_chromium --json # 使用 Cloak Chromium 运行时创建
 ${c} --session "<session-id>" session start      # 启动浏览器容器
 ${c} --session "<session-id>" session stop       # 停止浏览器容器
 ${c} --session "<session-id>" session set-network <egress-id|direct> # 切换网络出口

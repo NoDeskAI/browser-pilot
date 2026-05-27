@@ -20,6 +20,7 @@ services:
       BROWSER_RUNTIME_BACKEND_URL: ${BROWSER_RUNTIME_BACKEND_URL:-http://host.docker.internal:8000}
       BROWSER_RUNTIME_CONTROL_URL: http://runtime-worker:8001
       BROWSER_RUNTIME_CONTROL_TOKEN: ${BROWSER_RUNTIME_CONTROL_TOKEN:?copy .env.example to .env and set BROWSER_RUNTIME_CONTROL_TOKEN}
+      CLOAK_BROWSER_IMAGE_NAME: ${CLOAK_BROWSER_IMAGE_NAME:-browser-pilot-cloak:latest}
       BP_LEGACY_DOCKER_DOWNLOAD_WATCHER: ${BP_LEGACY_DOCKER_DOWNLOAD_WATCHER:-false}
       NETWORK_EGRESS_DOCKER_NETWORK: ${NETWORK_EGRESS_DOCKER_NETWORK:-browser-pilot-net}
       NETWORK_EGRESS_CONFIG_DIR: ${NETWORK_EGRESS_CONFIG_DIR:-/app/data/network-egress}
@@ -57,7 +58,7 @@ services:
     environment:
       PROJECT_ROOT: /app
       BROWSER_RUNTIME_CONTROL_TOKEN: ${BROWSER_RUNTIME_CONTROL_TOKEN:?copy .env.example to .env and set BROWSER_RUNTIME_CONTROL_TOKEN}
-      BROWSER_RUNTIME_COMMAND_MAX_TIMEOUT: ${BROWSER_RUNTIME_COMMAND_MAX_TIMEOUT:-900}
+      BROWSER_RUNTIME_COMMAND_MAX_TIMEOUT: ${BROWSER_RUNTIME_COMMAND_MAX_TIMEOUT:-3600}
       NETWORK_EGRESS_CONFIG_DIR: ${NETWORK_EGRESS_CONFIG_DIR:-/app/data/network-egress}
       NETWORK_EGRESS_DOCKER_NETWORK: ${NETWORK_EGRESS_DOCKER_NETWORK:-browser-pilot-net}
       NETWORK_EGRESS_CLASH_IMAGE: ${NETWORK_EGRESS_CLASH_IMAGE:-ghcr.io/metacubex/mihomo:latest}
@@ -125,6 +126,12 @@ services:
       args:
         BASE_IMAGE: ${SELENIUM_BASE_IMAGE:-selenium/standalone-chrome:latest}
     image: ${SELENIUM_IMAGE_NAME:-browser-pilot-selenium}
+    profiles: ["build"]
+
+  cloak:
+    build:
+      context: ./services/cloak-chromium-runtime
+    image: ${CLOAK_BROWSER_IMAGE_NAME:-browser-pilot-cloak:latest}
     profiles: ["build"]
 
 volumes:

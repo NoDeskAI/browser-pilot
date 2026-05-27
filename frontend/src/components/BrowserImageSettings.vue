@@ -28,6 +28,30 @@ interface BrowserImage {
   buildLog: string
   createdAt: string | null
   sessionCount: number
+  buildProgress?: BuildProgress
+}
+
+interface BuildProgress {
+  stage: string
+  progress: number
+  elapsedSeconds: number
+  startedAt: string | null
+  updatedAt: string | null
+  log: string
+  manualCommand: string
+  indeterminate: boolean
+}
+
+interface RuntimeImage {
+  id: string
+  runtime: string
+  name: string
+  imageTag: string
+  baseImage: string
+  status: string
+  buildLog: string
+  createdAt: string | null
+  buildProgress?: BuildProgress
 }
 
 interface AvailableVersion {
@@ -36,6 +60,7 @@ interface AvailableVersion {
 }
 
 const images = ref<BrowserImage[]>([])
+const runtimeImages = ref<RuntimeImage[]>([])
 const loading = ref(false)
 const showBuildDialog = ref(false)
 const buildVersion = ref('')
@@ -60,6 +85,8 @@ const builtMajors = computed(() => {
   return map
 })
 
+const cloakRuntimeImage = computed(() => runtimeImages.value.find(i => i.runtime === 'cloak_chromium') || null)
+
 const filteredVersions = computed(() => {
   const q = searchQuery.value.trim()
   if (!q) return availableVersions.value
@@ -72,7 +99,11 @@ async function fetchImages() {
     const res = await api('/api/browser-images')
     const data = await res.json()
     images.value = data.images || []
-    if (images.value.some(i => i.status === 'building' || i.status === 'pending')) {
+    runtimeImages.value = data.runtimeImages || []
+    if (
+      images.value.some(i => i.status === 'building' || i.status === 'pending') ||
+      runtimeImages.value.some(i => i.status === 'building' || i.status === 'pending')
+    ) {
       startPolling()
     }
   } catch {
@@ -113,6 +144,7 @@ function startPolling() {
   stopPolling()
   pollTimer = setInterval(async () => {
     const hasBuilding = images.value.some(i => i.status === 'building' || i.status === 'pending')
+      || runtimeImages.value.some(i => i.status === 'building' || i.status === 'pending')
     if (!hasBuilding) {
       stopPolling()
       return
@@ -144,6 +176,29 @@ async function handleBuild() {
     }
     toast.success(t('browserImages.buildStarted'))
     showBuildDialog.value = false
+    await fetchImages()
+    startPolling()
+  } catch (e: any) {
+    toast.error(e?.message || 'Build failed')
+  } finally {
+    building.value = false
+  }
+}
+
+async function handleBuildCloak() {
+  building.value = true
+  try {
+    const res = await api('/api/browser-images/build', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ runtime: 'cloak_chromium' }),
+    })
+    if (!res.ok) {
+      const data = await res.json().catch(() => null)
+      toast.error(data?.detail || 'Build failed')
+      return
+    }
+    toast.success(t('browserImages.cloakBuildStarted'))
     await fetchImages()
     startPolling()
   } catch (e: any) {
@@ -188,6 +243,23 @@ function statusLabel(status: string) {
   return t(key, status)
 }
 
+function stageLabel(stage?: string) {
+  const key = `browserImages.stage.${stage || 'unknown'}` as any
+  return t(key, stage || 'unknown')
+}
+
+function formatElapsed(seconds?: number) {
+  const total = Math.max(0, Number(seconds || 0))
+  const mins = Math.floor(total / 60)
+  const secs = total % 60
+  if (mins <= 0) return `${secs}s`
+  return `${mins}m ${String(secs).padStart(2, '0')}s`
+}
+
+function progressValue(progress?: BuildProgress) {
+  return Math.max(0, Math.min(100, Math.round(progress?.progress || 0)))
+}
+
 onMounted(() => {
   fetchImages()
 })
@@ -211,6 +283,69 @@ onUnmounted(stopPolling)
       </div>
     </CardHeader>
     <CardContent>
+      <div v-if="cloakRuntimeImage" class="mb-6 rounded-lg border p-4">
+        <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div class="min-w-0">
+            <div class="flex items-center gap-2">
+              <div class="font-medium">{{ t('browserImages.cloakRuntime') }}</div>
+              <TooltipProvider v-if="cloakRuntimeImage.status === 'failed' && cloakRuntimeImage.buildLog">
+                <Tooltip>
+                  <TooltipTrigger as-child>
+                    <Badge :variant="statusVariant(cloakRuntimeImage.status) as any" class="cursor-help">
+                      {{ statusLabel(cloakRuntimeImage.status) }}
+                    </Badge>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom" class="max-w-xs text-xs whitespace-pre-wrap">{{ cloakRuntimeImage.buildLog }}</TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+              <Badge v-else :variant="statusVariant(cloakRuntimeImage.status) as any">
+                {{ statusLabel(cloakRuntimeImage.status) }}
+              </Badge>
+            </div>
+            <div class="mt-1 text-xs text-muted-foreground">
+              {{ t('browserImages.cloakDescription') }}
+            </div>
+            <div class="mt-2 truncate font-mono text-xs text-muted-foreground">
+              {{ cloakRuntimeImage.imageTag }}
+            </div>
+            <div
+              v-if="cloakRuntimeImage.buildProgress && (cloakRuntimeImage.status === 'building' || cloakRuntimeImage.status === 'pending' || cloakRuntimeImage.status === 'failed')"
+              class="mt-3 max-w-xl space-y-1.5"
+            >
+              <div class="flex items-center justify-between gap-3 text-xs text-muted-foreground">
+                <span>{{ stageLabel(cloakRuntimeImage.buildProgress.stage) }}</span>
+                <span>
+                  {{ progressValue(cloakRuntimeImage.buildProgress) }}%
+                  · {{ formatElapsed(cloakRuntimeImage.buildProgress.elapsedSeconds) }}
+                </span>
+              </div>
+              <div class="h-2 overflow-hidden rounded-full bg-muted">
+                <div
+                  class="h-full rounded-full bg-primary transition-all"
+                  :class="cloakRuntimeImage.buildProgress.indeterminate && 'animate-pulse'"
+                  :style="{ width: `${progressValue(cloakRuntimeImage.buildProgress)}%` }"
+                />
+              </div>
+              <div v-if="cloakRuntimeImage.status === 'failed' && cloakRuntimeImage.buildProgress.manualCommand" class="text-xs text-muted-foreground">
+                {{ t('browserImages.manualBuildHint') }}
+                <code class="rounded bg-muted px-1 py-0.5 font-mono">{{ cloakRuntimeImage.buildProgress.manualCommand }}</code>
+              </div>
+            </div>
+          </div>
+          <Button
+            v-if="isAdmin"
+            size="sm"
+            :disabled="building || cloakRuntimeImage.status === 'ready' || cloakRuntimeImage.status === 'building' || cloakRuntimeImage.status === 'pending'"
+            @click="handleBuildCloak"
+          >
+            <Loader2
+              v-if="building || cloakRuntimeImage.status === 'building' || cloakRuntimeImage.status === 'pending'"
+              class="size-4 animate-spin"
+            />
+            {{ cloakRuntimeImage.status === 'ready' ? t('browserImages.ready') : t('browserImages.buildCloak') }}
+          </Button>
+        </div>
+      </div>
       <div v-if="images.length === 0 && !loading" class="text-center text-muted-foreground py-8">
         {{ t('browserImages.noImages') }}
       </div>
@@ -243,6 +378,22 @@ onUnmounted(stopPolling)
                 </Tooltip>
               </TooltipProvider>
               <Badge v-else :variant="statusVariant(img.status) as any">{{ statusLabel(img.status) }}</Badge>
+              <div
+                v-if="img.buildProgress && (img.status === 'building' || img.status === 'pending')"
+                class="mt-2 w-40 space-y-1"
+              >
+                <div class="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
+                  <span>{{ stageLabel(img.buildProgress.stage) }}</span>
+                  <span>{{ progressValue(img.buildProgress) }}%</span>
+                </div>
+                <div class="h-1.5 overflow-hidden rounded-full bg-muted">
+                  <div
+                    class="h-full rounded-full bg-primary transition-all"
+                    :class="img.buildProgress.indeterminate && 'animate-pulse'"
+                    :style="{ width: `${progressValue(img.buildProgress)}%` }"
+                  />
+                </div>
+              </div>
             </TableCell>
             <TableCell class="text-xs text-muted-foreground font-mono">{{ img.baseImage }}</TableCell>
             <TableCell class="text-xs text-muted-foreground">

@@ -9,8 +9,8 @@ from typing import Any
 
 import httpx
 
-from app.config import DOCKER_HOST_ADDR
-from app.container import ensure_container_running
+from app.config import BROWSER_HOME_URL, DOCKER_HOST_ADDR
+from app.container import BROWSER_RUNTIME_CLOAK, BROWSER_RUNTIME_STANDARD, ensure_container_running
 from app.db import get_pool
 from app.device_presets import get_preset, DEFAULT_PRESET
 from app.fingerprint import user_agent_metadata
@@ -70,6 +70,26 @@ class BrowserSession:
 
 
 _sessions: dict[str, BrowserSession] = {}
+
+
+_START_PAGE_PREFIXES = (
+    "",
+    "about:blank",
+    "chrome://new-tab-page",
+    "chrome://newtab",
+    "edge://newtab",
+)
+
+
+def _is_start_page_url(url: str | None) -> bool:
+    normalized = (url or "").strip().lower().rstrip("/")
+    if not normalized:
+        return True
+    return any(
+        normalized == prefix.rstrip("/") or normalized.startswith(f"{prefix.rstrip('/')}/")
+        for prefix in _START_PAGE_PREFIXES
+        if prefix
+    )
 
 
 async def wd_fetch(
@@ -318,8 +338,12 @@ async def ensure_session(chat_session_id: str) -> tuple[str, str]:
     try:
         pool = get_pool()
         row = await pool.fetchrow(
-            "SELECT device_preset, fingerprint_profile FROM sessions WHERE id = $1", chat_session_id,
+            "SELECT device_preset, fingerprint_profile, COALESCE(browser_runtime, 'standard_chrome') AS browser_runtime FROM sessions WHERE id = $1",
+            chat_session_id,
         )
+        browser_runtime = (row["browser_runtime"] if row else None) or BROWSER_RUNTIME_STANDARD
+        if browser_runtime == BROWSER_RUNTIME_CLOAK:
+            return sid, bs.selenium_base
         preset_id = (row["device_preset"] if row else None) or DEFAULT_PRESET
         preset_data = get_preset(preset_id)
         await _inject_device_emulation(sid, preset_data, base_url=bs.selenium_base)
@@ -339,6 +363,31 @@ async def ensure_session(chat_session_id: str) -> tuple[str, str]:
         logger.debug("Device emulation / stealth inject skipped: %s", exc)
 
     return sid, bs.selenium_base
+
+
+async def ensure_homepage(chat_session_id: str, home_url: str | None = None) -> dict[str, Any]:
+    """Create the browser control session and land blank/new-tab pages on the configured home URL."""
+    target_url = (home_url or BROWSER_HOME_URL or "").strip()
+    if not target_url:
+        return {"ok": True, "navigated": False, "reason": "home_url_disabled"}
+
+    try:
+        sid, base_url = await ensure_session(chat_session_id)
+        current_url = await wd_fetch(f"/session/{sid}/url", timeout=8, base_url=base_url)
+        if not _is_start_page_url(str(current_url or "")):
+            return {"ok": True, "navigated": False, "url": current_url}
+        await wd_fetch(
+            f"/session/{sid}/url",
+            "POST",
+            {"url": target_url},
+            timeout=30,
+            base_url=base_url,
+        )
+        logger.info("Session %s home page initialized: %s", chat_session_id, target_url)
+        return {"ok": True, "navigated": True, "url": target_url}
+    except Exception as exc:
+        logger.warning("Session %s home page initialization skipped: %s", chat_session_id, exc)
+        return {"ok": False, "navigated": False, "error": str(exc)}
 
 
 async def switch_to_latest_tab(sid: str, *, base_url: str) -> None:

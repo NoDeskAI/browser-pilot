@@ -18,6 +18,8 @@ from app import db
 from app import agent_devices
 from app.auth.dependencies import CurrentUser, get_current_user, get_session_aware_user, require_role, verify_session_access
 from app.container import (
+    BROWSER_RUNTIME_CLOAK,
+    BROWSER_RUNTIME_STANDARD,
     ensure_container_running,
     exec_in_container,
     get_all_container_statuses,
@@ -30,6 +32,7 @@ from app.container import (
     sync_fingerprint_profile_to_container,
     stop_container,
 )
+from app.config import CLOAK_BROWSER_IMAGE_NAME
 from app.db import get_pool
 from app.device_presets import DEVICE_PRESETS, DEFAULT_PRESET, get_preset
 from app.download_watcher import configure_download_behavior, start_download_watcher, stop_download_watcher
@@ -45,6 +48,7 @@ from app.network_egress import (
     EffectiveEgress,
     resolve_egress,
 )
+from app.runtime_control import run_runtime_command
 
 logger = logging.getLogger("routes.sessions")
 router = APIRouter()
@@ -111,6 +115,7 @@ class CreateSessionBody(BaseModel):
     networkEgressId: str | None = None
     browserLang: str = "zh-CN"
     chromeVersion: str | None = None
+    browserRuntime: Literal["standard_chrome", "cloak_chromium"] = "standard_chrome"
 
 
 class UpdateSessionBody(BaseModel):
@@ -192,6 +197,21 @@ async def _resolve_browser_image(pool, tenant_id: str, requested: str | None):
     if row:
         return row
     raise HTTPException(422, "No browser images available. Please build one first in Settings > Browser Images.")
+
+
+async def _ensure_cloak_runtime_image() -> None:
+    _, stderr, rc = await run_runtime_command(
+        f"docker image inspect {CLOAK_BROWSER_IMAGE_NAME}",
+        timeout=20,
+    )
+    if rc != 0:
+        detail = (
+            "Cloak Chromium runtime image is not built. "
+            "Open Settings > Browser Images and build the Cloak Chromium runtime image first."
+        )
+        if stderr:
+            detail += f" Docker said: {stderr[:160]}"
+        raise HTTPException(422, detail)
 
 
 def _egress_payload(effective: EffectiveEgress) -> dict:
@@ -280,10 +300,12 @@ async def _resolve_session_image(session_id: str) -> str | None:
     """Look up the image_tag for a session from browser_images."""
     pool = get_pool()
     row = await pool.fetchrow(
-        "SELECT chrome_version, tenant_id FROM sessions WHERE id = $1", session_id,
+        "SELECT chrome_version, tenant_id, COALESCE(browser_runtime, 'standard_chrome') AS browser_runtime FROM sessions WHERE id = $1", session_id,
     )
     if not row:
         return None
+    if _row_get(row, "browser_runtime", BROWSER_RUNTIME_STANDARD) == BROWSER_RUNTIME_CLOAK:
+        return CLOAK_BROWSER_IMAGE_NAME
     if row["chrome_version"] and row["tenant_id"]:
         img_row = await pool.fetchrow(
             "SELECT image_tag FROM browser_images "
@@ -455,6 +477,22 @@ async def _with_runtime_health(
         return fingerprint_profile
 
     profile = dict(fingerprint_profile)
+    try:
+        row = await get_pool().fetchrow(
+            "SELECT COALESCE(browser_runtime, 'standard_chrome') AS browser_runtime FROM sessions WHERE id = $1",
+            session_id,
+        )
+        if _row_get(row, "browser_runtime", BROWSER_RUNTIME_STANDARD) == BROWSER_RUNTIME_CLOAK:
+            profile["runtimeHealth"] = {
+                "agent": "cloak_chromium",
+                "ok": True,
+                "status": "managed_by_cloak_runtime",
+                "warnings": [],
+            }
+            return profile
+    except Exception:
+        pass
+
     health = await _read_fingerprint_health(session_id)
     if not health:
         return profile
@@ -498,6 +536,7 @@ async def list_sessions(user: CurrentUser = Depends(get_current_user)):
         rows = await pool.fetch("""
             SELECT s.id, s.name, s.created_at, s.updated_at, s.current_url, s.current_title,
                    s.device_preset, s.proxy_url, s.network_egress_id, s.user_id,
+                   COALESCE(s.browser_runtime, 'standard_chrome') AS browser_runtime,
                    s.fingerprint_profile, s.browser_lang,
                    e.name AS network_egress_name,
                    e.type AS network_egress_type,
@@ -528,6 +567,7 @@ async def list_sessions(user: CurrentUser = Depends(get_current_user)):
         rows = await pool.fetch("""
             SELECT s.id, s.name, s.created_at, s.updated_at, s.current_url, s.current_title,
                    s.device_preset, s.proxy_url, s.network_egress_id, s.user_id,
+                   COALESCE(s.browser_runtime, 'standard_chrome') AS browser_runtime,
                    s.fingerprint_profile, s.browser_lang,
                    e.name AS network_egress_name,
                    e.type AS network_egress_type,
@@ -594,6 +634,7 @@ async def list_sessions(user: CurrentUser = Depends(get_current_user)):
             "proxyUrl": _session_proxy_url(r),
             "fingerprintProfile": fp_response,
             "browserLang": r["browser_lang"] or "zh-CN",
+            "browserRuntime": _row_get(r, "browser_runtime", BROWSER_RUNTIME_STANDARD) or BROWSER_RUNTIME_STANDARD,
             "activeLease": _active_lease_payload_from_row(r),
             "fileCapture": await _file_capture_payload(sid, container_status=container_status),
             **egress_payload,
@@ -621,9 +662,14 @@ async def create_session(body: CreateSessionBody, user: CurrentUser = Depends(ge
     preset_id = body.devicePreset if body.devicePreset in DEVICE_PRESETS else DEFAULT_PRESET
     safe_lang = re.sub(r"[^a-zA-Z0-9_-]", "", body.browserLang or "zh-CN") or "zh-CN"
 
-    row_img = await _resolve_browser_image(pool, user.tenant_id, body.chromeVersion)
-    resolved_chrome_version: str | None = row_img["chrome_version"]
-    resolved_image_tag: str | None = row_img["image_tag"]
+    if body.browserRuntime == BROWSER_RUNTIME_CLOAK:
+        await _ensure_cloak_runtime_image()
+        resolved_chrome_version = None
+        resolved_image_tag = None
+    else:
+        row_img = await _resolve_browser_image(pool, user.tenant_id, body.chromeVersion)
+        resolved_chrome_version = row_img["chrome_version"]
+        resolved_image_tag = row_img["image_tag"]
 
     try:
         effective_egress = await resolve_egress(
@@ -660,8 +706,8 @@ async def create_session(body: CreateSessionBody, user: CurrentUser = Depends(ge
                 """
                 INSERT INTO sessions
                     (id, name, device_preset, proxy_url, network_egress_id, tenant_id, user_id,
-                     fingerprint_profile, browser_lang, chrome_version)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10)
+                     fingerprint_profile, browser_lang, chrome_version, browser_runtime)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11)
                 """,
                 session_id,
                 body.name,
@@ -673,6 +719,7 @@ async def create_session(body: CreateSessionBody, user: CurrentUser = Depends(ge
                 fp_profile,
                 safe_lang,
                 resolved_chrome_version,
+                body.browserRuntime,
             )
             break
         except asyncpg.exceptions.UniqueViolationError as exc:
@@ -695,6 +742,7 @@ async def create_session(body: CreateSessionBody, user: CurrentUser = Depends(ge
             "fingerprintProfile": fp_profile,
             "browserLang": safe_lang,
             "chromeVersion": resolved_chrome_version,
+            "browserRuntime": body.browserRuntime,
             **_egress_payload(effective_egress),
         },
         device_id=session_id,
@@ -716,6 +764,7 @@ async def get_session(session_id: str, user: CurrentUser = Depends(get_session_a
         """
         SELECT s.id, s.name, s.created_at, s.updated_at, s.current_url, s.current_title,
                s.device_preset, s.proxy_url, s.network_egress_id, s.fingerprint_profile, s.browser_lang,
+               COALESCE(s.browser_runtime, 'standard_chrome') AS browser_runtime,
                e.name AS network_egress_name,
                e.type AS network_egress_type,
                e.status AS network_egress_status,
@@ -757,6 +806,7 @@ async def get_session(session_id: str, user: CurrentUser = Depends(get_session_a
         "proxyUrl": _session_proxy_url(row),
         "fingerprintProfile": fp_response,
         "browserLang": row["browser_lang"] or "zh-CN",
+        "browserRuntime": _row_get(row, "browser_runtime", BROWSER_RUNTIME_STANDARD) or BROWSER_RUNTIME_STANDARD,
         "fileCapture": await _file_capture_payload(session_id, container_status=container_status),
         **egress_payload,
     }
@@ -822,6 +872,9 @@ async def start_session_container(session_id: str, user: CurrentUser = Depends(g
     try:
         ports = await ensure_container_running(session_id)
         await _activate_file_capture(session_id)
+        from app.tools.browser.session import ensure_homepage
+
+        home_page = await ensure_homepage(session_id)
         pool = get_pool()
         row = await pool.fetchrow(
             """
@@ -846,11 +899,12 @@ async def start_session_container(session_id: str, user: CurrentUser = Depends(g
             {
                 "ok": True,
                 "ports": ports,
+                "homePage": home_page,
                 "fingerprintProfile": fp,
                 "fileCapture": await _file_capture_payload(session_id, container_status="running"),
             },
             summary="Started browser container",
-            details={"ports": ports},
+            details={"ports": ports, "homePage": home_page},
         )
     except Exception as exc:
         logger.error("Container start failed for %s: %s", session_id, exc)
@@ -1093,7 +1147,7 @@ async def regenerate_fingerprint(session_id: str, body: FingerprintActionBody, u
     await _verify_session_tenant(session_id, user)
     pool = get_pool()
     row = await pool.fetchrow(
-        "SELECT device_preset, proxy_url, network_egress_id, browser_lang, chrome_version, tenant_id FROM sessions WHERE id = $1",
+        "SELECT device_preset, proxy_url, network_egress_id, browser_lang, chrome_version, tenant_id, COALESCE(browser_runtime, 'standard_chrome') AS browser_runtime FROM sessions WHERE id = $1",
         session_id,
     )
     if not row:
@@ -1112,7 +1166,7 @@ async def regenerate_fingerprint(session_id: str, body: FingerprintActionBody, u
         fp_profile = await generate_profile(
             user.tenant_id,
             browser_lang=row["browser_lang"] or "zh-CN",
-            chrome_version=row["chrome_version"],
+            chrome_version=None if _row_get(row, "browser_runtime", BROWSER_RUNTIME_STANDARD) == BROWSER_RUNTIME_CLOAK else row["chrome_version"],
         )
     except PoolEmptyError as exc:
         return {"ok": False, "error": f"Pool group '{exc.group}' has no enabled entries"}

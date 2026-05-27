@@ -149,7 +149,9 @@ This starts PostgreSQL and bundled S3-compatible object storage in Docker, initi
 | `BROWSER_RUNTIME_BACKEND_URL` | `http://host.docker.internal:8000` | Backend URL injected into browser runtime agents for internal file ingest callbacks. |
 | `BROWSER_RUNTIME_CONTROL_URL` | — | Optional internal runtime-worker URL. Docker Compose sets this to `http://runtime-worker:8001` so the public backend does not mount Docker socket directly. |
 | `BROWSER_RUNTIME_CONTROL_TOKEN` | — | Shared bearer token used between backend and runtime-worker. Set a long random value before production/public deployment. |
-| `BROWSER_RUNTIME_COMMAND_MAX_TIMEOUT` | `900` | Maximum timeout, in seconds, accepted for runtime-worker Docker commands. |
+| `BROWSER_RUNTIME_COMMAND_MAX_TIMEOUT` | `3600` | Maximum timeout, in seconds, accepted for runtime-worker Docker commands. Large first-time runtime image builds can need a longer timeout. |
+| `CLOAK_BROWSER_IMAGE_NAME` | `browser-pilot-cloak:latest` | Optional Cloak Chromium runtime image used by sessions created with `browserRuntime=cloak_chromium`. |
+| `BROWSER_HOME_URL` | `https://www.google.com/` | Home page opened automatically when a newly started browser is still on a blank/new-tab page. Set empty to disable. |
 | `BP_LEGACY_DOCKER_DOWNLOAD_WATCHER` | `false` | Temporary fallback for old Selenium images without `file-capture-agent`. When enabled, backend uses Docker copy commands and reports a degraded warning. |
 | `OPENAI_API_KEY`      | —                                                              | Optional. When set, uses LLM to auto-name sessions on first navigation. Without it, sessions are named by page title.              |
 | `LOG_LEVEL`           | `INFO`                                                         | Backend log verbosity. Set to `DEBUG` for troubleshooting.                                                                         |
@@ -175,6 +177,31 @@ Session files are managed through the backend FileStore. Users and session-scope
 Browser Pilot runs Alembic migrations automatically when the backend starts. Normal upgrades only require restarting the new version; users do not need to run migration commands manually.
 
 If migration fails, the backend keeps `/healthz` alive but reports `/readyz` as unavailable and the frontend shows the database update error. Downgrades do not automatically roll back schema changes; use an app version compatible with the current database or restore a matching backup.
+
+### Browser Runtimes
+
+Sessions default to `standard_chrome`, which uses the existing Selenium Chrome container and full Browser Pilot feature set. For sites with stricter browser automation checks, create a session with `browserRuntime=cloak_chromium` or use:
+
+```bash
+bpilot session create --name "Cloak test" --runtime cloak_chromium
+```
+
+The Cloak runtime is optional and uses a separate `browser-pilot-cloak:latest` image. Build it before first use:
+
+```bash
+docker compose --profile build build cloak
+```
+
+The first Cloak build may spend most of its time pulling `cloakhq/cloakbrowser:latest`. If the UI build appears slow or your network is unreliable, you can pre-build the same image in a terminal and then refresh **Settings > Browser Images**:
+
+```bash
+docker pull cloakhq/cloakbrowser:latest
+docker build -t browser-pilot-cloak:latest services/cloak-chromium-runtime
+```
+
+The browser image settings page reports the current build stage, elapsed time, and an estimated progress percentage. The percentage is an estimate because Docker does not expose portable layer-level progress through the runtime-worker command API.
+
+Cloak Chromium keeps the same Browser Pilot API surface and noVNC port shape (`4444` control, `7900` noVNC) through a lightweight WebDriver-compatible shim. It is intended for authorized automation, testing, and self-owned account workflows; it does not solve CAPTCHAs and does not guarantee bypassing every anti-bot system.
 
 ### Network Egress
 

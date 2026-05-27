@@ -252,22 +252,29 @@ cmd_session_list() {
 }
 
 cmd_session_create() {
-  local name="新会话" network_egress_set=false network_egress_id=""
+  local name="新会话" network_egress_set=false network_egress_id="" runtime="standard_chrome"
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --name|-n)
-        [[ -n "${2:-}" ]] || { echo "Usage: $CLI_NAME session create [--name <n>] [--network-egress <egress-id|direct>]"; exit 1; }
+        [[ -n "${2:-}" ]] || { echo "Usage: $CLI_NAME session create [--name <n>] [--network-egress <egress-id|direct>] [--runtime <standard_chrome|cloak_chromium>]"; exit 1; }
         name="$2"; shift 2 ;;
       --network-egress)
-        [[ -n "${2:-}" ]] || { echo "Usage: $CLI_NAME session create [--name <n>] [--network-egress <egress-id|direct>]"; exit 1; }
+        [[ -n "${2:-}" ]] || { echo "Usage: $CLI_NAME session create [--name <n>] [--network-egress <egress-id|direct>] [--runtime <standard_chrome|cloak_chromium>]"; exit 1; }
         network_egress_set=true
         network_egress_id="$2"
+        shift 2 ;;
+      --runtime)
+        [[ -n "${2:-}" ]] || { echo "Usage: $CLI_NAME session create [--name <n>] [--network-egress <egress-id|direct>] [--runtime <standard_chrome|cloak_chromium>]"; exit 1; }
+        case "$2" in
+          standard_chrome|cloak_chromium) runtime="$2" ;;
+          *) echo "Invalid runtime: $2 (expected standard_chrome or cloak_chromium)"; exit 1 ;;
+        esac
         shift 2 ;;
       *) echo "Unknown session create option: $1"; exit 1 ;;
     esac
   done
   local body resp
-  body="{\"name\":\"$(_esc "$name")\""
+  body="{\"name\":\"$(_esc "$name")\",\"browserRuntime\":\"$runtime\""
   if $network_egress_set; then
     body="$body,\"networkEgressId\":$(_egress_json_value "$network_egress_id")"
   fi
@@ -841,7 +848,7 @@ Environment:
 
 Sessions:
   session list                 List all sessions
-  session create [--name <n>] [--network-egress <id|direct>]
+  session create [--name <n>] [--network-egress <id|direct>] [--runtime <standard_chrome|cloak_chromium>]
                                Create a new session
   session use <id>             Set active session
   session start <id>           Start browser container

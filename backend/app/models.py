@@ -82,6 +82,9 @@ class Session(Base):
     )
     proxy_url: Mapped[str | None] = mapped_column(Text, server_default="")
     network_egress_id: Mapped[str | None] = mapped_column(Text)
+    browser_runtime: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default="standard_chrome"
+    )
     tenant_id: Mapped[str | None] = mapped_column(Text)
     user_id: Mapped[str | None] = mapped_column(Text)
 
