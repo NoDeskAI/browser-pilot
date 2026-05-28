@@ -192,20 +192,24 @@ def test_browser_fontconfig_and_stealth_use_windows_allowlist():
     assert 'data["exited_cleanly"] = True' in start
     assert "--hide-crash-restore-bubble" in start
     assert 'REQUESTED_GL_MODE="${BROWSER_GL_MODE:-auto}"' in start
-    assert 'GL_ARGS=("--enable-webgl")' in start
-    assert 'auto|"")\n    GL_MODE="swiftshader"' in start
+    assert 'GL_ARGS=("--enable-webgl" "--enable-webgl2")' in start
+    assert 'GL_MODE="angle-swiftshader"' in start
+    assert 'native|egl|swiftshader|angle|angle-swiftshader)' in start
     assert 'WARN: unsupported BROWSER_GL_MODE=$REQUESTED_GL_MODE, falling back to auto' in start
     assert '--use-gl=swiftshader' in start
+    assert '--use-gl=angle' in start
+    assert '--use-angle=swiftshader' in start
     assert '--enable-unsafe-swiftshader' in start
     assert '--ignore-gpu-blocklist' in start
     assert "/tmp/browser-gl-mode.json" in start
-    assert "--use-gl=angle" not in start
     assert "--use-angle=gl-egl" not in start
     assert "--disable-gpu-driver-bug-workarounds" not in start
     agent = (root / "services/selenium-chrome/cdp-fingerprint-agent.py").read_text()
     assert "webgl.contextAvailable" in agent
+    assert "webgl2.contextAvailable" in agent
     assert "webgl.rendererSpoofMatched" in agent
     assert "webgl_runtime_unavailable" in agent
+    assert "webgl2_runtime_unavailable" in agent
     assert "webgl_spoof_mismatch" in agent
     assert "def _is_safe_active_health_url" in agent
     assert 'value in {"about:blank", "about:srcdoc"}' in agent

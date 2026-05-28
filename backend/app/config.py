@@ -51,6 +51,7 @@ BP_LEGACY_DOCKER_DOWNLOAD_WATCHER = _env("BP_LEGACY_DOCKER_DOWNLOAD_WATCHER", ""
 APP_TITLE = _env("APP_TITLE", "Browser Pilot")
 CLI_COMMAND_NAME = _env("CLI_COMMAND_NAME", "bpilot")
 CONTAINER_PREFIX = _env("CONTAINER_PREFIX", "bp")
+BROWSER_GL_MODE = _env("BROWSER_GL_MODE", "auto")
 
 # --- Bundled S3-compatible storage bootstrap ---
 

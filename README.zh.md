@@ -140,6 +140,7 @@ cp .env.example .env
 | `MINIO_ENDPOINT`      | `start.sh` 使用 `http://localhost:9000`；Docker Compose 使用 `http://minio:9000` | 后端访问内置 MinIO/S3 服务的 endpoint。                               |
 | `MINIO_PUBLIC_ENDPOINT` | Docker Compose 默认 `http://localhost:9000`                   | 写入 S3 签名下载 URL 的公网 endpoint，必须能被浏览器和 CLI 客户端访问。              |
 | `SELENIUM_BASE_IMAGE` | `selenium/standalone-chrome:latest`                            | 浏览器容器基础镜像。ARM 用户使用 `seleniarm/standalone-chromium:latest`             |
+| `BROWSER_GL_MODE`     | `auto`                                                         | 浏览器 WebGL 运行模式：`auto`、`swiftshader`、`angle-swiftshader`、`angle`、`egl` 或 `native`。ARM Chromium 下 `auto` 会解析为 `angle-swiftshader`，其他环境为 `swiftshader`。 |
 | `DOCKER_HOST_ADDR`    | `localhost`                                                    | 后端访问浏览器容器的地址。Docker 部署时设为 `host.docker.internal`（docker-compose 自动配置） |
 | `BROWSER_RUNTIME_BACKEND_URL` | `http://host.docker.internal:8000` | 注入浏览器 runtime agent 的后端地址，用于回传文件 ingest API。 |
 | `BROWSER_RUNTIME_CONTROL_URL` | — | 可选的内部 runtime-worker 地址。Docker Compose 会设为 `http://runtime-worker:8001`，使公网后端不再直接挂载 Docker socket。 |

@@ -24,11 +24,18 @@ RUN sed -i 's|http://archive.ubuntu.com/ubuntu/|http://mirrors.aliyun.com/ubuntu
     && apt-get -o Acquire::Retries=5 update \
     && apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
        xdotool xclip python3-websocket \
-       libegl-mesa0 libegl1 \
+       libegl-mesa0 libegl1 libgles2 libgl1-mesa-dri \
        fonts-croscore fonts-crosextra-carlito fonts-crosextra-caladea \
        fonts-noto-cjk \
        fontconfig \
     && rm -rf /var/lib/apt/lists/*
+RUN set -eux; \
+    for libdir in /usr/lib/aarch64-linux-gnu /usr/lib/x86_64-linux-gnu /usr/lib/arm-linux-gnueabihf; do \
+      if [ -d "$libdir" ] && [ ! -e "$libdir/libGLESv2.so.2" ] && [ -e /usr/lib/chromium/libGLESv2.so ]; then \
+        ln -s /usr/lib/chromium/libGLESv2.so "$libdir/libGLESv2.so.2"; \
+      fi; \
+    done; \
+    ldconfig
 COPY fonts-local.conf /etc/fonts/local.conf
 COPY browser-fontconfig.conf /opt/browser-fontconfig/fonts.conf
 RUN mkdir -p /tmp/browser-fontconfig-cache && chmod 1777 /tmp/browser-fontconfig-cache \

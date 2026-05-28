@@ -497,6 +497,7 @@ def test_create_container_passes_profile_dns_to_docker(monkeypatch):
     assert "--dns 119.29.29.29" in commands[0]
     assert "-p 55100:4444" in commands[0]
     assert "-p 55101:7900" in commands[0]
+    assert "-e BROWSER_GL_MODE=auto" in commands[0]
     assert "-p 0:" not in commands[0]
     assert "bad" not in commands[0]
 
