@@ -17,6 +17,7 @@ import httpx
 from app.config import (
     BROWSER_GL_MODE,
     BROWSER_RUNTIME_BACKEND_URL,
+    CLOAK_BROWSER_IMAGE_NAME,
     DOCKER_HOST_ADDR,
     CONTAINER_PREFIX as _PREFIX,
     NETWORK_EGRESS_DOCKER_NETWORK,
@@ -64,6 +65,25 @@ DEEP_NETWORK_PROBE_TIMEOUT = 30.0
 NETWORK_PROFILE_CACHE_TTL = 600.0
 LOCALHOST_BRIDGE_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0", "::1"}
 LOCALHOST_BRIDGE_SCHEMES = {"http", "https", "ws", "wss"}
+BROWSER_RUNTIME_STANDARD = "standard_chrome"
+BROWSER_RUNTIME_CLOAK = "cloak_chromium"
+BROWSER_RUNTIMES = {BROWSER_RUNTIME_STANDARD, BROWSER_RUNTIME_CLOAK}
+
+
+def normalize_browser_runtime(value: str | None) -> str:
+    runtime = (value or BROWSER_RUNTIME_STANDARD).strip()
+    if runtime not in BROWSER_RUNTIMES:
+        raise ValueError(f"Unsupported browser runtime: {runtime}")
+    return runtime
+
+
+def is_cloak_runtime(runtime: str | None) -> bool:
+    return normalize_browser_runtime(runtime) == BROWSER_RUNTIME_CLOAK
+
+
+def _fingerprint_seed(session_id: str) -> str:
+    safe = "".join(ch for ch in session_id if ch.isalnum())
+    return f"bp_{safe or 'session'}"
 
 _BROWSER_NETWORK_APIS = [
     ("ipwho.is", "https://ipwho.is/"),
@@ -1090,7 +1110,11 @@ async def create_container(
     fingerprint_profile: dict | None = None,
     browser_lang: str = "zh-CN",
     image_name: str | None = None,
+    browser_runtime: str = BROWSER_RUNTIME_STANDARD,
 ) -> str:
+    browser_runtime = normalize_browser_runtime(browser_runtime)
+    cloak_runtime = is_cloak_runtime(browser_runtime)
+    runtime_image = image_name or (CLOAK_BROWSER_IMAGE_NAME if cloak_runtime else None)
     name = container_name(session_id)
     vol_name = f"{name}-data"
     env = {
@@ -1098,7 +1122,12 @@ async def create_container(
         "SE_SCREEN_WIDTH": str(width),
         "SE_SCREEN_HEIGHT": str(height),
         "BROWSER_LANG": browser_lang,
+        "BP_BROWSER_RUNTIME": browser_runtime,
     }
+    if cloak_runtime:
+        env["CLOAK_FINGERPRINT_SEED"] = _fingerprint_seed(session_id)
+        if isinstance(fingerprint_profile, dict) and fingerprint_profile.get("timezone"):
+            env["BROWSER_TIMEZONE"] = str(fingerprint_profile["timezone"])
     if user_agent:
         env["BROWSER_UA"] = user_agent
     if proxy:
@@ -1116,7 +1145,7 @@ async def create_container(
         env["BP_DOWNLOAD_DIR"] = "/home/seluser/Downloads"
     except Exception as exc:
         logger.warning("File capture runtime token setup failed for %s: %s", session_id, exc)
-    if not image_name:
+    if not runtime_image:
         raise RuntimeError(
             "No browser image available. Build one in Settings > Browser Images."
         )
@@ -1155,7 +1184,7 @@ async def create_container(
             f"{dns_args + ' ' if dns_args else ''}"
             f"-v {vol_name}:/home/seluser/chrome-data "
             f"{env_args} "
-            f"{image_name}"
+            f"{shlex.quote(runtime_image)}"
         )
         stdout, stderr, rc = await _run(cmd, timeout=30)
         if rc == 0:
@@ -1440,17 +1469,18 @@ async def reconcile_browser_network_profile(
     return ports, fingerprint_profile
 
 
-async def _session_container_params(session_id: str) -> tuple[int, int, str | None, str | None, dict | None, str, str | None]:
+async def _session_container_params(session_id: str) -> tuple[int, int, str | None, str | None, dict | None, str, str | None, str]:
     """Read device_preset + proxy_url + fingerprint_profile + browser_lang + chrome_version from DB and resolve to container params."""
     pool = get_pool()
     row = await pool.fetchrow(
-        "SELECT device_preset, proxy_url, network_egress_id, fingerprint_profile, browser_lang, tenant_id, chrome_version FROM sessions WHERE id = $1",
+        "SELECT device_preset, proxy_url, network_egress_id, fingerprint_profile, browser_lang, tenant_id, chrome_version, browser_runtime FROM sessions WHERE id = $1",
         session_id,
     )
     if not row:
         preset_data = get_preset(DEFAULT_PRESET)
-        return preset_data["width"], preset_data["height"], None, None, None, "zh-CN", None
+        return preset_data["width"], preset_data["height"], None, None, None, "zh-CN", None, BROWSER_RUNTIME_STANDARD
     preset_data = get_preset(row["device_preset"] or DEFAULT_PRESET)
+    browser_runtime = normalize_browser_runtime(_row_get(row, "browser_runtime", BROWSER_RUNTIME_STANDARD))
     proxy = None
     if row["tenant_id"]:
         proxy = (
@@ -1472,10 +1502,12 @@ async def _session_container_params(session_id: str) -> tuple[int, int, str | No
         )
         logger.info("Lazy-generated fingerprint profile for session %s", session_id)
 
-    chrome_version = row.get("chrome_version")
+    chrome_version = _row_get(row, "chrome_version")
     tenant_id = row["tenant_id"]
     image_name: str | None = None
-    if chrome_version and tenant_id:
+    if is_cloak_runtime(browser_runtime):
+        image_name = CLOAK_BROWSER_IMAGE_NAME
+    elif chrome_version and tenant_id:
         img_row = await pool.fetchrow(
             "SELECT image_tag FROM browser_images "
             "WHERE tenant_id = $1 AND chrome_version = $2 AND status = 'ready' "
@@ -1485,7 +1517,7 @@ async def _session_container_params(session_id: str) -> tuple[int, int, str | No
         if img_row:
             image_name = img_row["image_tag"]
 
-    if not image_name and tenant_id:
+    if not is_cloak_runtime(browser_runtime) and not image_name and tenant_id:
         img_row = await pool.fetchrow(
             "SELECT image_tag FROM browser_images "
             "WHERE tenant_id = $1 AND status = 'ready' "
@@ -1508,15 +1540,15 @@ async def _session_container_params(session_id: str) -> tuple[int, int, str | No
     ua = None
     if fp_profile and isinstance(fp_profile, dict):
         ua = fp_profile.get("navigator", {}).get("userAgent")
-    return preset_data["width"], preset_data["height"], ua, proxy, fp_profile, browser_lang, image_name
+    return preset_data["width"], preset_data["height"], ua, proxy, fp_profile, browser_lang, image_name, browser_runtime
 
 
 async def ensure_container_running(session_id: str) -> dict[str, int]:
     status = await get_container_status(session_id)
 
     if status == "not_found":
-        width, height, ua, proxy, fp_profile, lang, img = await _session_container_params(session_id)
-        await create_container(session_id, width=width, height=height, user_agent=ua, proxy=proxy, fingerprint_profile=fp_profile, browser_lang=lang, image_name=img)
+        width, height, ua, proxy, fp_profile, lang, img, runtime = await _session_container_params(session_id)
+        await create_container(session_id, width=width, height=height, user_agent=ua, proxy=proxy, fingerprint_profile=fp_profile, browser_lang=lang, image_name=img, browser_runtime=runtime)
         ports = await get_container_ports(session_id)
         await _wait_grid_ready(ports["selenium_port"])
         return ports
@@ -1526,7 +1558,7 @@ async def ensure_container_running(session_id: str) -> dict[str, int]:
         return await get_container_ports(session_id)
 
     if status != "running":
-        width, height, ua, proxy, fp_profile, lang, img = await _session_container_params(session_id)
+        width, height, ua, proxy, fp_profile, lang, img, _runtime = await _session_container_params(session_id)
         await start_container(session_id)
         ports = await get_container_ports(session_id)
         await _wait_grid_ready(ports["selenium_port"])
@@ -1547,6 +1579,7 @@ async def recreate_container(
     browser_lang: str = "zh-CN",
     image_name: str | None = None,
     reconcile_network: bool = False,
+    browser_runtime: str | None = None,
 ) -> dict[str, int]:
     """Stop, remove (keep volume), create with new params, wait for grid."""
     try:
@@ -1554,7 +1587,13 @@ async def recreate_container(
     except Exception:
         pass
     await remove_container(session_id, keep_volume=True)
-    await create_container(session_id, width=width, height=height, user_agent=user_agent, proxy=proxy, fingerprint_profile=fingerprint_profile, browser_lang=browser_lang, image_name=image_name)
+    if browser_runtime is None:
+        try:
+            row = await get_pool().fetchrow("SELECT browser_runtime FROM sessions WHERE id = $1", session_id)
+            browser_runtime = _row_get(row, "browser_runtime", BROWSER_RUNTIME_STANDARD)
+        except Exception:
+            browser_runtime = BROWSER_RUNTIME_STANDARD
+    await create_container(session_id, width=width, height=height, user_agent=user_agent, proxy=proxy, fingerprint_profile=fingerprint_profile, browser_lang=browser_lang, image_name=image_name, browser_runtime=browser_runtime)
     ports = await get_container_ports(session_id)
     await _wait_grid_ready(ports["selenium_port"])
     if reconcile_network:

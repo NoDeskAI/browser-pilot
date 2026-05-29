@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch, nextTick, onMounted, onUnmounted } from 'vue'
+import { computed, ref, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useSessions } from '../composables/useSessions'
@@ -40,7 +40,9 @@ const createDialogOpen = ref(false)
 const createName = ref('')
 const createVersion = ref('')
 const createNetworkEgressId = ref('__direct__')
+const createRuntime = ref<'standard_chrome' | 'cloak_chromium'>('standard_chrome')
 const DIRECT_EGRESS_VALUE = '__direct__'
+const canCreateSession = computed(() => createRuntime.value === 'cloak_chromium' || hasReadyImages.value)
 
 const isMac = navigator.platform.includes('Mac')
 const shortcutLabel = isMac ? '⌘N' : 'Ctrl+N'
@@ -210,9 +212,11 @@ onMounted(async () => {
     hasReadyImages.value = imgs.length > 0
     if (imgs.length > 0 && !createVersion.value) {
       createVersion.value = imgs[0].chromeVersion || String(imgs[0].chromeMajor)
+    } else if (imgs.length === 0) {
+      createRuntime.value = 'cloak_chromium'
     }
   } catch {
-    // keep optimistic default
+    createRuntime.value = 'cloak_chromium'
   }
 })
 onUnmounted(() => {
@@ -314,28 +318,32 @@ function formatRelativeTime(iso: string): string {
 }
 
 function openCreateDialog() {
-  if (!hasReadyImages.value) return
+  if (!hasReadyImages.value) {
+    createRuntime.value = 'cloak_chromium'
+  }
   if (!createVersion.value && readyImages.value.length > 0) {
     createVersion.value = readyImages.value[0].chromeVersion || String(readyImages.value[0].chromeMajor)
   }
   createDialogOpen.value = true
 }
 
-async function handleCreateSession(name?: string, chromeVersion?: string, networkEgressId?: string) {
+async function handleCreateSession(name?: string, chromeVersion?: string, networkEgressId?: string, runtime = createRuntime.value) {
   if (creating.value) return
   creating.value = true
   try {
     const selectedEgress = networkEgressId && networkEgressId !== DIRECT_EGRESS_VALUE ? networkEgressId : null
-    const session = await createSession(name?.trim() || undefined, chromeVersion || undefined, selectedEgress)
+    const selectedVersion = runtime === 'standard_chrome' ? (chromeVersion || undefined) : undefined
+    const session = await createSession(name?.trim() || undefined, selectedVersion, selectedEgress, runtime)
     if (session) {
       notify.success(t('app.sessionCreated'))
       createDialogOpen.value = false
       createName.value = ''
       createNetworkEgressId.value = DIRECT_EGRESS_VALUE
+      createRuntime.value = hasReadyImages.value ? 'standard_chrome' : 'cloak_chromium'
       router.push(`/s/${session.id}`)
     }
-  } catch {
-    notify.error(t('app.sessionCreateError'))
+  } catch (e: any) {
+    notify.error(e?.message || t('app.sessionCreateError'))
   } finally {
     creating.value = false
   }
@@ -418,7 +426,7 @@ async function onPauseContainer(id: string) {
               {{ t('dashboard.autoRefresh') }}
             </label>
           </div>
-          <Tooltip v-if="hasReadyImages">
+          <Tooltip v-if="canCreateSession">
             <TooltipTrigger as-child>
               <Button :disabled="creating" class="gap-2" @click="openCreateDialog">
                 <Loader2 v-if="creating" class="size-4 animate-spin" />
@@ -594,6 +602,18 @@ async function onPauseContainer(id: string) {
             </div>
             <div class="flex items-center gap-2 min-w-0">
               <div class="flex items-center gap-1.5 text-muted-foreground shrink-0 w-[72px]">
+                <Monitor class="size-3.5" />
+                <span class="text-[11px] whitespace-nowrap">{{ t('browserRuntime.shortLabel') }}</span>
+              </div>
+              <span
+                class="ml-auto min-w-0 max-w-[calc(100%-80px)] truncate rounded px-1.5 py-0.5 text-right text-xs text-muted-foreground"
+                :title="t(`browserRuntime.${s.browserRuntime || 'standard_chrome'}`)"
+              >
+                {{ t(`browserRuntime.${s.browserRuntime || 'standard_chrome'}`) }}
+              </span>
+            </div>
+            <div class="flex items-center gap-2 min-w-0">
+              <div class="flex items-center gap-1.5 text-muted-foreground shrink-0 w-[72px]">
                 <UserCog class="size-3.5" />
                 <span class="text-[11px] whitespace-nowrap">{{ t('sessionLease.operatorLabel') }}</span>
               </div>
@@ -691,7 +711,7 @@ async function onPauseContainer(id: string) {
       <div v-else-if="!sessions.loading" class="py-32 flex flex-col items-center justify-center text-center">
         <Monitor class="size-12 mb-4 text-muted-foreground opacity-20" :stroke-width="1" />
         <h3 class="text-lg font-medium mb-2">{{ t('dashboard.empty') }}</h3>
-        <p v-if="hasReadyImages" class="text-sm text-muted-foreground max-w-sm mb-6">{{ t('dashboard.emptyHint') }}</p>
+        <p v-if="canCreateSession" class="text-sm text-muted-foreground max-w-sm mb-6">{{ t('dashboard.emptyHint') }}</p>
         <p v-else class="text-sm text-muted-foreground max-w-sm mb-6">
           <span>{{ t('dashboard.noImageEmptyPrefix') }}</span>
           <RouterLink
@@ -703,7 +723,7 @@ async function onPauseContainer(id: string) {
           </RouterLink>
           <span>{{ t('dashboard.noImageEmptySuffix') }}</span>
         </p>
-        <Tooltip v-if="hasReadyImages">
+        <Tooltip v-if="canCreateSession">
           <TooltipTrigger as-child>
             <Button :disabled="creating" class="gap-2" @click="openCreateDialog">
               <Loader2 v-if="creating" class="size-4 animate-spin" />
@@ -745,7 +765,7 @@ async function onPauseContainer(id: string) {
         <DialogHeader>
           <DialogTitle>{{ t('dashboard.create') }}</DialogTitle>
         </DialogHeader>
-        <form class="space-y-4" @submit.prevent="handleCreateSession(createName, createVersion, createNetworkEgressId)">
+        <form class="space-y-4" @submit.prevent="handleCreateSession(createName, createVersion, createNetworkEgressId, createRuntime)">
           <div class="space-y-2">
             <Label for="create-session-name">{{ t('session.name') }}</Label>
             <Input
@@ -757,6 +777,24 @@ async function onPauseContainer(id: string) {
             />
           </div>
           <div class="space-y-2">
+            <Label for="create-session-runtime">{{ t('browserRuntime.label') }}</Label>
+            <Select v-model="createRuntime" :disabled="creating">
+              <SelectTrigger id="create-session-runtime">
+                <SelectValue :placeholder="t('browserRuntime.label')" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="standard_chrome" :disabled="!hasReadyImages">
+                  {{ t('browserRuntime.standard_chrome') }}
+                  <span class="text-xs text-muted-foreground">({{ t('browserRuntime.standardHint') }})</span>
+                </SelectItem>
+                <SelectItem value="cloak_chromium">
+                  {{ t('browserRuntime.cloak_chromium') }}
+                  <span class="text-xs text-muted-foreground">({{ t('browserRuntime.cloakHint') }})</span>
+                </SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div v-if="createRuntime === 'standard_chrome'" class="space-y-2">
             <Label for="create-session-version">{{ t('browserImages.version') }}</Label>
             <Select v-model="createVersion" :disabled="creating">
               <SelectTrigger id="create-session-version">
@@ -797,7 +835,7 @@ async function onPauseContainer(id: string) {
             <Button type="button" variant="outline" :disabled="creating" @click="createDialogOpen = false">
               {{ t('session.cancel') }}
             </Button>
-            <Button type="submit" :disabled="creating || !createVersion">
+            <Button type="submit" :disabled="creating || (createRuntime === 'standard_chrome' && !createVersion)">
               <Loader2 v-if="creating" class="size-4 animate-spin" />
               {{ creating ? t('session.creating') : t('dashboard.create') }}
             </Button>

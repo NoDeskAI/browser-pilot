@@ -4,15 +4,18 @@ import asyncio
 import logging
 import platform
 import re
+import shlex
 import time
 import uuid
+from datetime import datetime, timezone
+from typing import Literal
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.auth.dependencies import CurrentUser, get_current_user, require_role
-from app.config import PROJECT_ROOT
+from app.config import BROWSER_RUNTIME_COMMAND_MAX_TIMEOUT, CLOAK_BROWSER_IMAGE_NAME, PROJECT_ROOT
 from app.db import get_pool
 from app.runtime_control import run_runtime_command as _run
 
@@ -23,9 +26,60 @@ _ARCH = platform.machine()
 _IS_ARM = _ARCH in ("aarch64", "arm64")
 
 _BUILD_DIR = str(PROJECT_ROOT / "services" / "selenium-chrome")
+_CLOAK_BUILD_DIR = str(PROJECT_ROOT / "services" / "cloak-chromium-runtime")
 
 _version_cache: dict = {"versions": [], "fetched_at": 0.0}
 _CACHE_TTL = 21600  # 6 hours
+_CLOAK_BUILD_TIMEOUT = max(3600, BROWSER_RUNTIME_COMMAND_MAX_TIMEOUT)
+_cloak_build_state: dict = {
+    "status": "",
+    "build_log": "",
+    "created_at": None,
+    "started_at": None,
+    "updated_at": None,
+    "stage": "",
+    "progress": 0,
+}
+_cloak_build_lock = asyncio.Lock()
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _elapsed_seconds(started_at: float | int | None) -> int:
+    if not started_at:
+        return 0
+    return max(0, int(time.time() - float(started_at)))
+
+
+def _estimated_progress(elapsed_seconds: int, *, timeout: int) -> int:
+    if elapsed_seconds <= 0:
+        return 3
+    return max(8, min(95, int(8 + (elapsed_seconds / max(1, timeout)) * 87)))
+
+
+def _progress_payload(
+    *,
+    status: str,
+    stage: str,
+    progress: int,
+    started_at: float | int | None = None,
+    updated_at: str | None = None,
+    log: str = "",
+    manual_command: str = "",
+) -> dict:
+    elapsed = _elapsed_seconds(started_at)
+    return {
+        "stage": stage,
+        "progress": max(0, min(100, int(progress or 0))),
+        "elapsedSeconds": elapsed,
+        "startedAt": datetime.fromtimestamp(float(started_at), timezone.utc).isoformat() if started_at else None,
+        "updatedAt": updated_at,
+        "log": log,
+        "manualCommand": manual_command,
+        "indeterminate": status in {"pending", "building"} and progress >= 95,
+    }
 
 
 async def _fetch_available_versions() -> list[dict]:
@@ -69,6 +123,46 @@ def _image_tag_for(ver_tag: str, image_id: str) -> str:
     return f"browser-pilot-selenium:chrome-{slug}-{image_id[:8]}"
 
 
+async def _docker_image_exists(image_tag: str) -> bool:
+    _, _, rc = await _run(f"docker image inspect {shlex.quote(image_tag)}", timeout=20)
+    return rc == 0
+
+
+async def _cloak_runtime_image_payload() -> dict:
+    image_tag = CLOAK_BROWSER_IMAGE_NAME
+    if await _docker_image_exists(image_tag):
+        status = "ready"
+        build_log = _cloak_build_state.get("build_log") or "Image is available locally."
+        stage = "ready"
+        progress = 100
+    else:
+        status = _cloak_build_state.get("status") or "missing"
+        build_log = _cloak_build_state.get("build_log") or ""
+        stage = _cloak_build_state.get("stage") or status
+        progress = int(_cloak_build_state.get("progress") or 0)
+        if status in {"pending", "building"}:
+            progress = _estimated_progress(_elapsed_seconds(_cloak_build_state.get("started_at")), timeout=_CLOAK_BUILD_TIMEOUT)
+    return {
+        "id": "cloak_chromium",
+        "runtime": "cloak_chromium",
+        "name": "Cloak Chromium",
+        "imageTag": image_tag,
+        "baseImage": "services/cloak-chromium-runtime",
+        "status": status,
+        "buildLog": build_log,
+        "createdAt": _cloak_build_state.get("created_at"),
+        "buildProgress": _progress_payload(
+            status=status,
+            stage=stage,
+            progress=progress,
+            started_at=_cloak_build_state.get("started_at"),
+            updated_at=_cloak_build_state.get("updated_at"),
+            log=build_log,
+            manual_command=f"docker build -t {shlex.quote(image_tag)} {shlex.quote(_CLOAK_BUILD_DIR)}",
+        ),
+    }
+
+
 def _row_value(row, key: str, default=None):
     try:
         return row[key]
@@ -109,6 +203,36 @@ def _canonical_image_rows(rows) -> list:
         if current is None or _display_rank(row) > _display_rank(current):
             by_major[major] = row
     return sorted(by_major.values(), key=lambda r: int(_row_value(r, "chrome_major", 0) or 0), reverse=True)
+
+
+def _chrome_build_progress(row) -> dict:
+    status = str(_row_value(row, "status", "") or "")
+    created_at = _row_value(row, "created_at")
+    started_at = created_at.timestamp() if hasattr(created_at, "timestamp") else None
+    if status == "ready":
+        progress = 100
+        stage = "ready"
+    elif status == "failed":
+        progress = 100
+        stage = "failed"
+    elif status == "pending":
+        progress = 3
+        stage = "queued"
+    elif status == "building":
+        progress = _estimated_progress(_elapsed_seconds(started_at), timeout=BROWSER_RUNTIME_COMMAND_MAX_TIMEOUT)
+        stage = "building"
+    else:
+        progress = 0
+        stage = status or "unknown"
+    return _progress_payload(
+        status=status,
+        stage=stage,
+        progress=progress,
+        started_at=started_at,
+        updated_at=None,
+        log=str(_row_value(row, "build_log", "") or ""),
+        manual_command=f"docker build -t {_row_value(row, 'image_tag', '')} {_BUILD_DIR}",
+    )
 
 
 async def _check_tag_exists(repo: str, tag: str) -> bool:
@@ -232,8 +356,79 @@ async def _do_build(
     logger.info("Image built: %s -> Chrome %s", image_tag, detected_version)
 
 
+async def _do_build_cloak_runtime() -> None:
+    image_tag = CLOAK_BROWSER_IMAGE_NAME
+    started_at = time.time()
+    _cloak_build_state.update(
+        {
+            "status": "building",
+            "build_log": "Pulling base image and building Cloak Chromium runtime image. First build can take a while.",
+            "created_at": _now_iso(),
+            "started_at": started_at,
+            "updated_at": _now_iso(),
+            "stage": "pulling_base_image",
+            "progress": 8,
+        }
+    )
+    cmd = f"docker build -t {shlex.quote(image_tag)} {shlex.quote(_CLOAK_BUILD_DIR)}"
+    logger.info("Building Cloak runtime image: %s", cmd)
+    stdout, stderr, rc = await _run(cmd, timeout=_CLOAK_BUILD_TIMEOUT)
+    log_text = (stderr or stdout or "").strip()
+    if rc != 0:
+        _cloak_build_state.update(
+            {
+                "status": "failed",
+                "build_log": log_text[:4000] or "Cloak runtime image build failed.",
+                "updated_at": _now_iso(),
+                "stage": "failed",
+                "progress": 100,
+            }
+        )
+        logger.error("Cloak runtime image build failed: %s", log_text[:300])
+        return
+    _cloak_build_state.update(
+        {
+            "status": "ready",
+            "build_log": "Build OK. Cloak Chromium runtime image is available locally.",
+            "updated_at": _now_iso(),
+            "stage": "ready",
+            "progress": 100,
+        }
+    )
+    logger.info("Cloak runtime image built: %s", image_tag)
+
+
 class BuildBody(BaseModel):
-    chromeVersion: str
+    chromeVersion: str = ""
+    runtime: Literal["standard_chrome", "cloak_chromium"] = "standard_chrome"
+
+
+@router.post("/api/browser-images/cloak/build")
+async def build_cloak_runtime_image(
+    user: CurrentUser = Depends(require_role(["superadmin", "admin"])),
+):
+    return await _start_cloak_runtime_build()
+
+
+async def _start_cloak_runtime_build():
+    async with _cloak_build_lock:
+        if _cloak_build_state.get("status") in {"pending", "building"}:
+            raise HTTPException(409, "Cloak Chromium runtime image is already being built.")
+        if await _docker_image_exists(CLOAK_BROWSER_IMAGE_NAME):
+            return await _cloak_runtime_image_payload()
+        _cloak_build_state.update(
+            {
+                "status": "pending",
+                "build_log": "Cloak Chromium runtime image build queued.",
+                "created_at": _now_iso(),
+                "started_at": time.time(),
+                "updated_at": _now_iso(),
+                "stage": "queued",
+                "progress": 3,
+            }
+        )
+        asyncio.create_task(_do_build_cloak_runtime())
+        return await _cloak_runtime_image_payload()
 
 
 @router.post("/api/browser-images/build")
@@ -241,6 +436,9 @@ async def build_image(
     body: BuildBody,
     user: CurrentUser = Depends(require_role(["superadmin", "admin"])),
 ):
+    if body.runtime == "cloak_chromium":
+        return await _start_cloak_runtime_build()
+
     raw = body.chromeVersion.strip()
     if not raw:
         raise HTTPException(422, "Chrome version is required.")
@@ -341,6 +539,7 @@ async def list_images(user: CurrentUser = Depends(get_current_user)):
     )
     canonical_rows = _canonical_image_rows(rows)
     return {
+        "runtimeImages": [await _cloak_runtime_image_payload()],
         "images": [
             {
                 "id": r["id"],
@@ -352,6 +551,7 @@ async def list_images(user: CurrentUser = Depends(get_current_user)):
                 "buildLog": r["build_log"],
                 "createdAt": r["created_at"].isoformat() if r["created_at"] else None,
                 "sessionCount": int(r["session_count"]),
+                "buildProgress": _chrome_build_progress(r),
             }
             for r in canonical_rows
         ]

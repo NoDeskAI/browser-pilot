@@ -17,6 +17,7 @@ export interface Session {
   networkEgressHealthError?: string
   fingerprintProfile?: Record<string, any> | null
   browserLang?: string
+  browserRuntime?: 'standard_chrome' | 'cloak_chromium'
   activeLease?: ActiveSessionLease | null
 }
 

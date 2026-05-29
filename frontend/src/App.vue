@@ -6,6 +6,7 @@ import { useSessions } from './composables/useSessions'
 import { useAuth } from './composables/useAuth'
 import AppHeader from './components/AppHeader.vue'
 import { Toaster } from '@/components/ui/sonner'
+import { toast } from 'vue-sonner'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { AlertTriangle, Database, Loader2 } from 'lucide-vue-next'
 
@@ -96,6 +97,8 @@ function handleKeydown(e: KeyboardEvent) {
     if (isAuthenticated.value && !isAuthPage.value) {
       createSession().then(session => {
         if (session) router.push(`/s/${session.id}`)
+      }).catch((err: any) => {
+        toast.error(err?.message || t('app.sessionCreateError'))
       })
     }
   }
