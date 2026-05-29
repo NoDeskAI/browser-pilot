@@ -27,6 +27,7 @@ const bootstrap = reactive({
 })
 const bootstrapReady = computed(() => bootstrap.status === 'ready')
 const bootstrapFailed = computed(() => bootstrap.status === 'migration_failed' || bootstrap.status === 'incompatible_schema')
+const showStartupScreen = computed(() => bootstrapFailed.value || !bootstrapReady.value || !ready.value)
 const bootstrapTitle = computed(() => {
   if (bootstrap.status === 'checking') return t('bootstrap.checkingTitle')
   if (bootstrap.status === 'migrating') return t('bootstrap.migratingTitle')
@@ -43,9 +44,25 @@ const bootstrapDescription = computed(() => {
   if (bootstrap.status === 'waiting_database') return t('bootstrap.waitingDatabaseDescription')
   return t('bootstrap.checkingDescription')
 })
+let sessionsInitialized = false
+let sessionsInitPromise: Promise<void> | null = null
 
 function sleep(ms: number) {
   return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+async function ensureSessionsInitialized() {
+  if (sessionsInitialized) return
+  if (!sessionsInitPromise) {
+    sessionsInitPromise = initSessions()
+      .then(() => {
+        sessionsInitialized = true
+      })
+      .finally(() => {
+        sessionsInitPromise = null
+      })
+  }
+  await sessionsInitPromise
 }
 
 async function waitForBootstrap() {
@@ -117,7 +134,7 @@ onMounted(async () => {
   }
   await syncRouteAfterBootstrap()
   if (!isAuthPage.value && isAuthenticated.value) {
-    await initSessions()
+    await ensureSessionsInitialized()
   }
   document.title = brand.appTitle
   ready.value = true
@@ -130,8 +147,12 @@ onUnmounted(() => {
 watch(
   () => isAuthenticated.value && !isAuthPage.value,
   async (shouldInit, oldVal) => {
-    if (shouldInit && !oldVal) {
-      await initSessions()
+    if (!shouldInit) {
+      if (oldVal) sessionsInitialized = false
+      return
+    }
+    if (ready.value && !oldVal) {
+      await ensureSessionsInitialized()
     }
   }
 )
@@ -144,12 +165,12 @@ watch(() => brand.appTitle, (title) => {
 <template>
   <TooltipProvider :delay-duration="300">
     <div class="h-screen w-screen flex flex-col bg-background overflow-hidden relative">
-      <template v-if="!bootstrapReady || bootstrapFailed">
+      <template v-if="showStartupScreen">
         <div class="flex-1 flex items-center justify-center p-6">
           <div class="w-full max-w-md rounded-lg border bg-card p-6 text-center shadow-sm">
             <div class="mx-auto mb-4 flex size-11 items-center justify-center rounded-full bg-muted">
               <AlertTriangle v-if="bootstrapFailed" class="size-5 text-destructive" />
-              <Loader2 v-else-if="bootstrap.status === 'migrating' || bootstrap.status === 'checking'" class="size-5 animate-spin text-muted-foreground" />
+              <Loader2 v-else-if="bootstrap.status === 'migrating' || bootstrap.status === 'checking' || (bootstrapReady && !ready)" class="size-5 animate-spin text-muted-foreground" />
               <Database v-else class="size-5 text-muted-foreground" />
             </div>
             <h1 class="text-base font-semibold">{{ bootstrapTitle }}</h1>
@@ -173,12 +194,7 @@ watch(() => brand.appTitle, (title) => {
           <router-view />
         </main>
       </template>
-      <template v-else>
-        <div class="flex-1 flex items-center justify-center">
-          <Loader2 class="size-6 animate-spin text-muted-foreground" />
-        </div>
-      </template>
-      
+
       <!-- 全局组件 -->
       <Toaster position="top-center" />
     </div>
