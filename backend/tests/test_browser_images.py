@@ -9,9 +9,10 @@ from app.routes import browser_images
 
 
 class FakePool:
-    def __init__(self, duplicate=None, rows=None):
+    def __init__(self, duplicate=None, rows=None, fetchval_result=0):
         self.duplicate = duplicate
         self.rows = rows or []
+        self.fetchval_result = fetchval_result
         self.executed = []
         self.fetches = []
 
@@ -39,9 +40,27 @@ class FakePool:
         self.fetches.append(args)
         return self.rows
 
+    async def fetchval(self, *args):
+        self.fetches.append(args)
+        return self.fetchval_result
+
 
 def _user():
     return SimpleNamespace(id="user-1", tenant_id="tenant-1", role="admin")
+
+
+def _reset_cloak_state(monkeypatch, **updates):
+    state = {
+        "status": "",
+        "build_log": "",
+        "created_at": None,
+        "started_at": None,
+        "updated_at": None,
+        "stage": "",
+        "progress": 0,
+    }
+    state.update(updates)
+    monkeypatch.setattr(browser_images, "_cloak_build_state", state)
 
 
 def _image_row(
@@ -101,6 +120,7 @@ def test_build_marks_duplicate_full_chrome_version_failed(monkeypatch):
 
 
 def test_list_images_returns_one_canonical_image_per_chrome_major(monkeypatch):
+    _reset_cloak_state(monkeypatch)
     rows = [
         _image_row("147-fp", 147, "147.0.7727.55", "browser-pilot-selenium:chrome-147-fpagent"),
         _image_row("147", 147, "147.0.7727.55", "browser-pilot-selenium:chrome-147"),
@@ -110,13 +130,99 @@ def test_list_images_returns_one_canonical_image_per_chrome_major(monkeypatch):
     pool = FakePool(rows=rows)
     monkeypatch.setattr(browser_images, "get_pool", lambda: pool)
 
-    result = asyncio.run(browser_images.list_images(_user()))
+    async def fake_image_created_at(_image_tag):
+        return None
 
-    assert [image["chromeMajor"] for image in result["images"]] == [147, 135]
-    assert [image["imageTag"] for image in result["images"]] == [
+    monkeypatch.setattr(browser_images, "_docker_image_created_at", fake_image_created_at)
+
+    result = asyncio.run(browser_images.list_images(_user()))
+    standard_images = [image for image in result["images"] if image["runtime"] == "standard_chrome"]
+    cloak_images = [image for image in result["images"] if image["runtime"] == "cloak_chromium"]
+
+    assert [image["chromeMajor"] for image in standard_images] == [147, 135]
+    assert [image["imageTag"] for image in standard_images] == [
         "browser-pilot-selenium:chrome-147",
         "browser-pilot-selenium:chrome-135",
     ]
+    assert len(cloak_images) == 1
+    assert result["runtimeImages"] == cloak_images
+
+
+def test_list_images_includes_ready_cloak_runtime_with_session_count(monkeypatch):
+    _reset_cloak_state(monkeypatch)
+    pool = FakePool(rows=[], fetchval_result=3)
+    monkeypatch.setattr(browser_images, "get_pool", lambda: pool)
+
+    async def fake_image_created_at(image_tag):
+        if image_tag == browser_images.CLOAK_BROWSER_IMAGE_NAME:
+            return "2026-05-13T23:14:17.41712077+08:00"
+        return None
+
+    monkeypatch.setattr(browser_images, "_docker_image_created_at", fake_image_created_at)
+
+    result = asyncio.run(browser_images.list_images(_user()))
+    cloak = next(image for image in result["images"] if image["runtime"] == "cloak_chromium")
+
+    assert cloak["id"] == "cloak_chromium"
+    assert cloak["name"] == "Cloak Chromium"
+    assert cloak["status"] == "ready"
+    assert cloak["createdAt"] == "2026-05-13T23:14:17.41712077+08:00"
+    assert cloak["sessionCount"] == 3
+    assert cloak["buildProgress"]["progress"] == 100
+    assert result["runtimeImages"] == [cloak]
+    assert any("browser_runtime = 'cloak_chromium'" in call[0] for call in pool.fetches)
+
+
+def test_list_images_reports_missing_cloak_runtime(monkeypatch):
+    _reset_cloak_state(monkeypatch)
+    pool = FakePool(rows=[])
+    monkeypatch.setattr(browser_images, "get_pool", lambda: pool)
+
+    async def fake_image_created_at(_image_tag):
+        return None
+
+    monkeypatch.setattr(browser_images, "_docker_image_created_at", fake_image_created_at)
+
+    result = asyncio.run(browser_images.list_images(_user()))
+    cloak = next(image for image in result["images"] if image["runtime"] == "cloak_chromium")
+
+    assert cloak["status"] == "missing"
+    assert cloak["buildProgress"]["stage"] == "missing"
+    assert cloak["sessionCount"] == 0
+
+
+@pytest.mark.parametrize(
+    ("status", "stage", "progress"),
+    [
+        ("building", "pulling_base_image", 8),
+        ("failed", "failed", 100),
+    ],
+)
+def test_list_images_maps_cloak_runtime_build_state(monkeypatch, status, stage, progress):
+    _reset_cloak_state(
+        monkeypatch,
+        status=status,
+        stage=stage,
+        progress=progress,
+        build_log=f"{status} log",
+        started_at=1,
+        updated_at="2026-05-01T00:00:00+00:00",
+    )
+    pool = FakePool(rows=[])
+    monkeypatch.setattr(browser_images, "get_pool", lambda: pool)
+
+    async def fake_image_created_at(_image_tag):
+        return None
+
+    monkeypatch.setattr(browser_images, "_docker_image_created_at", fake_image_created_at)
+
+    result = asyncio.run(browser_images.list_images(_user()))
+    cloak = next(image for image in result["images"] if image["runtime"] == "cloak_chromium")
+
+    assert cloak["status"] == status
+    assert cloak["buildLog"] == f"{status} log"
+    assert cloak["buildProgress"]["stage"] == stage
+    assert cloak["buildProgress"]["progress"] >= progress
 
 
 def test_build_allows_different_full_chrome_version(monkeypatch):
@@ -164,6 +270,77 @@ def test_build_rejects_exact_ready_version_before_start(monkeypatch):
     assert exc.value.status_code == 409
     assert "147.0.7727.55" in exc.value.detail
     assert not any("INSERT INTO browser_images" in call[0] for call in pool.executed)
+
+
+def test_build_cloak_runtime_uses_existing_build_path(monkeypatch):
+    called = {"count": 0}
+
+    async def fake_start_cloak_runtime_build():
+        called["count"] += 1
+        return {"id": "cloak_chromium", "status": "pending"}
+
+    monkeypatch.setattr(browser_images, "_start_cloak_runtime_build", fake_start_cloak_runtime_build)
+
+    result = asyncio.run(
+        browser_images.build_image(
+            browser_images.BuildBody(runtime="cloak_chromium"),
+            _user(),
+        )
+    )
+
+    assert called["count"] == 1
+    assert result == {"id": "cloak_chromium", "status": "pending"}
+
+
+def test_delete_cloak_runtime_removes_local_image_and_resets_state(monkeypatch):
+    _reset_cloak_state(
+        monkeypatch,
+        status="ready",
+        build_log="Image is available locally.",
+        created_at="2026-05-01T00:00:00+00:00",
+        started_at=1,
+        updated_at="2026-05-01T00:00:00+00:00",
+        stage="ready",
+        progress=100,
+    )
+    pool = FakePool(fetchval_result=0)
+    commands = []
+    monkeypatch.setattr(browser_images, "get_pool", lambda: pool)
+
+    async def fake_run(cmd, timeout=30):
+        commands.append((cmd, timeout))
+        return "", "", 0
+
+    monkeypatch.setattr(browser_images, "_run", fake_run)
+
+    result = asyncio.run(browser_images.delete_image("cloak_chromium", _user()))
+
+    assert result == {"ok": True}
+    assert commands == [(f"docker rmi {browser_images.CLOAK_BROWSER_IMAGE_NAME}", 30)]
+    assert browser_images._cloak_build_state["status"] == ""
+    assert browser_images._cloak_build_state["build_log"] == ""
+    assert browser_images._cloak_build_state["created_at"] is None
+    assert any("browser_runtime = 'cloak_chromium'" in call[0] for call in pool.fetches)
+
+
+def test_delete_cloak_runtime_rejects_in_use_image(monkeypatch):
+    _reset_cloak_state(monkeypatch)
+    pool = FakePool(fetchval_result=2)
+    commands = []
+    monkeypatch.setattr(browser_images, "get_pool", lambda: pool)
+
+    async def fake_run(cmd, timeout=30):
+        commands.append((cmd, timeout))
+        return "", "", 0
+
+    monkeypatch.setattr(browser_images, "_run", fake_run)
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(browser_images.delete_image("cloak_chromium", _user()))
+
+    assert exc.value.status_code == 409
+    assert "2 session(s)" in exc.value.detail
+    assert commands == []
 
 
 def test_build_rejects_duplicate_in_progress_base_image(monkeypatch):

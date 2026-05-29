@@ -74,8 +74,8 @@ function goToTab(tab: SettingsTab) {
 
 <template>
   <div class="flex flex-1 overflow-hidden">
-      <div class="flex-1 overflow-y-scroll">
-      <div class="max-w-4xl mx-auto px-6 py-8">
+    <div class="flex-1 overflow-y-scroll">
+      <div class="max-w-[68rem] mx-auto px-6 py-8">
         <h2 class="text-lg font-semibold mb-6">{{ t('settings.title') }}</h2>
         
         <div class="flex flex-col md:flex-row gap-8">

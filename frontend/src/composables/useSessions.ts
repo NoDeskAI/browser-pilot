@@ -172,7 +172,7 @@ const _LOCALE_TO_BROWSER_LANG: Record<string, string> = { zh: 'zh-CN', en: 'en-U
 
 async function fetchBrowserImages(): Promise<any[]> {
   const data = await fetchBrowserImageState()
-  return (data.images || []).filter((i: any) => i.status === 'ready')
+  return (data.images || []).filter((i: any) => (i.runtime || 'standard_chrome') === 'standard_chrome' && i.status === 'ready')
 }
 
 async function fetchBrowserImageState(): Promise<{ images: any[]; runtimeImages: any[] }> {
