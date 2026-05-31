@@ -153,6 +153,24 @@ class SessionRuntimeStatus(Base):
     )
 
 
+class SessionViewerTicket(Base):
+    __tablename__ = "session_viewer_tickets"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    session_id: Mapped[str] = mapped_column(Text, ForeignKey("sessions.id", ondelete="CASCADE"), nullable=False)
+    tenant_id: Mapped[str | None] = mapped_column(Text)
+    user_id: Mapped[str | None] = mapped_column(Text)
+    operator_subject: Mapped[str] = mapped_column(Text, nullable=False)
+    lease_id: Mapped[str] = mapped_column(Text, ForeignKey("agent_device_leases.id", ondelete="CASCADE"), nullable=False)
+    token_hash: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
+    mode: Mapped[str] = mapped_column(Text, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(nullable=False)
+    consumed_at: Mapped[datetime | None] = mapped_column()
+    remote_addr: Mapped[str | None] = mapped_column(Text)
+    user_agent: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(nullable=False, server_default=func.now())
+
+
 class AgentDeviceLease(Base):
     __tablename__ = "agent_device_leases"
 

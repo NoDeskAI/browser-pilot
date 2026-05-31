@@ -45,7 +45,6 @@ const {
 const { state: egressState, fetchNetworkEgress } = useNetworkEgress()
 
 const props = defineProps<{
-  wsUrl: string
   sessionId: string
 }>()
 
@@ -173,6 +172,7 @@ const totalSent = ref(0)
 let rfb: RFB | null = null
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 let reconnectAttempts = 0
+let connectSerial = 0
 const MAX_RECONNECT_ATTEMPTS = 3
 
 function fmtBytes(b: number): string {
@@ -194,7 +194,37 @@ function clearContainer() {
   while (el.firstChild) el.removeChild(el.firstChild)
 }
 
-function connectRFB() {
+function normalizeViewerUrl(raw: string): string {
+  const url = new URL(raw, window.location.href)
+  if (url.protocol === 'http:') url.protocol = 'ws:'
+  if (url.protocol === 'https:') url.protocol = 'wss:'
+  return url.toString()
+}
+
+async function fetchViewerUrl(): Promise<string> {
+  const resp = await api(`/api/sessions/${props.sessionId}/viewer-ticket`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mode: 'control' }),
+  })
+  const data = await resp.json().catch(() => null)
+  if (!resp.ok || !data?.viewerUrl) {
+    throw new Error(data?.detail || data?.error || t('vnc.requestFailed', { status: resp.status }))
+  }
+  return normalizeViewerUrl(data.viewerUrl)
+}
+
+function retryConnect() {
+  if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+    reconnectAttempts++
+    scheduleReconnect()
+  } else {
+    reconnectExhausted.value = true
+  }
+}
+
+async function connectRFB() {
+  const serial = ++connectSerial
   if (rfb) {
     try { rfb.disconnect() } catch { /* already disconnected */ }
     rfb = null
@@ -203,6 +233,15 @@ function connectRFB() {
 
   const el = vncContainer.value
   if (!el) return
+
+  let wsUrl = ''
+  try {
+    wsUrl = await fetchViewerUrl()
+  } catch {
+    if (serial === connectSerial) retryConnect()
+    return
+  }
+  if (serial !== connectSerial) return
 
   const OrigWS = window.WebSocket
   const recvRef = totalRecv
@@ -229,10 +268,10 @@ function connectRFB() {
   })
 
   try {
-    rfb = new RFB(el, props.wsUrl)
+    rfb = new RFB(el, wsUrl)
   } catch {
     window.WebSocket = OrigWS
-    scheduleReconnect()
+    retryConnect()
     return
   }
 
@@ -273,13 +312,13 @@ function connectRFB() {
 function manualReconnect() {
   reconnectAttempts = 0
   reconnectExhausted.value = false
-  connectRFB()
+  void connectRFB()
 }
 
 function scheduleReconnect() {
   if (reconnectTimer) clearTimeout(reconnectTimer)
   reconnectTimer = setTimeout(() => {
-    if (!connected.value) connectRFB()
+    if (!connected.value) void connectRFB()
   }, 3000)
 }
 
@@ -696,20 +735,21 @@ function formatScore(score: unknown): string {
 defineExpose({ navigate })
 
 onMounted(() => {
-  connectRFB()
+  void connectRFB()
   document.addEventListener('fullscreenchange', onFullscreenChange)
 })
 
 onUnmounted(() => {
+  connectSerial++
   if (rfb) { try { rfb.disconnect() } catch { /* noop */ } rfb = null }
   if (reconnectTimer) clearTimeout(reconnectTimer)
   document.removeEventListener('fullscreenchange', onFullscreenChange)
 })
 
-watch(() => props.wsUrl, () => {
+watch(() => props.sessionId, () => {
   connected.value = false
   reconnectAttempts = 0
-  connectRFB()
+  void connectRFB()
 })
 
 watch(() => activeSession.value?.browserLang, (lang) => {

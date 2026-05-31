@@ -21,6 +21,7 @@ FRONTEND_PID_FILE="$LOG_DIR/frontend.pid"
 BACKEND_LOG="$LOG_DIR/backend.log"
 FRONTEND_LOG="$LOG_DIR/frontend.log"
 MODE=foreground
+TARGET=dev
 CLI_EDITION=""
 EDITION_SOURCE=""
 
@@ -28,6 +29,10 @@ EDITION_SOURCE=""
 usage() {
     cat <<'EOF'
 用法:
+  ./start.sh [dev] [ce|ee]       本地开发模式（默认，Ctrl+C 停止）
+  ./start.sh [dev] [ce|ee] -d    本地开发后台 daemon 模式
+  ./start.sh prod [ce|ee]        生产 Docker Compose 模式（跟随日志）
+  ./start.sh prod [ce|ee] -d     生产 Docker Compose 后台模式
   ./start.sh [ce|ee]            前台 watch 模式（Ctrl+C 停止）
   ./start.sh [ce|ee] -d         后台 daemon 模式
   ./start.sh --edition ce|-e ce 指定 CE 版
@@ -36,6 +41,8 @@ usage() {
   ./start.sh status             查看进程状态
 
 说明:
+  dev 使用本机后端/前端进程，浏览器 runtime 使用 published 模式且只绑定 127.0.0.1。
+  prod 使用 docker-compose.prod.yml，公网只暴露反向代理 80/443。
   传 ce|ee 时强制指定版本。
   不传 ce|ee 时检查 ee/backend/__init__.py 和 ee/frontend/index.ts；都有才按 EE，否则按 CE。
 EOF
@@ -74,6 +81,14 @@ set_mode() {
     MODE="$mode"
 }
 
+set_target() {
+    local target="$1"
+    if [[ "$TARGET" != "dev" && "$TARGET" != "$target" ]]; then
+        die_usage "启动目标只能指定一个"
+    fi
+    TARGET="$target"
+}
+
 resolve_edition() {
     if [[ -n "$CLI_EDITION" ]]; then
         export EDITION="$CLI_EDITION"
@@ -96,6 +111,14 @@ parse_args() {
         case "$1" in
             ce|CE|ee|EE)
                 set_cli_edition "$1"
+                shift
+                ;;
+            dev)
+                set_target dev
+                shift
+                ;;
+            prod)
+                set_target prod
                 shift
                 ;;
             --edition)
@@ -174,6 +197,14 @@ do_status() {
             echo "[$name] 未运行"
         fi
     done
+}
+
+_compose_file() {
+    if [[ "$TARGET" == "prod" ]]; then
+        printf '%s\n' "docker-compose.prod.yml"
+    else
+        printf '%s\n' "docker-compose.yml"
+    fi
 }
 
 # ------------------------------------------------------------------
@@ -284,9 +315,36 @@ _require_database_env() {
     fi
 }
 
+_require_prod_env() {
+    _infer_postgres_env_from_database_url
+    export APP_ENV="${APP_ENV:-production}"
+
+    local missing=()
+    local key
+    for key in PUBLIC_SITE_ADDRESS APP_PUBLIC_ORIGINS API_BASE_URL BROWSER_VNC_PASSWORD_SECRET BROWSER_RUNTIME_CONTROL_TOKEN POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB MINIO_ROOT_USER MINIO_ROOT_PASSWORD MINIO_BUCKET MINIO_PUBLIC_ENDPOINT; do
+        if [[ -z "${!key:-}" ]]; then
+            missing+=("$key")
+        fi
+    done
+    if (( ${#missing[@]} > 0 )); then
+        echo "缺少生产配置: ${missing[*]}" >&2
+        echo "prod 模式需要公开域名/Origin、VNC 密钥、runtime token、数据库和对象存储公开下载地址。" >&2
+        exit 1
+    fi
+    if [[ "${BROWSER_RUNTIME_ACCESS_MODE:-private}" == "published" ]]; then
+        echo "生产模式禁止 BROWSER_RUNTIME_ACCESS_MODE=published" >&2
+        exit 1
+    fi
+    if [[ "$APP_ENV" != "production" && "$APP_ENV" != "prod" ]]; then
+        echo "生产模式要求 APP_ENV=production 或 prod" >&2
+        exit 1
+    fi
+}
+
 _start_processes() {
     _require_database_env
     _ensure_local_compose_runtime_env
+    export BROWSER_RUNTIME_ACCESS_MODE="${BROWSER_RUNTIME_ACCESS_MODE:-published}"
     export MINIO_STORAGE_BOOTSTRAP="${MINIO_STORAGE_BOOTSTRAP:-true}"
     export MINIO_ENDPOINT="${MINIO_ENDPOINT:-http://localhost:9000}"
     echo "[edition] $EDITION ($EDITION_SOURCE)"
@@ -307,6 +365,27 @@ _start_processes() {
 
     echo "[backend]  PID=$backend_pid  port=$BACKEND_PORT  log=$BACKEND_LOG"
     echo "[frontend] PID=$frontend_pid port=$FRONTEND_PORT log=$FRONTEND_LOG"
+}
+
+do_prod() {
+    _require_prod_env
+    _ensure_local_compose_runtime_env
+    echo "[edition] $EDITION ($EDITION_SOURCE)"
+    echo "[prod] 使用 docker-compose.prod.yml 启动公网边界"
+    docker compose -f docker-compose.prod.yml up -d
+    if [[ "$MODE" == "foreground" ]]; then
+        docker compose -f docker-compose.prod.yml logs -f reverse-proxy backend runtime-worker
+    else
+        docker compose -f docker-compose.prod.yml ps
+    fi
+}
+
+do_prod_stop() {
+    docker compose -f docker-compose.prod.yml down
+}
+
+do_prod_status() {
+    docker compose -f docker-compose.prod.yml ps
 }
 
 # ------------------------------------------------------------------
@@ -358,9 +437,9 @@ do_daemon() {
 
 # ------------------------------------------------------------------
 case "$MODE" in
-    stop)       do_stop ;;
-    status)     do_status ;;
-    daemon)     do_daemon ;;
-    foreground) do_foreground ;;
+    stop)       if [[ "$TARGET" == "prod" ]]; then do_prod_stop; else do_stop; fi ;;
+    status)     if [[ "$TARGET" == "prod" ]]; then do_prod_status; else do_status; fi ;;
+    daemon)     if [[ "$TARGET" == "prod" ]]; then do_prod; else do_daemon; fi ;;
+    foreground) if [[ "$TARGET" == "prod" ]]; then do_prod; else do_foreground; fi ;;
     help)       usage ;;
 esac

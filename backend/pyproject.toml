@@ -18,6 +18,8 @@ dependencies = [
     "PyYAML>=6.0.0",
     "boto3>=1.35.0",
     "python-multipart>=0.0.9",
+    "pycryptodome>=3.20.0",
+    "websockets>=16.0",
 ]
 
 [project.optional-dependencies]

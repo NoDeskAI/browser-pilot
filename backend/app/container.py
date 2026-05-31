@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import base64
 from collections import Counter, defaultdict
+import hashlib
+import hmac
 import ipaddress
 import json
 import logging
@@ -17,8 +19,11 @@ import httpx
 from app.config import (
     BROWSER_GL_MODE,
     BROWSER_RUNTIME_BACKEND_URL,
+    BROWSER_RUNTIME_ACCESS_MODE,
+    BROWSER_VNC_PASSWORD_SECRET,
     CLOAK_BROWSER_IMAGE_NAME,
     DOCKER_HOST_ADDR,
+    JWT_SECRET,
     CONTAINER_PREFIX as _PREFIX,
     NETWORK_EGRESS_DOCKER_NETWORK,
 )
@@ -49,7 +54,6 @@ CONTAINER_PREFIX = f"{_PREFIX}-"
 SHM_SIZE = "2g"
 
 _STATIC_ENV = {
-    "SE_VNC_NO_PASSWORD": "1",
     "SE_SCREEN_DEPTH": "24",
     "SE_NODE_SESSION_TIMEOUT": "86400",
     "SE_NODE_OVERRIDE_MAX_SESSIONS": "true",
@@ -136,6 +140,16 @@ _BACKGROUND_NETWORK_TASKS: set[str] = set()
 
 def container_name(session_id: str) -> str:
     return f"{CONTAINER_PREFIX}{session_id[:12]}"
+
+
+def _runtime_access_private() -> bool:
+    return BROWSER_RUNTIME_ACCESS_MODE != "published"
+
+
+def session_vnc_password(session_id: str) -> str:
+    secret = BROWSER_VNC_PASSWORD_SECRET or JWT_SECRET
+    digest = hmac.new(secret.encode(), f"browser-pilot:vnc:{session_id}".encode(), hashlib.sha256).digest()
+    return base64.urlsafe_b64encode(digest).decode().rstrip("=")[:24]
 
 
 def _egress_network_name() -> str:
@@ -1121,6 +1135,9 @@ async def create_container(
         **_STATIC_ENV,
         "SE_SCREEN_WIDTH": str(width),
         "SE_SCREEN_HEIGHT": str(height),
+        "SE_VNC_NO_PASSWORD": "false",
+        "SE_VNC_PASSWORD": session_vnc_password(session_id),
+        "BP_VNC_PASSWORD": session_vnc_password(session_id),
         "BROWSER_LANG": browser_lang,
         "BP_BROWSER_RUNTIME": browser_runtime,
     }
@@ -1153,26 +1170,32 @@ async def create_container(
     egress_row = await _session_egress_row(session_id)
     logger.info("Creating container: %s (%dx%d)", name, width, height)
     last_error = ""
-    for _attempt in range(5):
-        selenium_port = _find_free_port()
-        vnc_port = _find_free_port()
+    publish_ports = not _runtime_access_private()
+    max_attempts = 5 if publish_ports else 1
+    for _attempt in range(max_attempts):
+        selenium_port = _find_free_port() if publish_ports else None
+        vnc_port = _find_free_port() if publish_ports else None
         gateway = await prepare_session_egress_gateway(
             egress_row,
             session_id=session_id,
             selenium_port=selenium_port,
             vnc_port=vnc_port,
+            publish_ports=publish_ports,
         )
         runtime_env = dict(env)
         if gateway.enabled and gateway.browser_proxy:
             runtime_env["BROWSER_PROXY"] = gateway.browser_proxy
         env_args = " ".join(f"-e {k}={shlex.quote(str(v))}" for k, v in runtime_env.items())
         dns_args = ""
+        publish_args = ""
+        if publish_ports and not gateway.enabled:
+            publish_args = f"-p 127.0.0.1:{selenium_port}:4444 -p 127.0.0.1:{vnc_port}:7900 "
         network_args = (
             f"--network container:{shlex.quote(gateway.container_name)} "
             if gateway.enabled
             else f"--network {shlex.quote(_egress_network_name())} "
             f"--add-host host.docker.internal:host-gateway "
-            f"-p {selenium_port}:4444 -p {vnc_port}:7900 "
+            f"{publish_args}"
         )
         if not gateway.enabled:
             dns_args = " ".join(f"--dns {shlex.quote(server)}" for server in _dns_servers_from_profile(fingerprint_profile))
@@ -1190,11 +1213,10 @@ async def create_container(
         if rc == 0:
             await _persist_profile_warnings(session_id, fingerprint_profile, gateway.warnings)
             logger.info(
-                "Container created: %s -> %s (selenium=%s vnc=%s)",
+                "Container created: %s -> %s (access=%s)",
                 name,
                 stdout[:12],
-                selenium_port,
-                vnc_port,
+                BROWSER_RUNTIME_ACCESS_MODE,
             )
             return stdout
         last_error = stderr or stdout
@@ -1252,6 +1274,8 @@ async def remove_container(session_id: str, *, keep_volume: bool = False) -> Non
 
 
 async def get_container_ports(session_id: str) -> dict[str, int]:
+    if _runtime_access_private():
+        raise RuntimeError("Browser runtime is private; host ports are not published")
     name = container_name(session_id)
     stdout, stderr, rc = await _run(f"docker port {name}", timeout=5)
     if rc != 0:
@@ -1282,6 +1306,33 @@ async def get_container_ports(session_id: str) -> dict[str, int]:
     if "selenium_port" not in ports or "vnc_port" not in ports:
         raise RuntimeError(f"Could not parse ports from: {stdout}")
     return ports
+
+
+async def _runtime_target_host(session_id: str) -> str:
+    egress_row = await _session_egress_row(session_id)
+    if egress_row and egress_row["type"] in {"clash", "openvpn"}:
+        return session_egress_gateway_name(session_id)
+    return container_name(session_id)
+
+
+async def resolve_selenium_base_url(session_id: str) -> str:
+    if _runtime_access_private():
+        return f"http://{await _runtime_target_host(session_id)}:4444"
+    ports = await get_container_ports(session_id)
+    return f"http://{DOCKER_HOST_ADDR}:{ports['selenium_port']}"
+
+
+async def resolve_vnc_websocket_url(session_id: str) -> str:
+    if _runtime_access_private():
+        return f"ws://{await _runtime_target_host(session_id)}:7900/websockify"
+    ports = await get_container_ports(session_id)
+    return f"ws://{DOCKER_HOST_ADDR}:{ports['vnc_port']}/websockify"
+
+
+async def _published_ports_or_empty(session_id: str) -> dict[str, int]:
+    if _runtime_access_private():
+        return {}
+    return await get_container_ports(session_id)
 
 
 async def get_container_status(session_id: str) -> str:
@@ -1323,8 +1374,12 @@ async def get_all_container_statuses() -> dict[str, str]:
     return result
 
 
-async def _wait_grid_ready(selenium_port: int) -> None:
-    url = f"http://{DOCKER_HOST_ADDR}:{selenium_port}/status"
+async def _wait_grid_ready(selenium_target: int | str) -> None:
+    if isinstance(selenium_target, int):
+        base_url = f"http://{DOCKER_HOST_ADDR}:{selenium_target}"
+    else:
+        base_url = selenium_target.rstrip("/")
+    url = f"{base_url}/status"
     elapsed = 0.0
     # This is an internal Docker-host request; deployment proxy env vars must not intercept it.
     async with httpx.AsyncClient(timeout=3, trust_env=False) as client:
@@ -1333,13 +1388,13 @@ async def _wait_grid_ready(selenium_port: int) -> None:
                 resp = await client.get(url)
                 data = resp.json()
                 if data.get("value", {}).get("ready"):
-                    logger.info("Grid ready on port %d (%.1fs)", selenium_port, elapsed)
+                    logger.info("Grid ready at %s (%.1fs)", base_url, elapsed)
                     return
             except Exception:
                 pass
             await asyncio.sleep(GRID_POLL_INTERVAL)
             elapsed += GRID_POLL_INTERVAL
-    logger.warning("Grid readiness timeout on port %d after %.1fs", selenium_port, elapsed)
+    logger.warning("Grid readiness timeout at %s after %.1fs", base_url, elapsed)
 
 
 async def reconcile_browser_network_profile(
@@ -1549,24 +1604,22 @@ async def ensure_container_running(session_id: str) -> dict[str, int]:
     if status == "not_found":
         width, height, ua, proxy, fp_profile, lang, img, runtime = await _session_container_params(session_id)
         await create_container(session_id, width=width, height=height, user_agent=ua, proxy=proxy, fingerprint_profile=fp_profile, browser_lang=lang, image_name=img, browser_runtime=runtime)
-        ports = await get_container_ports(session_id)
-        await _wait_grid_ready(ports["selenium_port"])
-        return ports
+        await _wait_grid_ready(await resolve_selenium_base_url(session_id))
+        return await _published_ports_or_empty(session_id)
 
     if status == "paused":
         await unpause_container(session_id)
-        return await get_container_ports(session_id)
+        await _wait_grid_ready(await resolve_selenium_base_url(session_id))
+        return await _published_ports_or_empty(session_id)
 
     if status != "running":
         width, height, ua, proxy, fp_profile, lang, img, _runtime = await _session_container_params(session_id)
         await start_container(session_id)
-        ports = await get_container_ports(session_id)
-        await _wait_grid_ready(ports["selenium_port"])
-        return ports
+        await _wait_grid_ready(await resolve_selenium_base_url(session_id))
+        return await _published_ports_or_empty(session_id)
 
-    ports = await get_container_ports(session_id)
-    await _wait_grid_ready(ports["selenium_port"])
-    return ports
+    await _wait_grid_ready(await resolve_selenium_base_url(session_id))
+    return await _published_ports_or_empty(session_id)
 
 
 async def recreate_container(
@@ -1594,8 +1647,8 @@ async def recreate_container(
         except Exception:
             browser_runtime = BROWSER_RUNTIME_STANDARD
     await create_container(session_id, width=width, height=height, user_agent=user_agent, proxy=proxy, fingerprint_profile=fingerprint_profile, browser_lang=browser_lang, image_name=image_name, browser_runtime=browser_runtime)
-    ports = await get_container_ports(session_id)
-    await _wait_grid_ready(ports["selenium_port"])
+    await _wait_grid_ready(await resolve_selenium_base_url(session_id))
+    ports = await _published_ports_or_empty(session_id)
     if reconcile_network:
         ports, _ = await reconcile_browser_network_profile(
             session_id,

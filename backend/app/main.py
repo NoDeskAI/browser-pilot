@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app import db
-from app.config import APP_TITLE
+from app.config import APP_PUBLIC_ORIGINS, APP_TITLE, validate_public_runtime_config
 from app.logging_config import setup_logging
 from app.auth.routes import router as auth_router
 from app.routes.docker import router as docker_router
@@ -32,6 +32,7 @@ from app.edition import register_ee
 
 setup_logging()
 logger = logging.getLogger("access")
+validate_public_runtime_config()
 
 
 @asynccontextmanager
@@ -51,7 +52,7 @@ app = FastAPI(title=f"{APP_TITLE} API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=APP_PUBLIC_ORIGINS or ["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )

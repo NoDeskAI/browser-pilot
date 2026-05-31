@@ -53,7 +53,6 @@ async function fetchBrand(): Promise<void> {
 interface SessionsState {
   sessions: Session[]
   activeId: string | null
-  activePorts: { seleniumPort: number; vncPort: number } | null
   containerLoading: boolean
   containerRestarting: boolean
   networkProfileRefreshing: boolean
@@ -64,7 +63,6 @@ interface SessionsState {
 const state = reactive<SessionsState>({
   sessions: [],
   activeId: null,
-  activePorts: null,
   containerLoading: false,
   containerRestarting: false,
   networkProfileRefreshing: false,
@@ -104,7 +102,7 @@ function clearStartingSoon(id: string): void {
 }
 
 function assertContainerStarted(data: any): void {
-  if (!data?.ok || !data?.ports) {
+  if (!data?.ok) {
     throw new Error(data?.error || 'Container start failed')
   }
 }
@@ -145,7 +143,6 @@ async function fetchSessions(): Promise<void> {
         currentUrl: s.currentUrl || '',
         currentTitle: s.currentTitle || '',
         containerStatus,
-        ports: containerStatus === 'running' ? (s.ports || local?.ports || null) : (s.ports || null),
         devicePreset: s.devicePreset || '',
         proxyUrl: s.proxyUrl || '',
         networkEgressId: s.networkEgressId ?? null,
@@ -226,7 +223,6 @@ async function createSession(
     currentUrl: '',
     currentTitle: '',
     containerStatus: 'starting',
-    ports: null,
     proxyUrl: data.proxyUrl || '',
     networkEgressId: data.networkEgressId ?? null,
     networkEgressName: data.networkEgressName || 'Direct',
@@ -271,14 +267,9 @@ async function _startContainerForSession(id: string): Promise<void> {
     const data = await res.json()
     assertContainerStarted(data)
     started = true
-    state.activePorts = {
-      seleniumPort: data.ports.selenium_port,
-      vncPort: data.ports.vnc_port,
-    }
     const s = state.sessions.find(s => s.id === id)
     if (s) {
       s.containerStatus = 'running'
-      s.ports = data.ports
       if (data.fingerprintProfile) s.fingerprintProfile = data.fingerprintProfile
       applyNetworkEgressFields(s, data)
     }
@@ -298,16 +289,8 @@ async function switchSession(id: string): Promise<void> {
   await saveAppState('active_session_id', id)
 
   const s = state.sessions.find(s => s.id === id)
-  if (s && s.containerStatus === 'running' && s.ports) {
-    state.activePorts = {
-      seleniumPort: s.ports.selenium_port,
-      vncPort: s.ports.vnc_port,
-    }
-  } else if (s?.containerStatus === 'starting') {
-    state.activePorts = null
+  if (s?.containerStatus === 'starting') {
     await _startContainerForSession(id)
-  } else {
-    state.activePorts = null
   }
 }
 
@@ -329,15 +312,8 @@ async function startContainer(id: string): Promise<void> {
     started = true
     if (s) {
       s.containerStatus = 'running'
-      s.ports = data.ports
       if (data.fingerprintProfile) s.fingerprintProfile = data.fingerprintProfile
       applyNetworkEgressFields(s, data)
-    }
-    if (isActive) {
-      state.activePorts = {
-        seleniumPort: data.ports.selenium_port,
-        vncPort: data.ports.vnc_port,
-      }
     }
   } catch (err) {
     const current = state.sessions.find(s => s.id === id)
@@ -357,10 +333,6 @@ async function pauseContainer(id: string): Promise<void> {
     const s = state.sessions.find(s => s.id === id)
     if (s) {
       s.containerStatus = 'paused'
-      s.ports = null
-    }
-    if (state.activeId === id) {
-      state.activePorts = null
     }
   } catch {
     toast.error(i18n.global.t('app.containerPauseError'))
@@ -374,10 +346,6 @@ async function stopContainer(id: string): Promise<void> {
     const s = state.sessions.find(s => s.id === id)
     if (s) {
       s.containerStatus = 'exited'
-      s.ports = null
-    }
-    if (state.activeId === id) {
-      state.activePorts = null
     }
   } catch {
     toast.error(i18n.global.t('app.containerStopError'))
@@ -393,20 +361,13 @@ async function changeDevicePreset(id: string, preset: string): Promise<void> {
       body: JSON.stringify({ preset }),
     })
     const data = await res.json()
-    if (data.ok && data.ports) {
+    if (data.ok) {
       const s = state.sessions.find(s => s.id === id)
       if (s) {
         s.devicePreset = data.devicePreset || preset
-        s.ports = data.ports
         s.containerStatus = 'running'
         if (data.fingerprintProfile) s.fingerprintProfile = data.fingerprintProfile
         applyNetworkEgressFields(s, data)
-      }
-      if (state.activeId === id) {
-        state.activePorts = {
-          seleniumPort: data.ports.selenium_port,
-          vncPort: data.ports.vnc_port,
-        }
       }
     }
   } finally {
@@ -423,19 +384,12 @@ async function changeNetworkEgress(id: string, networkEgressId: string | null): 
       body: JSON.stringify({ networkEgressId }),
     })
     const data = await res.json()
-    if (data.ok && data.ports) {
+    if (data.ok) {
       const s = state.sessions.find(s => s.id === id)
       if (s) {
-        s.ports = data.ports
         s.containerStatus = 'running'
         if (data.fingerprintProfile) s.fingerprintProfile = data.fingerprintProfile
         applyNetworkEgressFields(s, data)
-      }
-      if (state.activeId === id) {
-        state.activePorts = {
-          seleniumPort: data.ports.selenium_port,
-          vncPort: data.ports.vnc_port,
-        }
       }
     } else if (data?.error) {
       throw new Error(data.error)
@@ -458,17 +412,8 @@ async function regenerateFingerprint(id: string): Promise<void> {
       const s = state.sessions.find(s => s.id === id)
       if (s) {
         s.fingerprintProfile = data.fingerprintProfile || null
-        if (data.ports) {
-          s.ports = data.ports
-          s.containerStatus = 'running'
-        }
+        s.containerStatus = 'running'
         applyNetworkEgressFields(s, data)
-      }
-      if (state.activeId === id && data.ports) {
-        state.activePorts = {
-          seleniumPort: data.ports.selenium_port,
-          vncPort: data.ports.vnc_port,
-        }
       }
     }
   } finally {
@@ -485,10 +430,7 @@ async function refreshNetworkProfile(id: string): Promise<void> {
       const s = state.sessions.find(s => s.id === id)
       if (s) {
         if (data.fingerprintProfile) s.fingerprintProfile = data.fingerprintProfile
-        if (data.ports) {
-          s.ports = data.ports
-          s.containerStatus = 'running'
-        }
+        s.containerStatus = 'running'
       }
     } else if (data?.error) {
       throw new Error(data.error)
@@ -547,7 +489,6 @@ async function deleteSession(id: string, options?: DeleteSessionFileOptions): Pr
   startingSessionIds.delete(id)
   state.sessions = state.sessions.filter(s => s.id !== id)
   if (state.activeId === id) {
-    state.activePorts = null
     state.activeId = null
   }
   return data

@@ -7,16 +7,22 @@ import secrets
 import shlex
 import string
 import asyncio
+import contextlib
+import time
 from datetime import datetime, timezone
 from typing import Any, Literal
 
 import asyncpg
-from fastapi import APIRouter, Body, Depends, HTTPException, Request
+import websockets
+from fastapi import APIRouter, Body, Depends, HTTPException, Request, WebSocket
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
+from starlette.websockets import WebSocketDisconnect, WebSocketState
 
 from app import db
 from app import agent_devices
+from app import rfb_proxy
+from app import viewer_tickets
 from app.auth.dependencies import CurrentUser, get_current_user, get_session_aware_user, require_role, verify_session_access
 from app.container import (
     BROWSER_RUNTIME_CLOAK,
@@ -25,11 +31,12 @@ from app.container import (
     exec_in_container,
     get_all_container_statuses,
     get_container_status,
-    get_container_ports,
     pause_container,
     recreate_container,
     remove_container,
+    resolve_vnc_websocket_url,
     resolve_network_via_browser,
+    session_vnc_password,
     sync_fingerprint_profile_to_container,
     stop_container,
 )
@@ -109,6 +116,38 @@ async def _verify_session_tenant(session_id: str, user: CurrentUser) -> None:
         raise HTTPException(status_code=404, detail="Session not found")
 
 
+def _operator_subject_for_user(user: CurrentUser) -> str:
+    if getattr(user, "api_token_id", None):
+        return f"token:{user.api_token_id}"
+    return f"user:{user.id}"
+
+
+async def _record_viewer_rejection(
+    session_id: str,
+    *,
+    actor: str,
+    actor_owner_user_id: str | None,
+    lease: dict[str, Any] | None = None,
+    summary: str,
+    error: str,
+) -> None:
+    if not db.is_ready():
+        return
+    with contextlib.suppress(Exception):
+        await agent_devices.record_action_event(
+            session_id=session_id,
+            actor=actor,
+            actor_owner_user_id=actor_owner_user_id,
+            lease=lease,
+            action="session.viewer.connect",
+            outcome="rejected",
+            side_effect_level="none",
+            summary=summary,
+            details={"reason": error},
+            error=error,
+        )
+
+
 class CreateSessionBody(BaseModel):
     name: str = "新会话"
     devicePreset: str = DEFAULT_PRESET
@@ -142,6 +181,10 @@ class NetworkProfileOverrideBody(BaseModel):
 
 class FingerprintActionBody(BaseModel):
     action: str = "regenerate"
+
+
+class ViewerTicketBody(BaseModel):
+    mode: Literal["control"] = "control"
 
 
 class AppStateBody(BaseModel):
@@ -641,15 +684,6 @@ async def list_sessions(user: CurrentUser = Depends(get_current_user)):
             **egress_payload,
         }
 
-        if container_status == "running":
-            try:
-                ports = await get_container_ports(sid)
-                entry["ports"] = ports
-            except Exception:
-                entry["ports"] = None
-        else:
-            entry["ports"] = None
-
         result.append(entry)
     return {"sessions": result}
 
@@ -755,6 +789,152 @@ async def create_session(body: CreateSessionBody, user: CurrentUser = Depends(ge
         next_step="inspect_or_acquire_lease",
         state_changed=True,
     )
+
+
+@router.post("/api/sessions/{session_id}/viewer-ticket")
+async def create_viewer_ticket(
+    session_id: str,
+    request: Request,
+    body: ViewerTicketBody | None = Body(None),
+    user: CurrentUser = Depends(get_session_aware_user),
+):
+    await verify_session_access(session_id, user)
+    mode = (body or ViewerTicketBody()).mode
+    try:
+        ctx = await agent_devices.require_active_lease(
+            session_id,
+            user,
+            action="session.viewer.ticket.issue",
+            side_effect_level="internal",
+        )
+    except agent_devices.AgentDeviceLeaseError as exc:
+        await _record_viewer_rejection(
+            session_id,
+            actor=_operator_subject_for_user(user),
+            actor_owner_user_id=user.id,
+            lease=exc.lease,
+            summary=exc.message,
+            error=exc.reason,
+        )
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+
+    try:
+        payload = await viewer_tickets.issue_viewer_ticket(
+            session_id=session_id,
+            user=user,
+            ctx=ctx,
+            request=request,
+            mode=mode,
+        )
+    except viewer_tickets.ViewerTicketError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+
+    audit_id = await agent_devices.record_action_event(
+        session_id=session_id,
+        actor=ctx.actor,
+        actor_owner_user_id=ctx.actor_owner_user_id,
+        lease=ctx.lease,
+        action=ctx.action,
+        outcome="succeeded",
+        side_effect_level="internal",
+        summary="Issued short-lived viewer ticket",
+        details={
+            "mode": payload["mode"],
+            "expiresAt": payload["expiresAt"],
+            "ttlSeconds": payload["ttlSeconds"],
+        },
+    )
+    return agent_devices.control_action_response(
+        payload,
+        device_id=session_id,
+        user=user,
+        lease=ctx.lease,
+        action=ctx.action,
+        status="succeeded",
+        audit_event_id=audit_id,
+        next_step="connect_viewer",
+        state_changed=False,
+    )
+
+
+@router.websocket("/api/sessions/{session_id}/vnc")
+async def proxy_session_vnc(websocket: WebSocket, session_id: str):
+    token = websocket.query_params.get("ticket")
+    try:
+        ticket = await viewer_tickets.consume_viewer_ticket(
+            session_id=session_id,
+            token=token,
+            origin=websocket.headers.get("origin"),
+        )
+    except viewer_tickets.ViewerTicketError as exc:
+        await _record_viewer_rejection(
+            session_id,
+            actor="viewer:ticket",
+            actor_owner_user_id=None,
+            summary=exc.message,
+            error=exc.reason,
+        )
+        await websocket.close(code=1008)
+        return
+    except Exception as exc:
+        logger.warning("Viewer ticket validation failed for %s: %s", session_id, exc)
+        await websocket.close(code=1011)
+        return
+
+    await websocket.accept()
+    started_at = time.monotonic()
+    downstream_bytes = 0
+    upstream_bytes = 0
+    outcome = "succeeded"
+    error_reason: str | None = None
+    summary = "Viewer connection closed"
+    try:
+        upstream_url = await resolve_vnc_websocket_url(session_id)
+        async with websockets.connect(upstream_url, max_size=None) as upstream:
+            downstream_buffer, upstream_buffer = await rfb_proxy.authenticate_upstream_vnc(
+                downstream=websocket,
+                upstream=upstream,
+                password=session_vnc_password(session_id),
+            )
+            downstream_bytes, upstream_bytes = await rfb_proxy.bridge_websockets(
+                downstream=websocket,
+                upstream=upstream,
+                downstream_buffer=downstream_buffer,
+                upstream_buffer=upstream_buffer,
+            )
+    except WebSocketDisconnect:
+        summary = "Viewer disconnected"
+    except Exception as exc:
+        outcome = "failed"
+        error_reason = type(exc).__name__
+        summary = f"Viewer proxy failed: {exc}"
+        logger.warning("Viewer proxy failed for %s: %s", session_id, exc)
+    finally:
+        duration_ms = int((time.monotonic() - started_at) * 1000)
+        with contextlib.suppress(Exception):
+            await agent_devices.record_action_event(
+                session_id=session_id,
+                actor=ticket.operator_subject,
+                actor_owner_user_id=ticket.user_id,
+                lease=ticket.lease,
+                action="session.viewer.connect",
+                outcome=outcome,
+                side_effect_level="external",
+                summary=summary,
+                details={
+                    "ticketId": ticket.id,
+                    "mode": ticket.mode,
+                    "durationMs": duration_ms,
+                    "bytesFromViewer": downstream_bytes,
+                    "bytesToViewer": upstream_bytes,
+                    "remoteAddr": ticket.remote_addr,
+                    "userAgent": ticket.user_agent,
+                },
+                error=error_reason,
+            )
+        if websocket.application_state == WebSocketState.CONNECTED:
+            with contextlib.suppress(Exception):
+                await websocket.close()
 
 
 @router.get("/api/sessions/{session_id}")
@@ -871,7 +1051,7 @@ async def start_session_container(session_id: str, user: CurrentUser = Depends(g
         session_id, user, action="session.container.start", side_effect_level="internal"
     )
     try:
-        ports = await ensure_container_running(session_id)
+        await ensure_container_running(session_id)
         await _activate_file_capture(session_id)
         from app.tools.browser.session import ensure_homepage
 
@@ -899,13 +1079,12 @@ async def start_session_container(session_id: str, user: CurrentUser = Depends(g
             ctx,
             {
                 "ok": True,
-                "ports": ports,
                 "homePage": home_page,
                 "fingerprintProfile": fp,
                 "fileCapture": await _file_capture_payload(session_id, container_status="running"),
             },
             summary="Started browser container",
-            details={"ports": ports, "homePage": home_page},
+            details={"homePage": home_page},
         )
     except Exception as exc:
         logger.error("Container start failed for %s: %s", session_id, exc)
@@ -965,7 +1144,7 @@ async def unpause_session_container(session_id: str, user: CurrentUser = Depends
     if rejected:
         return rejected
     try:
-        ports = await ensure_container_running(session_id)
+        await ensure_container_running(session_id)
         await _activate_file_capture(session_id)
         pool = get_pool()
         row = await pool.fetchrow(
@@ -990,12 +1169,10 @@ async def unpause_session_container(session_id: str, user: CurrentUser = Depends
             ctx,
             {
                 "ok": True,
-                "ports": ports,
                 "fingerprintProfile": fp,
                 "fileCapture": await _file_capture_payload(session_id, container_status="running"),
             },
             summary="Unpaused browser container",
-            details={"ports": ports},
         )
     except Exception as exc:
         logger.error("Container unpause failed for %s: %s", session_id, exc)
@@ -1060,7 +1237,7 @@ async def change_device_preset(session_id: str, body: DevicePresetBody, user: Cu
     from app.tools.browser.session import invalidate_session_cache
     invalidate_session_cache(session_id)
     await stop_download_watcher(session_id)
-    ports = await recreate_container(
+    await recreate_container(
         session_id,
         width=preset_data["width"],
         height=preset_data["height"],
@@ -1072,7 +1249,7 @@ async def change_device_preset(session_id: str, body: DevicePresetBody, user: Cu
     )
     await _activate_file_capture(session_id)
     fp_response = await _with_runtime_health(session_id, fp_profile)
-    return {"ok": True, "ports": ports, "devicePreset": body.preset, "fingerprintProfile": fp_response}
+    return {"ok": True, "devicePreset": body.preset, "fingerprintProfile": fp_response}
 
 
 @router.post("/api/sessions/{session_id}/network-egress")
@@ -1122,7 +1299,7 @@ async def change_network_egress(
     from app.tools.browser.session import invalidate_session_cache
     invalidate_session_cache(session_id)
     await stop_download_watcher(session_id)
-    ports = await recreate_container(
+    await recreate_container(
         session_id,
         width=preset_data["width"],
         height=preset_data["height"],
@@ -1136,7 +1313,6 @@ async def change_network_egress(
     fp_response = await _with_runtime_health(session_id, fp_profile)
     return {
         "ok": True,
-        "ports": ports,
         "proxyUrl": effective_egress.proxy_url,
         "fingerprintProfile": fp_response,
         **_egress_payload(effective_egress),
@@ -1190,7 +1366,7 @@ async def regenerate_fingerprint(session_id: str, body: FingerprintActionBody, u
     fp_ua = fp_profile.get("navigator", {}).get("userAgent") if isinstance(fp_profile, dict) else None
 
     await stop_download_watcher(session_id)
-    ports = await recreate_container(
+    await recreate_container(
         session_id,
         width=preset_data["width"],
         height=preset_data["height"],
@@ -1204,7 +1380,6 @@ async def regenerate_fingerprint(session_id: str, body: FingerprintActionBody, u
     fp_response = await _with_runtime_health(session_id, fp_profile)
     return {
         "ok": True,
-        "ports": ports,
         "fingerprintProfile": fp_response,
         "proxyUrl": effective_egress.proxy_url,
         **_egress_payload(effective_egress),
@@ -1218,9 +1393,9 @@ async def regenerate_fingerprint(session_id: str, body: FingerprintActionBody, u
 @router.post("/api/sessions/{session_id}/network-profile/refresh")
 async def refresh_network_profile(session_id: str, user: CurrentUser = Depends(get_session_aware_user)):
     await verify_session_access(session_id, user)
-    ports = await ensure_container_running(session_id)
+    runtime_ports = await ensure_container_running(session_id)
     await _activate_file_capture(session_id)
-    observed = await resolve_network_via_browser(ports, session_id=session_id, mode="deep")
+    observed = await resolve_network_via_browser(runtime_ports, session_id=session_id, mode="deep")
     observed_payload = _stable_network_payload(observed)
     observed_payload["observedAt"] = datetime.now(timezone.utc).isoformat()
 
@@ -1255,7 +1430,6 @@ async def refresh_network_profile(session_id: str, user: CurrentUser = Depends(g
     _apply_row_fingerprint_readiness(fp_response, row)
     return {
         "ok": True,
-        "ports": ports,
         "observedNetworkProfile": observed_payload,
         "fingerprintProfile": fp_response,
     }

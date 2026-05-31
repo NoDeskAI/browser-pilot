@@ -1,0 +1,11 @@
+# Caddy does not emit access logs by default; keep it that way so signed
+# download URLs and viewer tickets in query strings do not enter proxy logs.
+{$PUBLIC_SITE_ADDRESS} {
+  encode zstd gzip
+
+  reverse_proxy backend:8000 {
+    header_up X-Forwarded-Proto {scheme}
+    header_up X-Forwarded-Host {host}
+    header_up X-Forwarded-For {remote_host}
+  }
+}

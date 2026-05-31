@@ -45,10 +45,19 @@ BROWSER_RUNTIME_CONTROL_URL = _env("BROWSER_RUNTIME_CONTROL_URL", "")
 BROWSER_RUNTIME_CONTROL_TOKEN = _env("BROWSER_RUNTIME_CONTROL_TOKEN", "")
 BROWSER_RUNTIME_COMMAND_MAX_TIMEOUT = int(_env("BROWSER_RUNTIME_COMMAND_MAX_TIMEOUT", "3600"))
 CLOAK_BROWSER_IMAGE_NAME = _env("CLOAK_BROWSER_IMAGE_NAME", "browser-pilot-cloak:latest")
+BROWSER_RUNTIME_ACCESS_MODE = _env("BROWSER_RUNTIME_ACCESS_MODE", "private").strip().lower()
+BROWSER_VNC_PASSWORD_SECRET = _env("BROWSER_VNC_PASSWORD_SECRET", "")
+VIEWER_TICKET_TTL_SECONDS = int(_env("VIEWER_TICKET_TTL_SECONDS", "60"))
 BROWSER_HOME_URL = _env("BROWSER_HOME_URL", "https://www.google.com/")
 BP_LEGACY_DOCKER_DOWNLOAD_WATCHER = _env("BP_LEGACY_DOCKER_DOWNLOAD_WATCHER", "").lower() in {"1", "true", "yes", "on"}
 
 APP_TITLE = _env("APP_TITLE", "Browser Pilot")
+APP_ENV = _env("APP_ENV", "development").strip().lower()
+APP_PUBLIC_ORIGINS = [
+    part.strip().rstrip("/")
+    for part in _env("APP_PUBLIC_ORIGINS", "").split(",")
+    if part.strip()
+]
 CLI_COMMAND_NAME = _env("CLI_COMMAND_NAME", "bpilot")
 CONTAINER_PREFIX = _env("CONTAINER_PREFIX", "bp")
 BROWSER_GL_MODE = _env("BROWSER_GL_MODE", "auto")
@@ -124,6 +133,45 @@ def _resolve_jwt_secret() -> str:
 
 
 JWT_SECRET = _resolve_jwt_secret()
+
+
+# --- Public deployment guardrails ---
+
+FILE_DOWNLOAD_URL_TTL_SECONDS = int(_env("FILE_DOWNLOAD_URL_TTL_SECONDS", "300"))
+
+
+def is_production() -> bool:
+    return APP_ENV in {"prod", "production"}
+
+
+def origin_allowed(origin: str | None) -> bool:
+    if not APP_PUBLIC_ORIGINS:
+        return not is_production()
+    normalized = str(origin or "").strip().rstrip("/")
+    return "*" in APP_PUBLIC_ORIGINS or normalized in APP_PUBLIC_ORIGINS
+
+
+def validate_public_runtime_config() -> None:
+    if BROWSER_RUNTIME_ACCESS_MODE not in {"private", "published"}:
+        raise RuntimeError("BROWSER_RUNTIME_ACCESS_MODE must be private or published")
+    if VIEWER_TICKET_TTL_SECONDS < 10 or VIEWER_TICKET_TTL_SECONDS > 300:
+        raise RuntimeError("VIEWER_TICKET_TTL_SECONDS must be between 10 and 300")
+    if FILE_DOWNLOAD_URL_TTL_SECONDS < 30 or FILE_DOWNLOAD_URL_TTL_SECONDS > 3600:
+        raise RuntimeError("FILE_DOWNLOAD_URL_TTL_SECONDS must be between 30 and 3600")
+    if not is_production():
+        return
+    if BROWSER_RUNTIME_ACCESS_MODE == "published":
+        raise RuntimeError("BROWSER_RUNTIME_ACCESS_MODE=published is not allowed in production")
+    if not APP_PUBLIC_ORIGINS:
+        raise RuntimeError("APP_PUBLIC_ORIGINS must be set in production")
+    if "*" in APP_PUBLIC_ORIGINS:
+        raise RuntimeError("APP_PUBLIC_ORIGINS cannot be '*' in production")
+    if not BROWSER_VNC_PASSWORD_SECRET:
+        raise RuntimeError("BROWSER_VNC_PASSWORD_SECRET must be set in production")
+    if not BROWSER_RUNTIME_CONTROL_URL:
+        raise RuntimeError("BROWSER_RUNTIME_CONTROL_URL must be set in production")
+    if not BROWSER_RUNTIME_CONTROL_TOKEN:
+        raise RuntimeError("BROWSER_RUNTIME_CONTROL_TOKEN must be set in production")
 
 # --- Edition detection ---
 

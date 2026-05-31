@@ -6,7 +6,6 @@ export interface Session {
   currentUrl: string
   currentTitle: string
   containerStatus: 'running' | 'paused' | 'exited' | 'not_found' | 'starting'
-  ports?: { selenium_port: number; vnc_port: number } | null
   devicePreset?: string
   proxyUrl?: string
   networkEgressId?: string | null

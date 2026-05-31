@@ -27,10 +27,7 @@ const notify = useNotify()
 const { state: sessions, switchSession, startContainer, pauseContainer, deleteSession, renameSession, fetchSessions } = useSessions()
 
 const activeSession = computed(() => sessions.sessions.find(s => s.id === sessions.activeId))
-const vncUrl = computed(() => {
-  if (!sessions.activePorts?.vncPort) return null
-  return `ws://${location.hostname}:${sessions.activePorts.vncPort}/websockify`
-})
+const viewerVisible = computed(() => activeSession.value?.containerStatus === 'running')
 
 const editing = ref(false)
 const editName = ref('')
@@ -325,9 +322,9 @@ async function onPauseContainer() {
     </Dialog>
 
     <div class="flex-1 relative overflow-hidden min-h-0 bg-muted/10">
-      <NoVNCViewer v-if="vncUrl && sessions.activeId" :key="vncUrl" :ws-url="vncUrl" :session-id="sessions.activeId" />
+      <NoVNCViewer v-if="viewerVisible && sessions.activeId" :key="sessions.activeId" :session-id="sessions.activeId" />
       
-      <div v-else-if="sessions.activeId && !vncUrl && !sessions.containerLoading" class="absolute inset-0 flex flex-col items-center justify-center text-muted-foreground">
+      <div v-else-if="sessions.activeId && !viewerVisible && !sessions.containerLoading" class="absolute inset-0 flex flex-col items-center justify-center text-muted-foreground">
         <Monitor class="size-10 mb-3 opacity-20" :stroke-width="1.5" />
         <p class="text-sm">{{ activeSession?.containerStatus === 'paused' ? t('app.browserHibernated') : t('app.containerStopped') }}</p>
         <p class="text-xs mt-1 opacity-60 mb-4 max-w-sm text-center">
@@ -344,7 +341,7 @@ async function onPauseContainer() {
           {{ activeSession?.containerStatus === 'paused' ? t('session.resumeFromHibernate') : t('session.startContainer') }}
         </Button>
       </div>
-      <div v-else-if="sessions.activeId && !vncUrl && sessions.containerLoading" class="absolute inset-0 flex flex-col items-center justify-center text-muted-foreground">
+      <div v-else-if="sessions.activeId && !viewerVisible && sessions.containerLoading" class="absolute inset-0 flex flex-col items-center justify-center text-muted-foreground">
         <Loader2 class="size-8 mb-3 animate-spin opacity-70" />
         <p class="text-sm">{{ t('app.startingBrowser') }}</p>
         <p class="text-xs mt-1 opacity-60 max-w-sm text-center">{{ t('app.startingBrowserHint') }}</p>

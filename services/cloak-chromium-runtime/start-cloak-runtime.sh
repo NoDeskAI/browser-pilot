@@ -21,7 +21,14 @@ fluxbox >/tmp/fluxbox.log 2>&1 &
 # is available. It is harmless, but it covers the noVNC screen and looks like a
 # failed browser start, so remove it if the base image still emits one.
 (sleep 1; pkill -f "fbsetbg: I can't find an app" 2>/dev/null || true) &
-x11vnc -display "$DISPLAY" -forever -shared -nopw -listen 0.0.0.0 -rfbport 5900 >/tmp/x11vnc.log 2>&1 &
+VNC_PASSWORD="${BP_VNC_PASSWORD:-${SE_VNC_PASSWORD:-}}"
+if [[ -z "$VNC_PASSWORD" ]]; then
+  echo "BP_VNC_PASSWORD or SE_VNC_PASSWORD is required" >&2
+  exit 1
+fi
+x11vnc -storepasswd "$VNC_PASSWORD" /tmp/x11vnc.pass >/dev/null 2>&1
+chmod 600 /tmp/x11vnc.pass
+x11vnc -display "$DISPLAY" -forever -shared -rfbauth /tmp/x11vnc.pass -listen 0.0.0.0 -rfbport 5900 >/tmp/x11vnc.log 2>&1 &
 websockify --web=/usr/share/novnc 0.0.0.0:7900 localhost:5900 >/tmp/websockify.log 2>&1 &
 
 exec /usr/local/bin/bp-cloak-driver

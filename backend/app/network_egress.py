@@ -446,8 +446,9 @@ async def prepare_session_egress_gateway(
     row: Any | None,
     *,
     session_id: str,
-    selenium_port: int,
-    vnc_port: int,
+    selenium_port: int | None = None,
+    vnc_port: int | None = None,
+    publish_ports: bool = False,
 ) -> SessionEgressGateway:
     """Create a session-scoped egress namespace for managed full-tunnel exits.
 
@@ -468,14 +469,18 @@ async def prepare_session_egress_gateway(
     session_label = f"{CONTAINER_PREFIX}.session_id={session_id}"
     gateway_label = f"{CONTAINER_PREFIX}.egress_gateway=true"
     egress_label = f"{CONTAINER_PREFIX}.egress_id={row['id']}"
-    publish_args = f"-p {selenium_port}:4444 -p {vnc_port}:7900"
+    publish_args = ""
+    if publish_ports:
+        if not selenium_port or not vnc_port:
+            raise EgressError("Host port publishing requires selenium and VNC ports")
+        publish_args = f"-p 127.0.0.1:{selenium_port}:4444 -p 127.0.0.1:{vnc_port}:7900 "
     common = (
         f"docker run -d --name {shlex.quote(name)} "
         f"--label {shlex.quote(session_label)} "
         f"--label {shlex.quote(gateway_label)} "
         f"--label {shlex.quote(egress_label)} "
         f"--network {network} --add-host host.docker.internal:host-gateway "
-        f"{publish_args} "
+        f"{publish_args}"
     )
     warnings: list[str] = []
 

@@ -7,9 +7,7 @@ import time
 from pathlib import Path
 from urllib.parse import quote, urlencode
 
-from app.config import API_BASE_URL, JWT_SECRET
-
-FILE_DOWNLOAD_URL_TTL_SECONDS = 15 * 60
+from app.config import API_BASE_URL, FILE_DOWNLOAD_URL_TTL_SECONDS, JWT_SECRET
 
 
 def file_url_ext(filename: str) -> str:

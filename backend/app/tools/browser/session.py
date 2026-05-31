@@ -9,8 +9,13 @@ from typing import Any
 
 import httpx
 
-from app.config import BROWSER_HOME_URL, DOCKER_HOST_ADDR
-from app.container import BROWSER_RUNTIME_CLOAK, BROWSER_RUNTIME_STANDARD, ensure_container_running
+from app.config import BROWSER_HOME_URL
+from app.container import (
+    BROWSER_RUNTIME_CLOAK,
+    BROWSER_RUNTIME_STANDARD,
+    ensure_container_running,
+    resolve_selenium_base_url,
+)
 from app.db import get_pool
 from app.device_presets import get_preset, DEFAULT_PRESET
 from app.fingerprint import user_agent_metadata
@@ -321,8 +326,8 @@ async def ensure_session(chat_session_id: str) -> tuple[str, str]:
 
     bs = _sessions[chat_session_id]
 
-    ports = await ensure_container_running(chat_session_id)
-    bs.selenium_base = f"http://{DOCKER_HOST_ADDR}:{ports['selenium_port']}"
+    await ensure_container_running(chat_session_id)
+    bs.selenium_base = await resolve_selenium_base_url(chat_session_id)
 
     async with bs.lock:
         sid = await _ensure_session_impl(bs)
