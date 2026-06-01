@@ -6,7 +6,7 @@ import { useSessions } from '../composables/useSessions'
 import { useNotify } from '../composables/useNotify'
 import { api } from '../lib/api'
 import type { DeleteSessionFileOptions } from '../types'
-import { Play, Pause, Trash2, ChevronRight, Monitor, Key, Loader2, Copy, Check, FolderOpen } from 'lucide-vue-next'
+import { Play, Pause, Trash2, ChevronRight, Monitor, Key, Loader2, Copy, Check, FolderOpen, ShieldCheck } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -16,6 +16,7 @@ import NoVNCViewer from '../components/NoVNCViewer.vue'
 import BrowserLogPanel from '../components/BrowserLogPanel.vue'
 import SessionFilesDialog from '../components/SessionFilesDialog.vue'
 import SessionDeleteDialog from '../components/SessionDeleteDialog.vue'
+import SessionAuditDialog from '../components/SessionAuditDialog.vue'
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog'
@@ -36,6 +37,7 @@ const deleteDialogOpen = ref(false)
 const deleting = ref(false)
 const containerActionLoading = ref(false)
 const filesDialogOpen = ref(false)
+const auditDialogOpen = ref(false)
 
 // Session Token
 const tokenDialogOpen = ref(false)
@@ -202,6 +204,19 @@ async function onPauseContainer() {
       </div>
 
       <div class="flex items-center gap-1.5 shrink-0 ml-4">
+        <Tooltip>
+          <TooltipTrigger as-child>
+            <Button
+              variant="outline" size="sm" class="h-8 gap-1.5 text-muted-foreground hover:text-foreground"
+              @click="auditDialogOpen = true"
+            >
+              <ShieldCheck class="size-3.5" />
+              {{ t('session.audit') }}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>{{ t('session.auditHint') }}</TooltipContent>
+        </Tooltip>
+
         <Tooltip v-if="activeSession.containerStatus === 'running'">
           <TooltipTrigger as-child>
             <Button
@@ -279,6 +294,13 @@ async function onPauseContainer() {
       :deleting="deleting"
       :active-lease="activeSession.activeLease"
       @confirm="onDeleteSession"
+    />
+
+    <SessionAuditDialog
+      v-if="activeSession"
+      v-model:open="auditDialogOpen"
+      :session-id="activeSession.id"
+      :session-name="activeSession.name"
     />
 
     <!-- Session Token Dialog -->
