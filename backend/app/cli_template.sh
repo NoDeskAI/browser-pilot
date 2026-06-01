@@ -6,6 +6,7 @@ API_URL="{{API_URL}}"
 CLI_NAME="{{CLI_NAME}}"
 CONFIG_DIR="${HOME}/.${CLI_NAME}"
 CONFIG_FILE="${CONFIG_DIR}/config.json"
+LEASE_MAX_TTL_SECONDS=1800
 
 # ── Globals (set by option parser) ────────────────────────────────────
 JSON_OUT=false
@@ -545,6 +546,12 @@ _lease_body() {
       *) echo "Unknown lease option: $1"; exit 1 ;;
     esac
   done
+  if [[ -n "$ttl" ]]; then
+    if ! [[ "$ttl" =~ ^[0-9]+$ ]] || (( ttl < 1 || ttl > LEASE_MAX_TTL_SECONDS )); then
+      echo "Error: --ttl must be between 1 and ${LEASE_MAX_TTL_SECONDS} seconds" >&2
+      exit 1
+    fi
+  fi
   local body="{\"leaseMode\":\"$(_esc "$mode")\""
   [[ -n "$task_id" ]] && body="$body,\"taskId\":\"$(_esc "$task_id")\""
   [[ -n "$ttl" ]] && body="$body,\"ttlSeconds\":$ttl"
@@ -565,14 +572,14 @@ cmd_device() {
 
 cmd_lease_acquire() {
   local device_id="${1:-}"
-  [[ -n "$device_id" ]] || { echo "Usage: $CLI_NAME lease acquire <device-id> [--mode session_bound|task_bound] [--task-id ID] [--ttl seconds|--expires-at ISO8601]"; exit 1; }
+  [[ -n "$device_id" ]] || { echo "Usage: $CLI_NAME lease acquire <device-id> [--mode session_bound|task_bound] [--task-id ID] [--ttl 1-${LEASE_MAX_TTL_SECONDS}|--expires-at ISO8601]"; exit 1; }
   shift || true
   _api_post "/api/agent-devices/$device_id/leases" "$(_lease_body "$@")" | _out
 }
 
 cmd_lease_renew() {
   local device_id="${1:-}" lease_id="${2:-}"
-  [[ -n "$device_id" && -n "$lease_id" ]] || { echo "Usage: $CLI_NAME lease renew <device-id> <lease-id> [--ttl seconds|--expires-at ISO8601]"; exit 1; }
+  [[ -n "$device_id" && -n "$lease_id" ]] || { echo "Usage: $CLI_NAME lease renew <device-id> <lease-id> [--ttl 1-${LEASE_MAX_TTL_SECONDS}|--expires-at ISO8601]"; exit 1; }
   shift 2 || true
   _api_patch "/api/agent-devices/$device_id/leases/$lease_id" "$(_lease_body "$@")" | _out
 }
@@ -585,7 +592,7 @@ cmd_lease_release() {
 
 cmd_lease_reclaim() {
   local device_id="${1:-}"
-  [[ -n "$device_id" ]] || { echo "Usage: $CLI_NAME lease reclaim <device-id> [--ttl seconds|--expires-at ISO8601]"; exit 1; }
+  [[ -n "$device_id" ]] || { echo "Usage: $CLI_NAME lease reclaim <device-id> [--ttl 1-${LEASE_MAX_TTL_SECONDS}|--expires-at ISO8601]"; exit 1; }
   shift || true
   _api_post "/api/agent-devices/$device_id/reclaim" "$(_lease_body "$@")" | _out
 }
@@ -902,14 +909,14 @@ Agent Devices:
   Level 2 control transfer, request_intervention, handoff, and human takeover are not supported.
   devices                      List governed Agent Device sessions
   device <device-id>           Show DeviceVisibility for one session/device
-  lease acquire <device-id> [--mode session_bound|task_bound] [--task-id ID]
-                               Acquire an exclusive DeviceLease
-  lease renew <device-id> <lease-id> [--ttl seconds|--expires-at ISO8601]
-                               Update lease expiration
+  lease acquire <device-id> [--mode session_bound|task_bound] [--task-id ID] [--ttl 1-1800|--expires-at ISO8601]
+                               Acquire an exclusive DeviceLease; default/max TTL is 1800s
+  lease renew <device-id> <lease-id> [--ttl 1-1800|--expires-at ISO8601]
+                               Update lease expiration; repeat this command to extend
   lease release <device-id> <lease-id>
                                Release the current lease
-  lease reclaim <device-id> [--ttl seconds|--expires-at ISO8601]
-                               Force reclaim and create a new lease for this operator
+  lease reclaim <device-id> [--ttl 1-1800|--expires-at ISO8601]
+                               Force reclaim and create a new lease; default/max TTL is 1800s
   audit [--device <device-id>] [--limit N]
                                List Agent Device audit events
 

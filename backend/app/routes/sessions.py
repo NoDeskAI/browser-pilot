@@ -601,7 +601,7 @@ async def list_sessions(user: CurrentUser = Depends(get_current_user)):
             LEFT JOIN agent_device_leases l
               ON l.device_instance_id = s.id
              AND l.status = 'active'
-             AND (l.expires_at IS NULL OR l.expires_at > NOW())
+             AND l.expires_at > NOW()
             LEFT JOIN api_tokens tok ON l.current_operator = 'token:' || tok.id
             LEFT JOIN users ou ON l.operator_owner_user_id = ou.id
             WHERE s.tenant_id = $1
@@ -632,7 +632,7 @@ async def list_sessions(user: CurrentUser = Depends(get_current_user)):
             LEFT JOIN agent_device_leases l
               ON l.device_instance_id = s.id
              AND l.status = 'active'
-             AND (l.expires_at IS NULL OR l.expires_at > NOW())
+             AND l.expires_at > NOW()
             LEFT JOIN api_tokens tok ON l.current_operator = 'token:' || tok.id
             LEFT JOIN users ou ON l.operator_owner_user_id = ou.id
             WHERE s.tenant_id = $1 AND s.user_id = $2

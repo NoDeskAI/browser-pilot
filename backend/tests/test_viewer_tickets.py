@@ -107,7 +107,7 @@ class FakeConn:
                 return None
             if lease["session_id"] != session_id or lease["current_operator"] != operator or lease["status"] != "active":
                 return None
-            if lease["expires_at"] and lease["expires_at"] <= datetime.now(timezone.utc):
+            if lease["expires_at"] is None or lease["expires_at"] <= datetime.now(timezone.utc):
                 return None
             return lease
         if "update session_viewer_tickets" in sql:

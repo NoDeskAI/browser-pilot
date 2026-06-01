@@ -29,6 +29,7 @@ const leaseMode = ref<'session_bound' | 'task_bound'>('session_bound')
 const taskId = ref('')
 const ttlSeconds = ref('')
 const expiresAt = ref('')
+const maxLeaseTtlSeconds = 1800
 
 const selectedDevice = computed(() =>
   devices.value.find(device => device.device_instance_id === selectedId.value) || null,
@@ -83,13 +84,25 @@ async function fetchAudit() {
   }
 }
 
-function leasePayload() {
+function leasePayload(): Record<string, unknown> | null {
   const payload: Record<string, unknown> = { leaseMode: leaseMode.value }
-  const ttl = Number(ttlSeconds.value)
-  if (Number.isFinite(ttl) && ttl > 0) payload.ttlSeconds = ttl
+  if (ttlSeconds.value.trim()) {
+    const ttl = Number(ttlSeconds.value)
+    if (!Number.isInteger(ttl) || ttl < 1 || ttl > maxLeaseTtlSeconds) {
+      toast.error(t('agentDevices.ttlInvalid', { max: maxLeaseTtlSeconds }))
+      return null
+    }
+    payload.ttlSeconds = ttl
+  }
   if (expiresAt.value) {
     const parsed = new Date(expiresAt.value)
-    if (!Number.isNaN(parsed.getTime())) payload.expiresAt = parsed.toISOString()
+    const now = Date.now()
+    const maxExpiresAt = now + maxLeaseTtlSeconds * 1000
+    if (Number.isNaN(parsed.getTime()) || parsed.getTime() <= now || parsed.getTime() > maxExpiresAt) {
+      toast.error(t('agentDevices.expiresInvalid', { max: maxLeaseTtlSeconds }))
+      return null
+    }
+    payload.expiresAt = parsed.toISOString()
   }
   if (leaseMode.value === 'task_bound' && taskId.value.trim()) {
     payload.taskId = taskId.value.trim()
@@ -109,17 +122,20 @@ async function runDeviceAction(kind: 'acquire' | 'renew' | 'release' | 'reclaim'
     if (kind === 'acquire') {
       path += '/leases'
       body = leasePayload()
+      if (!body) return
     } else if (kind === 'renew') {
       if (!leaseId) return
       path += `/leases/${encodeURIComponent(leaseId)}`
       method = 'PATCH'
       body = leasePayload()
+      if (!body) return
     } else if (kind === 'release') {
       if (!leaseId) return
       path += `/leases/${encodeURIComponent(leaseId)}/release`
     } else {
       path += '/reclaim'
       body = leasePayload()
+      if (!body) return
     }
     const res = await api(path, {
       method,
@@ -406,7 +422,7 @@ function shortList(values?: string[] | null): string {
                   </div>
                   <div class="space-y-1.5">
                     <Label for="agent-device-ttl">{{ t('agentDevices.ttlSeconds') }}</Label>
-                    <Input id="agent-device-ttl" v-model="ttlSeconds" inputmode="numeric" placeholder="3600" />
+                    <Input id="agent-device-ttl" v-model="ttlSeconds" inputmode="numeric" type="number" min="1" :max="maxLeaseTtlSeconds" placeholder="1800" />
                   </div>
                 </div>
                 <div class="grid grid-cols-2 gap-3">

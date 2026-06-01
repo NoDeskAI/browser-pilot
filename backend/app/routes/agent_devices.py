@@ -15,7 +15,12 @@ router = APIRouter()
 class LeaseBody(BaseModel):
     lease_mode: str = Field(default="session_bound", alias="leaseMode")
     task_id: str | None = Field(default=None, alias="taskId")
-    ttl_seconds: int | None = Field(default=None, alias="ttlSeconds")
+    ttl_seconds: int | None = Field(
+        default=None,
+        alias="ttlSeconds",
+        ge=1,
+        le=agent_devices.MAX_LEASE_TTL_SECONDS,
+    )
     expires_at: datetime | None = Field(default=None, alias="expiresAt")
 
     model_config = {"populate_by_name": True}
