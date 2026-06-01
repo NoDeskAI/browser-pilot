@@ -18,6 +18,16 @@ def create_access_token(user_id: str, tenant_id: str, role: str) -> str:
     return jwt.encode(payload, JWT_SECRET, algorithm="HS256")
 
 
+def create_platform_access_token(platform_user_id: str, role: str) -> str:
+    payload: dict[str, Any] = {
+        "kind": "platform",
+        "sub": platform_user_id,
+        "role": role,
+        "exp": datetime.now(timezone.utc) + timedelta(minutes=JWT_EXPIRE_MINUTES),
+    }
+    return jwt.encode(payload, JWT_SECRET, algorithm="HS256")
+
+
 def decode_access_token(token: str) -> dict[str, Any]:
     """Decode and verify a JWT. Raises jwt.PyJWTError on failure."""
     return jwt.decode(token, JWT_SECRET, algorithms=["HS256"])

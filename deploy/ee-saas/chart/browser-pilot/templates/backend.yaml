@@ -1,0 +1,93 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "browser-pilot.backendServiceAccountName" . }}
+  labels:
+    {{- include "browser-pilot.labels" . | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "browser-pilot.fullname" . }}-backend
+  labels:
+    {{- include "browser-pilot.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "browser-pilot.name" . }}
+      app.kubernetes.io/component: backend
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        {{- include "browser-pilot.labels" . | nindent 8 }}
+        app.kubernetes.io/component: backend
+    spec:
+      serviceAccountName: {{ include "browser-pilot.backendServiceAccountName" . }}
+      automountServiceAccountToken: true
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: backend
+          image: {{ include "browser-pilot.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.port }}
+          env:
+            - name: EDITION
+              value: "ee"
+            - name: EE_SAAS_MODE
+              value: "true"
+            - name: BROWSER_RUNTIME_PROVIDER
+              value: {{ .Values.runtime.provider | quote }}
+            - name: APP_ENV
+              value: {{ .Values.env.appEnv | quote }}
+            - name: APP_TITLE
+              value: {{ .Values.env.appTitle | quote }}
+            - name: APP_PUBLIC_ORIGINS
+              value: {{ .Values.env.publicOrigins | quote }}
+            - name: API_BASE_URL
+              value: {{ .Values.env.apiBaseUrl | quote }}
+            - name: BROWSER_HOME_URL
+              value: {{ .Values.env.browserHomeUrl | quote }}
+            - name: SAAS_DEFAULT_ACTIVE_SESSION_LIMIT
+              value: {{ .Values.runtime.defaultActiveSessionLimit | quote }}
+            - name: SAAS_DEFAULT_MAX_SESSION_SECONDS
+              value: {{ .Values.runtime.defaultMaxSessionSeconds | quote }}
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.env.jwtSecretName }}
+                  key: JWT_SECRET
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.env.databaseSecretName }}
+                  key: DATABASE_URL
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "browser-pilot.fullname" . }}-backend
+  labels:
+    {{- include "browser-pilot.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: {{ include "browser-pilot.name" . }}
+    app.kubernetes.io/component: backend
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - name: http
+      port: {{ .Values.service.port }}
+      targetPort: http

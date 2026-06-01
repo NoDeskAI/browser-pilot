@@ -17,7 +17,7 @@ const { brand, init: initSessions, fetchBrand, createSession } = useSessions()
 
 const { isAuthenticated, fetchMe, refreshAuth } = useAuth()
 
-const isAuthPage = computed(() => route.path === '/login' || route.path === '/setup')
+const isAuthPage = computed(() => route.path === '/login' || route.path === '/setup' || route.path.startsWith('/platform'))
 const ready = ref(false)
 const bootstrap = reactive({
   status: 'checking',
@@ -92,7 +92,7 @@ async function syncRouteAfterBootstrap() {
     const res = await fetch('/api/site-info')
     const data = await res.json().catch(() => ({}))
     const setupComplete = !!data.setupComplete
-    if (!setupComplete && route.path !== '/setup') {
+    if (!setupComplete && route.path !== '/setup' && !route.path.startsWith('/platform')) {
       await router.replace('/setup')
       return
     }

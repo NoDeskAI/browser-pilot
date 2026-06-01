@@ -27,9 +27,9 @@ The default `docker-compose.yml` runs Docker operations through an internal `run
 **Mitigations:**
 
 - Never expose the service directly to the public internet without authentication.
-- The bundled production Compose stack uses Nginx as the only public 80/443 entrypoint; keep authentication in front of the public backend when deploying remotely.
+- The bundled single-host Compose stack uses Nginx as the only public 80/443 entrypoint; keep authentication in front of the public backend when deploying remotely.
 - Never publish the runtime-worker port outside the private service network.
-- Set a long random `BROWSER_RUNTIME_CONTROL_TOKEN` before production/public deployment.
+- Set a long random `BROWSER_RUNTIME_CONTROL_TOKEN` before public deployment.
 - Consider running the runtime worker in a dedicated VM or namespace to limit the blast radius.
 
 ### Browser Session Isolation

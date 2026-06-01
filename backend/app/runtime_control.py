@@ -10,6 +10,7 @@ from app.config import (
     BROWSER_RUNTIME_COMMAND_MAX_TIMEOUT,
     BROWSER_RUNTIME_CONTROL_TOKEN,
     BROWSER_RUNTIME_CONTROL_URL,
+    EE_SAAS_MODE,
 )
 
 logger = logging.getLogger("runtime_control")
@@ -126,6 +127,9 @@ async def run_local_command(cmd: str, timeout: float = 30) -> tuple[str, str, in
 
 
 async def run_runtime_command(cmd: str, timeout: float = 30) -> tuple[str, str, int]:
+    if EE_SAAS_MODE:
+        return "", "runtime shell commands are disabled in EE SaaS mode", -1
+
     if not runtime_control_enabled():
         return await run_local_command(cmd, timeout=timeout)
 

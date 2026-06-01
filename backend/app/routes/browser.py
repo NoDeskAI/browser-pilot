@@ -11,8 +11,8 @@ from pydantic import BaseModel, Field
 from app import agent_devices
 from app.auth.dependencies import CurrentUser, get_session_aware_user, verify_session_access
 from app.auto_name import maybe_auto_name
-from app.container import ensure_localhost_bridge_for_url
 from app.db import get_pool
+from app.runtime_provider import ensure_localhost_bridge_for_url
 from app.tools.browser.scripts import CLICK_ELEMENT_SCRIPT, OBSERVE_SCRIPT
 from app.tools.browser.session import (
     KEY_MAP,

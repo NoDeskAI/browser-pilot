@@ -359,6 +359,27 @@ def test_create_session_rejects_manual_proxy(monkeypatch):
     assert "Manual HTTP/SOCKS proxy is no longer supported" in exc.value.detail
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"chromeVersion": None},
+        {"imageDigest": None},
+        {"imageRef": ""},
+        {"runtimeImage": "registry.example/runtime@sha256:" + "a" * 64},
+    ],
+)
+def test_saas_create_session_rejects_runtime_image_fields_by_presence(monkeypatch, payload):
+    monkeypatch.setattr(sessions, "EE_SAAS_MODE", True)
+
+    with pytest.raises(sessions.HTTPException) as exc:
+        sessions._reject_saas_runtime_image_selection(
+            sessions.CreateSessionBody.model_validate({"name": "test", **payload})
+        )
+
+    assert exc.value.status_code == 403
+    assert exc.value.detail == "runtime_image_not_allowed"
+
+
 def test_start_session_container_is_not_lease_gated(monkeypatch):
     profile = _profile("zh-CN")
     pool = FakePool([
@@ -421,6 +442,7 @@ def test_start_session_container_is_not_lease_gated(monkeypatch):
 
     assert result["ok"] is True
     assert "ports" not in result
+    assert "homePage" in result
     assert result["agentDevice"]["leaseId"] is None
     assert result["agentDevice"]["currentOperator"] is None
     assert result["agentDevice"]["action"] == "session.container.start"
@@ -498,6 +520,8 @@ def test_create_container_passes_profile_dns_to_docker(monkeypatch):
     assert "--dns 119.29.29.29" in commands[0]
     assert "-p 127.0.0.1:55100:4444" not in commands[0]
     assert "-p 127.0.0.1:55101:7900" not in commands[0]
+    assert "-p 55100:4444" not in commands[0]
+    assert "-p 55101:7900" not in commands[0]
     assert "-e BROWSER_GL_MODE=auto" in commands[0]
     assert "-p 0:" not in commands[0]
     assert "bad" not in commands[0]
@@ -515,11 +539,11 @@ def test_create_container_with_managed_egress_uses_gateway_namespace(monkeypatch
         assert session_id == "session-1"
         return {"id": "egress-1", "type": "clash"}
 
-    async def fake_prepare(row, *, session_id, selenium_port, vnc_port, publish_ports):
+    async def fake_prepare(row, *, session_id, selenium_port, vnc_port, publish_ports=False):
         assert row["type"] == "clash"
-        assert selenium_port is None
-        assert vnc_port is None
-        assert publish_ports is False
+        assert selenium_port == 55100
+        assert vnc_port == 55101
+        assert publish_ports is True
         return network_egress.SessionEgressGateway(
             enabled=True,
             type="clash",
@@ -530,6 +554,7 @@ def test_create_container_with_managed_egress_uses_gateway_namespace(monkeypatch
         )
 
     monkeypatch.setattr(container, "_run", fake_run)
+    monkeypatch.setattr(container, "_runtime_access_private", lambda: False)
     monkeypatch.setattr(container, "_find_free_port", lambda: next(ports))
     monkeypatch.setattr(container, "ensure_docker_network", lambda: asyncio.sleep(0))
     monkeypatch.setattr(container, "_session_egress_row", fake_session_egress_row)
@@ -576,6 +601,7 @@ def test_create_container_cloak_runtime_uses_cloak_image_and_seed(monkeypatch):
     assert "-e CLOAK_FINGERPRINT_SEED=bp_session1" in commands[0]
     assert "-e BROWSER_TIMEZONE=Asia/Shanghai" in commands[0]
     assert "-p 127.0.0.1:55100:4444" not in commands[0]
+    assert "-p 55100:4444" not in commands[0]
 
 
 def test_get_container_ports_falls_back_to_session_gateway(monkeypatch):

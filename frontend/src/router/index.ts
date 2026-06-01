@@ -24,6 +24,7 @@ const router = createRouter({
     },
     { path: '/login', component: () => import('../views/LoginView.vue') },
     { path: '/setup', component: () => import('../views/SetupView.vue') },
+    { path: '/platform', component: () => import('../views/PlatformView.vue') },
     { path: '/:pathMatch(.*)*', redirect: '/' },
   ],
 })
@@ -51,7 +52,7 @@ router.beforeEach(async (to) => {
     return true
   }
 
-  if (!info.setupComplete && to.path !== '/setup') {
+  if (!info.setupComplete && to.path !== '/setup' && !to.path.startsWith('/platform')) {
     return '/setup'
   }
 

@@ -10,7 +10,9 @@ cd "$SCRIPT_DIR"
 
 # 加载 .env（自动 export 所有变量）
 set -a
-source .env 2>/dev/null || true
+if [[ -f .env ]]; then
+    source .env
+fi
 set +a
 
 LOG_DIR="${LOG_DIR:-./logs}"
@@ -31,8 +33,8 @@ usage() {
 用法:
   ./start.sh [dev] [ce|ee]       本地开发模式（默认，Ctrl+C 停止）
   ./start.sh [dev] [ce|ee] -d    本地开发后台 daemon 模式
-  ./start.sh prod [ce|ee]        生产 Docker Compose 模式（跟随日志）
-  ./start.sh prod [ce|ee] -d     生产 Docker Compose 后台模式
+  ./start.sh single-host [ce|ee]        单机 Docker Compose 模式（跟随日志）
+  ./start.sh single-host [ce|ee] -d     单机 Docker Compose 后台模式
   ./start.sh [ce|ee]            前台 watch 模式（Ctrl+C 停止）
   ./start.sh [ce|ee] -d         后台 daemon 模式
   ./start.sh --edition ce|-e ce 指定 CE 版
@@ -42,7 +44,7 @@ usage() {
 
 说明:
   dev 使用本机后端/前端进程，浏览器 runtime 使用 published 模式且只绑定 127.0.0.1。
-  prod 使用 docker-compose.prod.yml，公网只暴露反向代理 80/443。
+  single-host 使用 docker-compose.single-host.yml，公网只暴露 Nginx 反向代理 80/443。
   传 ce|ee 时强制指定版本。
   不传 ce|ee 时检查 ee/backend/__init__.py 和 ee/frontend/index.ts；都有才按 EE，否则按 CE。
 EOF
@@ -118,7 +120,11 @@ parse_args() {
                 shift
                 ;;
             prod)
-                set_target prod
+                echo "start.sh prod 已移除；单机部署入口是 ./start.sh single-host。" >&2
+                exit 2
+                ;;
+            single-host)
+                set_target single-host
                 shift
                 ;;
             --edition)
@@ -200,8 +206,8 @@ do_status() {
 }
 
 _compose_file() {
-    if [[ "$TARGET" == "prod" ]]; then
-        printf '%s\n' "docker-compose.prod.yml"
+    if [[ "$TARGET" == "single-host" ]]; then
+        printf '%s\n' "docker-compose.single-host.yml"
     else
         printf '%s\n' "docker-compose.yml"
     fi
@@ -315,7 +321,7 @@ _require_database_env() {
     fi
 }
 
-_require_prod_env() {
+_require_single_host_env() {
     _infer_postgres_env_from_database_url
     export APP_ENV="${APP_ENV:-production}"
     export NGINX_TLS_CERT_FILE="${NGINX_TLS_CERT_FILE:-fullchain.pem}"
@@ -329,8 +335,8 @@ _require_prod_env() {
         fi
     done
     if (( ${#missing[@]} > 0 )); then
-        echo "缺少生产配置: ${missing[*]}" >&2
-        echo "prod 模式需要 Nginx 域名和 TLS 证书、公开 Origin、VNC 密钥、runtime token、数据库和对象存储公开下载地址。" >&2
+        echo "缺少单机部署配置: ${missing[*]}" >&2
+        echo "single-host 模式需要 Nginx 域名和 TLS 证书、公开 Origin、VNC 密钥、runtime token、数据库和对象存储公开下载地址。" >&2
         exit 1
     fi
     local nginx_cert_dir="$SCRIPT_DIR/deploy/nginx/certs"
@@ -343,11 +349,11 @@ _require_prod_env() {
         exit 1
     fi
     if [[ "${BROWSER_RUNTIME_ACCESS_MODE:-private}" == "published" ]]; then
-        echo "生产模式禁止 BROWSER_RUNTIME_ACCESS_MODE=published" >&2
+        echo "single-host 模式禁止 BROWSER_RUNTIME_ACCESS_MODE=published" >&2
         exit 1
     fi
-    if [[ "$APP_ENV" != "production" && "$APP_ENV" != "prod" ]]; then
-        echo "生产模式要求 APP_ENV=production 或 prod" >&2
+    if [[ "$APP_ENV" != "production" ]]; then
+        echo "single-host 模式要求 APP_ENV=production" >&2
         exit 1
     fi
 }
@@ -378,25 +384,25 @@ _start_processes() {
     echo "[frontend] PID=$frontend_pid port=$FRONTEND_PORT log=$FRONTEND_LOG"
 }
 
-do_prod() {
-    _require_prod_env
+do_single_host() {
+    _require_single_host_env
     _ensure_local_compose_runtime_env
     echo "[edition] $EDITION ($EDITION_SOURCE)"
-    echo "[prod] 使用 docker-compose.prod.yml 启动 Nginx 公网边界"
-    docker compose -f docker-compose.prod.yml up -d
+    echo "[single-host] 使用 docker-compose.single-host.yml 启动 Nginx 公网边界"
+    docker compose -f docker-compose.single-host.yml up -d
     if [[ "$MODE" == "foreground" ]]; then
-        docker compose -f docker-compose.prod.yml logs -f reverse-proxy backend runtime-worker
+        docker compose -f docker-compose.single-host.yml logs -f reverse-proxy backend runtime-worker
     else
-        docker compose -f docker-compose.prod.yml ps
+        docker compose -f docker-compose.single-host.yml ps
     fi
 }
 
-do_prod_stop() {
-    docker compose -f docker-compose.prod.yml down
+do_single_host_stop() {
+    docker compose -f docker-compose.single-host.yml down
 }
 
-do_prod_status() {
-    docker compose -f docker-compose.prod.yml ps
+do_single_host_status() {
+    docker compose -f docker-compose.single-host.yml ps
 }
 
 # ------------------------------------------------------------------
@@ -448,9 +454,9 @@ do_daemon() {
 
 # ------------------------------------------------------------------
 case "$MODE" in
-    stop)       if [[ "$TARGET" == "prod" ]]; then do_prod_stop; else do_stop; fi ;;
-    status)     if [[ "$TARGET" == "prod" ]]; then do_prod_status; else do_status; fi ;;
-    daemon)     if [[ "$TARGET" == "prod" ]]; then do_prod; else do_daemon; fi ;;
-    foreground) if [[ "$TARGET" == "prod" ]]; then do_prod; else do_foreground; fi ;;
+    stop)       if [[ "$TARGET" == "single-host" ]]; then do_single_host_stop; else do_stop; fi ;;
+    status)     if [[ "$TARGET" == "single-host" ]]; then do_single_host_status; else do_status; fi ;;
+    daemon)     if [[ "$TARGET" == "single-host" ]]; then do_single_host; else do_daemon; fi ;;
+    foreground) if [[ "$TARGET" == "single-host" ]]; then do_single_host; else do_foreground; fi ;;
     help)       usage ;;
 esac

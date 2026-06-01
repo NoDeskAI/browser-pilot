@@ -8,7 +8,7 @@ interface SiteInfo {
   appTitle: string
   edition: string
   setupComplete: boolean
-  features: { sso: boolean; multiTenantManagement: boolean }
+  features: { sso: boolean; multiTenantManagement: boolean; saasMode?: boolean; browserImages?: boolean }
   auth?: { accessTokenMinutes: number; rememberMeDays: number }
   cliCommandName: string
   cliInstallCommand: string
@@ -18,7 +18,7 @@ interface BrandConfig {
   appTitle: string
   edition: string
   setupComplete: boolean
-  features: { sso: boolean; multiTenantManagement: boolean }
+  features: { sso: boolean; multiTenantManagement: boolean; saasMode: boolean; browserImages: boolean }
   auth: { accessTokenMinutes: number; rememberMeDays: number }
   cliCommandName: string
   cliInstallCommand: string
@@ -28,7 +28,7 @@ const brand = reactive<BrandConfig>({
   appTitle: 'Browser Pilot',
   edition: 'ce',
   setupComplete: false,
-  features: { sso: false, multiTenantManagement: false },
+  features: { sso: false, multiTenantManagement: false, saasMode: false, browserImages: true },
   auth: { accessTokenMinutes: 30, rememberMeDays: 7 },
   cliCommandName: 'bpilot',
   cliInstallCommand: 'curl -fsSL http://localhost:8000/api/cli/install | bash',
@@ -41,7 +41,7 @@ async function fetchBrand(): Promise<void> {
     if (data.appTitle) brand.appTitle = data.appTitle
     if (data.edition) brand.edition = data.edition
     if (data.setupComplete !== undefined) brand.setupComplete = data.setupComplete
-    if (data.features) brand.features = data.features
+    if (data.features) brand.features = { ...brand.features, ...data.features }
     if (data.auth) brand.auth = data.auth
     if (data.cliCommandName) brand.cliCommandName = data.cliCommandName
     if (data.cliInstallCommand) brand.cliInstallCommand = data.cliInstallCommand
@@ -168,11 +168,13 @@ async function fetchSessions(): Promise<void> {
 const _LOCALE_TO_BROWSER_LANG: Record<string, string> = { zh: 'zh-CN', en: 'en-US' }
 
 async function fetchBrowserImages(): Promise<any[]> {
+  if (brand.features.browserImages === false) return []
   const data = await fetchBrowserImageState()
   return (data.images || []).filter((i: any) => (i.runtime || 'standard_chrome') === 'standard_chrome' && i.status === 'ready')
 }
 
 async function fetchBrowserImageState(): Promise<{ images: any[]; runtimeImages: any[] }> {
+  if (brand.features.browserImages === false) return { images: [], runtimeImages: [] }
   try {
     const res = await api('/api/browser-images')
     const data = await res.json()
@@ -195,7 +197,7 @@ async function createSession(
   const browserLang = _LOCALE_TO_BROWSER_LANG[(i18n.global.locale as any).value] ?? 'en-US'
 
   let effectiveChromeVersion = chromeVersion
-  if (browserRuntime === 'standard_chrome' && !effectiveChromeVersion) {
+  if (brand.features.browserImages !== false && browserRuntime === 'standard_chrome' && !effectiveChromeVersion) {
     const readyImages = await fetchBrowserImages()
     if (readyImages.length > 0) {
       effectiveChromeVersion = readyImages[0].chromeVersion || String(readyImages[0].chromeMajor)
@@ -203,7 +205,7 @@ async function createSession(
   }
 
   const body: Record<string, any> = { name, browserLang, browserRuntime }
-  if (browserRuntime === 'standard_chrome' && effectiveChromeVersion) body.chromeVersion = effectiveChromeVersion
+  if (brand.features.browserImages !== false && browserRuntime === 'standard_chrome' && effectiveChromeVersion) body.chromeVersion = effectiveChromeVersion
   if (networkEgressId) body.networkEgressId = networkEgressId
 
   const res = await api('/api/sessions', {

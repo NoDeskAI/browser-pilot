@@ -1,0 +1,40 @@
+# EE SaaS 部署 values 示例。实际部署必须替换 digest、域名、secret 和 tenant。
+image:
+  repository: ghcr.io/nodeskai/browser-pilot-ee
+  digest: sha256:replace-with-backend-image-digest
+
+ingress:
+  enabled: true
+  className: nginx
+  hosts:
+    - host: browser.example.com
+      path: /
+  tls:
+    - secretName: browser-pilot-ee-saas-tls
+      hosts:
+        - browser.example.com
+
+env:
+  publicOrigins: https://browser.example.com
+  apiBaseUrl: https://browser.example.com
+  jwtSecretName: browser-pilot-jwt
+  databaseSecretName: browser-pilot-database
+
+runtime:
+  sessionServiceAccountName: browser-pilot-session
+  approvedImages:
+    - runtimeClass: standard_chrome
+      imageRef: ghcr.io/nodeskai/browser-runtime
+      imageDigest: sha256:replace-with-standard-runtime-digest
+    - runtimeClass: cloak_chromium
+      imageRef: ghcr.io/nodeskai/browser-runtime-cloak
+      imageDigest: sha256:replace-with-cloak-runtime-digest
+  tenants:
+    - id: tenant-id-from-platform
+      namespace: bp-tenant-replace
+      resourceQuota:
+        pods: "20"
+        requests.cpu: "8"
+        requests.memory: 32Gi
+        limits.cpu: "16"
+        limits.memory: 64Gi

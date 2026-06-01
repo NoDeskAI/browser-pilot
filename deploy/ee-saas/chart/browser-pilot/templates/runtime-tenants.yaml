@@ -1,0 +1,105 @@
+{{- range .Values.runtime.tenants }}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .namespace | quote }}
+  labels:
+    browser-pilot/managed-runtime-namespace: "true"
+    browser-pilot/tenant-id: {{ .id | quote }}
+    pod-security.kubernetes.io/enforce: {{ default $.Values.runtime.podSecurityLevel .podSecurityLevel | quote }}
+    pod-security.kubernetes.io/audit: {{ default $.Values.runtime.podSecurityLevel .podSecurityLevel | quote }}
+    pod-security.kubernetes.io/warn: {{ default $.Values.runtime.podSecurityLevel .podSecurityLevel | quote }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "browser-pilot.sessionServiceAccountName" $ }}
+  namespace: {{ .namespace | quote }}
+  labels:
+    browser-pilot/runtime-session-service-account: "true"
+    browser-pilot/tenant-id: {{ .id | quote }}
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: browser-pilot-runtime-quota
+  namespace: {{ .namespace | quote }}
+spec:
+  hard:
+    {{- toYaml (default $.Values.runtime.defaultQuota.hard .resourceQuota) | nindent 4 }}
+---
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: browser-pilot-runtime-limits
+  namespace: {{ .namespace | quote }}
+spec:
+  limits:
+    - type: Container
+      defaultRequest:
+        {{- toYaml $.Values.runtime.defaultLimits.container.defaultRequest | nindent 8 }}
+      default:
+        {{- toYaml $.Values.runtime.defaultLimits.container.default | nindent 8 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: browser-pilot-runtime-provider
+  namespace: {{ .namespace | quote }}
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "pods/exec", "services", "secrets", "configmaps"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: browser-pilot-runtime-provider
+  namespace: {{ .namespace | quote }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "browser-pilot.backendServiceAccountName" $ }}
+    namespace: {{ $.Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: browser-pilot-runtime-provider
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: browser-pilot-default-deny
+  namespace: {{ .namespace | quote }}
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress", "Egress"]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: browser-pilot-backend-to-session
+  namespace: {{ .namespace | quote }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: browser-pilot-session
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $.Release.Namespace | quote }}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/component: backend
+      ports:
+        - protocol: TCP
+          port: 4444
+        - protocol: TCP
+          port: 7900
+{{- end }}
