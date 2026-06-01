@@ -951,8 +951,8 @@ watch(annotatedScreenshotOpen, (open) => {
         <Tooltip>
           <TooltipTrigger as-child>
             <Toggle
-              :model-value="scaleMode === 'scale'"
-              @update:model-value="toggleScaleMode"
+              :pressed="scaleMode === 'scale'"
+              @update:pressed="toggleScaleMode"
               size="sm"
               class="h-6 px-2 text-xs data-[state=on]:text-blue-400"
             >{{ scaleMode === 'scale' ? t('vnc.scaleFit') : t('vnc.scaleNative') }}</Toggle>
@@ -977,8 +977,8 @@ watch(annotatedScreenshotOpen, (open) => {
           <TooltipTrigger as-child>
             <span class="inline-flex">
               <Toggle
-                :model-value="viewOnly"
-                @update:model-value="toggleViewOnly"
+                :pressed="viewOnly"
+                @update:pressed="toggleViewOnly"
                 size="sm"
                 :disabled="switchingControl"
                 class="h-6 px-2 text-xs gap-1 data-[state=on]:text-amber-400"
