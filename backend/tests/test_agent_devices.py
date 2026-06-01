@@ -9,6 +9,7 @@ from app.auth.dependencies import CurrentUser
 
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_EXPIRES_AT = object()
 
 
 def _user(user_id="user-1", role="member", *, session_scope=None, api_token_id=None):
@@ -32,9 +33,11 @@ def _lease(
     owner="user-1",
     status="active",
     task_id=None,
-    expires_at=None,
+    expires_at=DEFAULT_EXPIRES_AT,
 ):
     now = datetime.now(timezone.utc)
+    if expires_at is DEFAULT_EXPIRES_AT:
+        expires_at = now + timedelta(seconds=60)
     return {
         "id": lease_id,
         "device_instance_id": device_id,
@@ -116,13 +119,19 @@ class FakeConn:
             return next((lease for lease in self.leases if lease["id"] == lease_id and lease["device_instance_id"] == device_id), None)
         if "where device_instance_id = $1" in sql and "status = 'active'" in sql and "select *" in sql:
             device_id = args[0]
-            return next((lease for lease in reversed(self.leases) if lease["device_instance_id"] == device_id and lease["status"] == "active"), None)
+            now = datetime.now(timezone.utc)
+            return next((
+                lease for lease in reversed(self.leases)
+                if lease["device_instance_id"] == device_id
+                and lease["status"] == "active"
+                and (lease["expires_at"] is None or lease["expires_at"] > now)
+            ), None)
         if "insert into agent_device_leases" in sql:
             if len(args) == 5:
                 lease_id, device_id, tenant_id, operator, owner = args
                 lease_mode = "session_bound"
                 task_id = None
-                expires_at = None
+                expires_at = datetime.now(timezone.utc) + timedelta(seconds=agent_devices.MAX_LEASE_TTL_SECONDS)
             else:
                 lease_id, device_id, lease_mode, task_id, tenant_id, operator, owner, expires_at = args
             lease = _lease(
@@ -160,10 +169,39 @@ class FakeConn:
         return None
 
     async def fetch(self, *_args):
+        query = _args[0]
+        args = _args[1:]
+        sql = " ".join(query.lower().split())
+        if "from agent_device_leases" in sql and "expires_at is null" in sql:
+            return [
+                lease
+                for lease in self.leases
+                if lease["device_instance_id"] == args[0]
+                and lease["status"] == "active"
+                and lease["expires_at"] is None
+            ]
+        if "from agent_device_leases" in sql and "expires_at <= now()" in sql:
+            now = datetime.now(timezone.utc)
+            return [
+                lease
+                for lease in self.leases
+                if lease["device_instance_id"] == args[0]
+                and lease["status"] == "active"
+                and lease["expires_at"] is not None
+                and lease["expires_at"] <= now
+            ]
         return []
 
     async def execute(self, query, *args):
         sql = " ".join(query.lower().split())
+        if "update agent_device_leases" in sql and "expires_at = now()" in sql:
+            device_id, ttl_seconds = args
+            now = datetime.now(timezone.utc)
+            for lease in self.leases:
+                if lease["device_instance_id"] == device_id and lease["status"] == "active" and lease["expires_at"] is None:
+                    lease["expires_at"] = now + timedelta(seconds=ttl_seconds)
+                    lease["updated_at"] = now
+            return "UPDATE"
         if "update agent_device_leases" in sql and "expires_at_elapsed" in sql:
             device_id = args[0]
             now = datetime.now(timezone.utc)
@@ -190,6 +228,19 @@ class FakeConn:
         return "OK"
 
 
+def _parse_iso(value):
+    assert value
+    if isinstance(value, datetime):
+        return value
+    return datetime.fromisoformat(value)
+
+
+def _assert_expires_within_cap(value, *, max_seconds=agent_devices.MAX_LEASE_TTL_SECONDS):
+    expires_at = _parse_iso(value)
+    now = datetime.now(timezone.utc)
+    assert now < expires_at <= now + timedelta(seconds=max_seconds + 2)
+
+
 def test_acquire_rejects_active_conflict_and_audits(monkeypatch):
     conn = FakeConn()
     conn.leases.append(_lease(operator="user:user-2", owner="user-2"))
@@ -214,11 +265,12 @@ def test_acquire_renew_release_and_reclaim_flow(monkeypatch):
     )
     assert acquired["status"] == "active"
     assert acquired["task_id"] == "task-1"
+    _assert_expires_within_cap(acquired["expires_at"], max_seconds=60)
     assert conn.audits[-1]["outcome"] == "succeeded"
 
     renewed = asyncio.run(agent_devices.renew_lease("session-1", acquired["lease_id"], admin, ttl_seconds=120))
     assert renewed["lease_id"] == acquired["lease_id"]
-    assert renewed["expires_at"]
+    _assert_expires_within_cap(renewed["expires_at"], max_seconds=120)
 
     released = asyncio.run(agent_devices.release_lease("session-1", acquired["lease_id"], admin))
     assert released["status"] == "released"
@@ -227,7 +279,52 @@ def test_acquire_renew_release_and_reclaim_flow(monkeypatch):
     reclaimed = asyncio.run(agent_devices.reclaim_device("session-1", admin))
     assert reclaimed["reclaimedLease"]["status"] == "reclaimed"
     assert reclaimed["lease"]["status"] == "active"
+    _assert_expires_within_cap(reclaimed["lease"]["expires_at"])
     assert conn.audits[-1]["action"] == "force_reclaim"
+
+
+def test_lease_defaults_to_max_ttl_when_expiration_is_omitted(monkeypatch):
+    conn = FakeConn()
+    monkeypatch.setattr(agent_devices, "get_pool", lambda: FakePool(conn))
+    admin = _user(role="admin")
+
+    acquired = asyncio.run(agent_devices.acquire_lease("session-1", admin))
+    _assert_expires_within_cap(acquired["expires_at"])
+
+    renewed = asyncio.run(agent_devices.renew_lease("session-1", acquired["lease_id"], admin))
+    _assert_expires_within_cap(renewed["expires_at"])
+
+
+def test_lease_accepts_max_ttl(monkeypatch):
+    conn = FakeConn()
+    monkeypatch.setattr(agent_devices, "get_pool", lambda: FakePool(conn))
+
+    acquired = asyncio.run(
+        agent_devices.acquire_lease("session-1", _user(role="admin"), ttl_seconds=agent_devices.MAX_LEASE_TTL_SECONDS)
+    )
+
+    _assert_expires_within_cap(acquired["expires_at"])
+
+
+def test_lease_rejects_ttl_and_expires_at_outside_cap(monkeypatch):
+    conn = FakeConn()
+    monkeypatch.setattr(agent_devices, "get_pool", lambda: FakePool(conn))
+    admin = _user(role="admin")
+
+    for ttl_seconds in (0, -1, agent_devices.MAX_LEASE_TTL_SECONDS + 1):
+        with pytest.raises(agent_devices.AgentDeviceLeaseError) as exc:
+            asyncio.run(agent_devices.acquire_lease("session-1", admin, ttl_seconds=ttl_seconds))
+        assert exc.value.status_code == 422
+        assert exc.value.reason == "invalid_lease_ttl"
+
+    for expires_at in (
+        datetime.now(timezone.utc) - timedelta(seconds=1),
+        datetime.now(timezone.utc) + timedelta(seconds=agent_devices.MAX_LEASE_TTL_SECONDS + 30),
+    ):
+        with pytest.raises(agent_devices.AgentDeviceLeaseError) as exc:
+            asyncio.run(agent_devices.acquire_lease("session-1", admin, expires_at=expires_at))
+        assert exc.value.status_code == 422
+        assert exc.value.reason == "invalid_lease_expires_at"
 
 
 def test_session_scoped_token_can_use_owner_session_lease(monkeypatch):
@@ -448,6 +545,13 @@ def test_dead_container_maps_to_protocol_error_state():
     assert visibility["browser_pilot_state"] == "idle"
 
 
+def test_visibility_sql_only_joins_unexpired_leases():
+    sql = agent_devices._visibility_sql("s.id = $1")
+
+    assert "AND l.expires_at > NOW()" in sql
+    assert "l.expires_at IS NULL" not in sql
+
+
 def test_complete_external_action_adds_governed_page_evidence(monkeypatch):
     captured = {}
 
@@ -494,6 +598,8 @@ def test_expire_active_leases_writes_system_audit():
     class ExpireConn(FakeConn):
         async def fetch(self, query, *args):
             sql = " ".join(query.lower().split())
+            if "from agent_device_leases" in sql and "expires_at is null" in sql:
+                return []
             if "from agent_device_leases" in sql and "expires_at <= now()" in sql:
                 return [
                     lease
@@ -516,6 +622,19 @@ def test_expire_active_leases_writes_system_audit():
     assert conn.audits[-1]["outcome"] == "succeeded"
 
 
+def test_expire_active_leases_caps_legacy_null_active_lease():
+    conn = FakeConn()
+    conn.leases.append(_lease(expires_at=None))
+
+    asyncio.run(agent_devices._expire_active_leases(conn, "session-1"))
+
+    assert conn.leases[0]["status"] == "active"
+    _assert_expires_within_cap(conn.leases[0]["expires_at"])
+    assert conn.audits[-1]["actor"] == "system:lease_ttl_capper"
+    assert conn.audits[-1]["action"] == "lease_expiration_capped"
+    assert conn.audits[-1]["outcome"] == "succeeded"
+
+
 def test_level1_contract_migration_revokes_ownerless_active_leases():
     migration = BACKEND_ROOT / "alembic" / "versions" / "0016_agent_device_level1_contract.py"
     text = migration.read_text()
@@ -535,3 +654,14 @@ def test_initial_lease_cleanup_migration_revokes_only_implicit_initial_leases():
     assert "Initial session-bound device lease created" in text
     assert "l.id = 'lease_' || md5(l.device_instance_id || '-agent-device-initial')" in text
     assert "l.expires_at IS NULL" in text
+
+
+def test_lease_ttl_cap_migration_caps_null_expires_and_enforces_constraint():
+    migration = BACKEND_ROOT / "alembic" / "versions" / "0021_cap_agent_device_lease_ttl.py"
+    text = migration.read_text()
+
+    assert "system:lease_ttl_cap_migration" in text
+    assert "lease_expiration_capped" in text
+    assert "NOW() + INTERVAL '30 minutes'" in text
+    assert "ALTER COLUMN expires_at SET NOT NULL" in text
+    assert "chk_agent_device_leases_ttl_cap" in text

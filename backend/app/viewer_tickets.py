@@ -159,7 +159,7 @@ async def consume_viewer_ticket(
                       AND device_instance_id = $2
                       AND status = 'active'
                       AND current_operator = $3
-                      AND (expires_at IS NULL OR expires_at > NOW())
+                      AND expires_at > NOW()
                     FOR UPDATE
                     """,
                     ticket["lease_id"],

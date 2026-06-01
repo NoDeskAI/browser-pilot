@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import HTTPException
@@ -19,7 +19,9 @@ COMPLIANCE_LEVEL = "level1_device_governance"
 CONCURRENCY_MODEL = "exclusive"
 SUPPORTED_LEASE_MODES = ["session_bound", "task_bound"]
 UNSUPPORTED_PROFILES = ["control_transfer"]
+MAX_LEASE_TTL_SECONDS = 30 * 60
 SYSTEM_LEASE_EXPIRER = "system:lease_expirer"
+SYSTEM_LEASE_TTL_CAPPER = "system:lease_ttl_capper"
 
 LEVEL1_POLICY = {
     "leaseRequired": True,
@@ -93,12 +95,48 @@ def _can_manage(row: Any, user: CurrentUser) -> bool:
     return _row_value(row, "user_id") == user.id
 
 
-def _normalize_expires(ttl_seconds: int | None, expires_at: datetime | None) -> datetime | None:
-    if ttl_seconds is not None:
-        from datetime import timedelta
+def _lease_policy_error(message: str, reason: str) -> "AgentDeviceLeaseError":
+    return AgentDeviceLeaseError(
+        message,
+        status_code=422,
+        reason=reason,
+        next_step="fix_request",
+    )
 
-        return datetime.now(timezone.utc) + timedelta(seconds=max(1, int(ttl_seconds)))
-    return expires_at
+
+def _as_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _normalize_expires(ttl_seconds: int | None, expires_at: datetime | None) -> datetime:
+    now = datetime.now(timezone.utc)
+    if ttl_seconds is not None:
+        try:
+            ttl = int(ttl_seconds)
+        except (TypeError, ValueError):
+            raise _lease_policy_error(
+                f"ttlSeconds must be an integer between 1 and {MAX_LEASE_TTL_SECONDS}",
+                "invalid_lease_ttl",
+            )
+        if ttl <= 0 or ttl > MAX_LEASE_TTL_SECONDS:
+            raise _lease_policy_error(
+                f"ttlSeconds must be between 1 and {MAX_LEASE_TTL_SECONDS}",
+                "invalid_lease_ttl",
+            )
+        return now + timedelta(seconds=ttl)
+    if expires_at is not None:
+        normalized = _as_utc(expires_at)
+        if normalized <= now:
+            raise _lease_policy_error("expiresAt must be in the future", "invalid_lease_expires_at")
+        if normalized > now + timedelta(seconds=MAX_LEASE_TTL_SECONDS):
+            raise _lease_policy_error(
+                f"expiresAt must be within {MAX_LEASE_TTL_SECONDS} seconds",
+                "invalid_lease_expires_at",
+            )
+        return normalized
+    return now + timedelta(seconds=MAX_LEASE_TTL_SECONDS)
 
 
 def _lease_to_dict(row: Any | None) -> dict[str, Any] | None:
@@ -305,13 +343,56 @@ async def _session_for_user(conn: Any, session_id: str, user: CurrentUser, *, lo
 
 
 async def _expire_active_leases(conn: Any, device_id: str) -> None:
+    uncapped_rows = await conn.fetch(
+        """
+        SELECT *
+        FROM agent_device_leases
+        WHERE device_instance_id = $1
+          AND status = 'active'
+          AND expires_at IS NULL
+        """,
+        device_id,
+    )
+    if uncapped_rows:
+        await conn.execute(
+            """
+            UPDATE agent_device_leases
+            SET expires_at = NOW() + ($2::int * INTERVAL '1 second'),
+                updated_at = NOW()
+            WHERE device_instance_id = $1
+              AND status = 'active'
+              AND expires_at IS NULL
+            """,
+            device_id,
+            MAX_LEASE_TTL_SECONDS,
+        )
+        for lease in uncapped_rows:
+            await _insert_audit(
+                conn,
+                actor=SYSTEM_LEASE_TTL_CAPPER,
+                actor_owner_user_id=None,
+                tenant_id=_row_value(lease, "tenant_id"),
+                device_instance_id=device_id,
+                lease_id=_row_value(lease, "id"),
+                task_id=_row_value(lease, "task_id"),
+                session_id=_row_value(lease, "session_id") or device_id,
+                action="lease_expiration_capped",
+                outcome="succeeded",
+                side_effect_level="internal",
+                summary="Open-ended device lease capped to the maximum TTL",
+                details={
+                    "evidenceStatus": "not_required",
+                    "maxTtlSeconds": MAX_LEASE_TTL_SECONDS,
+                    "previousExpiresAt": None,
+                },
+            )
+
     expired_rows = await conn.fetch(
         """
         SELECT *
         FROM agent_device_leases
         WHERE device_instance_id = $1
           AND status = 'active'
-          AND expires_at IS NOT NULL
           AND expires_at <= NOW()
         """,
         device_id,
@@ -326,7 +407,6 @@ async def _expire_active_leases(conn: Any, device_id: str) -> None:
             updated_at = NOW()
         WHERE device_instance_id = $1
           AND status = 'active'
-          AND expires_at IS NOT NULL
           AND expires_at <= NOW()
         """,
         device_id,
@@ -356,6 +436,7 @@ async def _active_lease(conn: Any, device_id: str) -> Any | None:
         FROM agent_device_leases
         WHERE device_instance_id = $1
           AND status = 'active'
+          AND expires_at > NOW()
         ORDER BY created_at DESC
         LIMIT 1
         """,
@@ -386,6 +467,7 @@ async def acquire_lease(
             reason="task_id_required",
             next_step="fix_request",
         )
+    normalized_expires = _normalize_expires(ttl_seconds, expires_at)
 
     pool = get_pool()
     async with pool.acquire() as conn:
@@ -434,7 +516,7 @@ async def acquire_lease(
                 _row_value(row, "tenant_id") or user.tenant_id,
                 _operator_subject(user),
                 user.id,
-                _normalize_expires(ttl_seconds, expires_at),
+                normalized_expires,
             )
             audit_id = await _insert_audit(
                 conn,
@@ -461,6 +543,7 @@ async def renew_lease(
     ttl_seconds: int | None = None,
     expires_at: datetime | None = None,
 ) -> dict[str, Any]:
+    normalized_expires = _normalize_expires(ttl_seconds, expires_at)
     pool = get_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
@@ -534,7 +617,7 @@ async def renew_lease(
                 """,
                 lease_id,
                 device_id,
-                _normalize_expires(ttl_seconds, expires_at),
+                normalized_expires,
             )
             audit_id = await _insert_audit(
                 conn,
@@ -665,6 +748,7 @@ async def reclaim_device(
             reason="task_id_required",
             next_step="fix_request",
         )
+    normalized_expires = _normalize_expires(ttl_seconds, expires_at)
     pool = get_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
@@ -725,7 +809,7 @@ async def reclaim_device(
                 _row_value(row, "tenant_id") or user.tenant_id,
                 _operator_subject(user),
                 user.id,
-                _normalize_expires(ttl_seconds, expires_at),
+                normalized_expires,
             )
             audit_id = await _insert_audit(
                 conn,
@@ -1199,7 +1283,7 @@ def _visibility_sql(where_sql: str) -> str:
         LEFT JOIN agent_device_leases l
           ON l.device_instance_id = s.id
          AND l.status = 'active'
-         AND (l.expires_at IS NULL OR l.expires_at > NOW())
+         AND l.expires_at > NOW()
         LEFT JOIN LATERAL (
             SELECT *
             FROM agent_device_audit_events ae

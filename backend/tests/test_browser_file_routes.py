@@ -3,6 +3,7 @@ import base64
 import inspect
 import io
 import time
+from datetime import datetime, timedelta, timezone
 
 from app.auth.dependencies import CurrentUser
 from fastapi import UploadFile
@@ -232,6 +233,7 @@ def test_session_files_route_is_not_lease_gated(monkeypatch):
 
 
 def test_active_lease_payload_identifies_api_token_operator():
+    expires_at = datetime.now(timezone.utc) + timedelta(seconds=60)
     payload = sessions._active_lease_payload_from_row({
         "lease_id": "lease-1",
         "lease_mode": "session_bound",
@@ -241,7 +243,7 @@ def test_active_lease_payload_identifies_api_token_operator():
         "lease_token_name": "QA Agent",
         "lease_owner_name": "User One",
         "lease_owner_email": "user@example.com",
-        "lease_expires_at": None,
+        "lease_expires_at": expires_at,
         "lease_updated_at": None,
     })
 
@@ -254,7 +256,7 @@ def test_active_lease_payload_identifies_api_token_operator():
         "operatorOwnerUserId": "user-1",
         "operatorType": "api_token",
         "operatorName": "QA Agent",
-        "expiresAt": None,
+        "expiresAt": expires_at.isoformat(),
         "updatedAt": None,
     }
 
