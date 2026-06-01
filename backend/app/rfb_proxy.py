@@ -13,6 +13,61 @@ class RfbProxyError(RuntimeError):
     pass
 
 
+class _RfbClientViewOnlyFilter:
+    """Pass RFB display setup/update messages while dropping remote input."""
+
+    def __init__(self) -> None:
+        self._buffer = bytearray()
+        self._client_init_pending = True
+
+    def feed(self, chunk: bytes) -> bytes:
+        if not chunk:
+            return b""
+        self._buffer.extend(chunk)
+        out = bytearray()
+        if self._client_init_pending:
+            if not self._buffer:
+                return b""
+            out.append(self._buffer[0])
+            del self._buffer[0]
+            self._client_init_pending = False
+
+        while self._buffer:
+            msg_type = self._buffer[0]
+            size = self._message_size(msg_type)
+            if size is None:
+                self._buffer.clear()
+                break
+            if size == 0:
+                break
+            if len(self._buffer) < size:
+                break
+            message = bytes(self._buffer[:size])
+            del self._buffer[:size]
+            if msg_type in {0, 2, 3}:
+                out.extend(message)
+        return bytes(out)
+
+    def _message_size(self, msg_type: int) -> int | None:
+        if msg_type == 0:
+            return 20
+        if msg_type == 2:
+            if len(self._buffer) < 4:
+                return 0
+            return 4 + struct.unpack(">H", bytes(self._buffer[2:4]))[0] * 4
+        if msg_type == 3:
+            return 10
+        if msg_type == 4:
+            return 8
+        if msg_type == 5:
+            return 6
+        if msg_type == 6:
+            if len(self._buffer) < 8:
+                return 0
+            return 8 + struct.unpack(">I", bytes(self._buffer[4:8]))[0]
+        return None
+
+
 @dataclass
 class _ByteReader:
     receive: Callable[[], Awaitable[bytes]]
@@ -133,13 +188,17 @@ async def bridge_websockets(
     upstream,
     downstream_buffer: bytes = b"",
     upstream_buffer: bytes = b"",
+    view_only: bool = False,
 ) -> tuple[int, int]:
     downstream_bytes = 0
     upstream_bytes = 0
+    view_filter = _RfbClientViewOnlyFilter() if view_only else None
 
     if downstream_buffer:
         downstream_bytes += len(downstream_buffer)
-        await upstream.send(downstream_buffer)
+        filtered = view_filter.feed(downstream_buffer) if view_filter else downstream_buffer
+        if filtered:
+            await upstream.send(filtered)
     if upstream_buffer:
         upstream_bytes += len(upstream_buffer)
         await downstream.send_bytes(upstream_buffer)
@@ -149,7 +208,9 @@ async def bridge_websockets(
         while True:
             chunk = await _downstream_receive(downstream)
             downstream_bytes += len(chunk)
-            await upstream.send(chunk)
+            filtered = view_filter.feed(chunk) if view_filter else chunk
+            if filtered:
+                await upstream.send(filtered)
 
     async def upstream_to_downstream() -> None:
         nonlocal upstream_bytes

@@ -161,7 +161,7 @@ class SessionViewerTicket(Base):
     tenant_id: Mapped[str | None] = mapped_column(Text)
     user_id: Mapped[str | None] = mapped_column(Text)
     operator_subject: Mapped[str] = mapped_column(Text, nullable=False)
-    lease_id: Mapped[str] = mapped_column(Text, ForeignKey("agent_device_leases.id", ondelete="CASCADE"), nullable=False)
+    lease_id: Mapped[str | None] = mapped_column(Text, ForeignKey("agent_device_leases.id", ondelete="CASCADE"))
     token_hash: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
     mode: Mapped[str] = mapped_column(Text, nullable=False)
     expires_at: Mapped[datetime] = mapped_column(nullable=False)

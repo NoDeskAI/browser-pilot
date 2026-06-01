@@ -1,16 +1,18 @@
 services:
   reverse-proxy:
-    image: caddy:2-alpine
+    image: nginx:1.27-alpine
     restart: unless-stopped
     ports:
       - "80:80"
       - "443:443"
     volumes:
-      - ./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddydata:/data
-      - caddyconfig:/config
+      - ./deploy/nginx/templates:/etc/nginx/templates:ro
+      - ./deploy/nginx/certs:/etc/nginx/certs:ro
     environment:
-      PUBLIC_SITE_ADDRESS: ${PUBLIC_SITE_ADDRESS:?set PUBLIC_SITE_ADDRESS, for example https://browser.example.com}
+      NGINX_ENVSUBST_FILTER: "^NGINX_"
+      NGINX_SERVER_NAME: ${NGINX_SERVER_NAME:?set NGINX_SERVER_NAME, for example browser.example.com}
+      NGINX_TLS_CERT_FILE: ${NGINX_TLS_CERT_FILE:-fullchain.pem}
+      NGINX_TLS_KEY_FILE: ${NGINX_TLS_KEY_FILE:-privkey.pem}
     depends_on:
       backend:
         condition: service_started
@@ -173,8 +175,6 @@ volumes:
   pgdata:
   egressdata:
   miniodata:
-  caddydata:
-  caddyconfig:
 
 networks:
   app:

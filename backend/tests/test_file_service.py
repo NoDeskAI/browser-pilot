@@ -255,12 +255,12 @@ def test_save_bytes_returns_s3_presigned_public_url(monkeypatch):
     )
 
     row = pool.rows[result["id"]]
-    assert result["url"] == f"http://public-storage:9000/{row['object_key']}?ttl=900"
+    assert result["url"] == f"http://public-storage:9000/{row['object_key']}?ttl={file_service.FILE_DOWNLOAD_URL_TTL_SECONDS}"
     assert store.download_call == {
         "key": row["object_key"],
         "file_id": result["id"],
         "filename": "screenshot.png",
-        "expires_in": 900,
+        "expires_in": file_service.FILE_DOWNLOAD_URL_TTL_SECONDS,
     }
 
 

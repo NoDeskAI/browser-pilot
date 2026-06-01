@@ -139,6 +139,16 @@ cp .env.example .env
 | `MINIO_BUCKET`        | 必须在 `.env` 中设置；见 `.env.example`                         | Docker Compose 自动创建并预置为默认 S3 存储的 bucket。                            |
 | `MINIO_ENDPOINT`      | `start.sh` 使用 `http://localhost:9000`；Docker Compose 使用 `http://minio:9000` | 后端访问内置 MinIO/S3 服务的 endpoint。                               |
 | `MINIO_PUBLIC_ENDPOINT` | Docker Compose 默认 `http://localhost:9000`                   | 写入 S3 签名下载 URL 的公网 endpoint，必须能被浏览器和 CLI 客户端访问。              |
+| `APP_ENV`             | 本地默认为 `development`；`docker-compose.prod.yml` 使用 `production` | 运行环境。生产模式会启用更严格的公网边界校验。                                      |
+| `APP_PUBLIC_ORIGINS`  | 生产/公网部署必填                                             | 允许访问公网 backend 的浏览器 Origin，多个值用逗号分隔，例如 `https://browser.example.com`。 |
+| `API_BASE_URL`        | `http://localhost:8000`                                       | 内置存储签名文件 URL 使用的公网 backend 地址；生产环境应设置为外部 HTTPS 地址。       |
+| `NGINX_SERVER_NAME`   | `./start.sh prod` 必填                                         | 内置生产 Nginx 反向代理服务的域名，例如 `browser.example.com`。                    |
+| `NGINX_TLS_CERT_FILE` | `fullchain.pem`                                                | 生产 Nginx 使用的 TLS 证书文件名，位于 `deploy/nginx/certs/`。                    |
+| `NGINX_TLS_KEY_FILE`  | `privkey.pem`                                                  | 生产 Nginx 使用的 TLS 私钥文件名，位于 `deploy/nginx/certs/`；不要提交证书或私钥文件。 |
+| `BROWSER_RUNTIME_ACCESS_MODE` | app 配置默认 `private`；本地 `start.sh` 使用 `published` | 浏览器容器可达性模式。生产必须保持 `private`，生产模式会阻止直接发布浏览器端口。       |
+| `BROWSER_VNC_PASSWORD_SECRET` | 生产/公网部署必填                                    | 用于派生每个会话浏览器查看器凭据的密钥；公网部署前必须设置为长随机值。               |
+| `VIEWER_TICKET_TTL_SECONDS` | `60`                                                     | 浏览器查看器 ticket 有效期；生产校验允许 10-300 秒。                               |
+| `FILE_DOWNLOAD_URL_TTL_SECONDS` | `300`                                                | 生成文件下载 URL 的有效期；生产校验允许 30-3600 秒。                               |
 | `SELENIUM_BASE_IMAGE` | `selenium/standalone-chrome:latest`                            | 浏览器容器基础镜像。ARM 用户使用 `seleniarm/standalone-chromium:latest`             |
 | `BROWSER_GL_MODE`     | `auto`                                                         | 浏览器 WebGL 运行模式：`auto`、`swiftshader`、`angle-swiftshader`、`angle`、`egl` 或 `native`。ARM Chromium 下 `auto` 会解析为 `angle-swiftshader`，其他环境为 `swiftshader`。 |
 | `DOCKER_HOST_ADDR`    | `localhost`                                                    | 后端访问浏览器容器的地址。Docker 部署时设为 `host.docker.internal`（docker-compose 自动配置） |
@@ -265,9 +275,9 @@ python omniparserserver.py \
 
 ## 安全说明
 
-Docker Compose 部署现在通过内部 `runtime-worker` 服务执行浏览器容器操作。公网 backend 只通过 Compose 私有网络和 `BROWSER_RUNTIME_CONTROL_TOKEN` 访问 worker；只有 worker 挂载 `/var/run/docker.sock`。不要发布 worker 端口，生产/公网部署前必须把 runtime control token 改成长随机值。
+生产 Docker Compose 部署只在宿主机公开内置 Nginx 反向代理的 80/443。浏览器容器操作通过内部 `runtime-worker` 服务执行；公网 backend 只通过 Compose 私有网络和 `BROWSER_RUNTIME_CONTROL_TOKEN` 访问 worker，只有 worker 挂载 `/var/run/docker.sock`。不要发布 worker 端口，生产/公网部署前必须把 runtime control token 改成长随机值。
 
-runtime-worker 仍然对宿主机 Docker 守护进程拥有完全控制权。请把它当作特权基础设施处理：SaaS 工作负载建议放在专用主机或 VM 边界内，只允许私有服务网络访问，并在公网 backend 前放置带认证的反向代理。
+runtime-worker 仍然对宿主机 Docker 守护进程拥有完全控制权。请把它当作特权基础设施处理：SaaS 工作负载建议放在专用主机或 VM 边界内，只允许私有服务网络访问，并保持公网 backend 前的认证边界。
 
 ## 许可证
 

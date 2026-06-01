@@ -262,6 +262,7 @@ export default {
     interactive: 'Interact',
     viewOnlyTitle: 'View-only mode (click to switch to interactive)',
     interactiveTitle: 'Interactive mode (click to switch to view-only)',
+    viewOnlyLeaseRequired: 'Control is occupied by another operator, so this viewer is read-only',
     exitFullscreen: 'Exit',
     fullscreen: 'Fullscreen',
     exitFullscreenTitle: 'Exit fullscreen',

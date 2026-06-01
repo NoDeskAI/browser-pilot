@@ -9,7 +9,8 @@ from app.routes import sessions
 
 
 @pytest.fixture(autouse=True)
-def clear_container_network_state():
+def clear_container_network_state(monkeypatch):
+    monkeypatch.setattr(container, "_runtime_access_private", lambda: True)
     container._NETWORK_PROFILE_CACHE.clear()
     container._BACKGROUND_NETWORK_TASKS.clear()
     yield
@@ -419,7 +420,7 @@ def test_start_session_container_is_not_lease_gated(monkeypatch):
     result = asyncio.run(sessions.start_session_container("session-1", _user()))
 
     assert result["ok"] is True
-    assert result["ports"] == {"selenium_port": 4444, "vnc_port": 7900}
+    assert "ports" not in result
     assert result["agentDevice"]["leaseId"] is None
     assert result["agentDevice"]["currentOperator"] is None
     assert result["agentDevice"]["action"] == "session.container.start"
@@ -495,8 +496,8 @@ def test_create_container_passes_profile_dns_to_docker(monkeypatch):
     assert "--network browser-pilot-net" in commands[0]
     assert "--dns 223.5.5.5" in commands[0]
     assert "--dns 119.29.29.29" in commands[0]
-    assert "-p 55100:4444" in commands[0]
-    assert "-p 55101:7900" in commands[0]
+    assert "-p 127.0.0.1:55100:4444" not in commands[0]
+    assert "-p 127.0.0.1:55101:7900" not in commands[0]
     assert "-e BROWSER_GL_MODE=auto" in commands[0]
     assert "-p 0:" not in commands[0]
     assert "bad" not in commands[0]
@@ -514,10 +515,11 @@ def test_create_container_with_managed_egress_uses_gateway_namespace(monkeypatch
         assert session_id == "session-1"
         return {"id": "egress-1", "type": "clash"}
 
-    async def fake_prepare(row, *, session_id, selenium_port, vnc_port):
+    async def fake_prepare(row, *, session_id, selenium_port, vnc_port, publish_ports):
         assert row["type"] == "clash"
-        assert selenium_port == 55100
-        assert vnc_port == 55101
+        assert selenium_port is None
+        assert vnc_port is None
+        assert publish_ports is False
         return network_egress.SessionEgressGateway(
             enabled=True,
             type="clash",
@@ -573,7 +575,7 @@ def test_create_container_cloak_runtime_uses_cloak_image_and_seed(monkeypatch):
     assert "-e BP_BROWSER_RUNTIME=cloak_chromium" in commands[0]
     assert "-e CLOAK_FINGERPRINT_SEED=bp_session1" in commands[0]
     assert "-e BROWSER_TIMEZONE=Asia/Shanghai" in commands[0]
-    assert "-p 55100:4444" in commands[0]
+    assert "-p 127.0.0.1:55100:4444" not in commands[0]
 
 
 def test_get_container_ports_falls_back_to_session_gateway(monkeypatch):
@@ -588,6 +590,7 @@ def test_get_container_ports_falls_back_to_session_gateway(monkeypatch):
         return "", "unexpected", 1
 
     monkeypatch.setattr(container, "_run", fake_run)
+    monkeypatch.setattr(container, "_runtime_access_private", lambda: False)
 
     ports = asyncio.run(container.get_container_ports("session-1"))
 
@@ -681,9 +684,9 @@ def test_ensure_container_running_default_path_does_not_probe(monkeypatch):
 
     ports = asyncio.run(container.ensure_container_running("session-1"))
 
-    assert ports == {"selenium_port": 4444, "vnc_port": 7900}
+    assert ports == {}
     assert calls[0][0] == "create"
-    assert calls[1] == ("wait", 4444)
+    assert calls[1] == ("wait", "http://bp-session-1:4444")
 
 
 def test_recreate_container_default_path_does_not_probe(monkeypatch):
@@ -724,7 +727,7 @@ def test_recreate_container_default_path_does_not_probe(monkeypatch):
         )
     )
 
-    assert ports == {"selenium_port": 4444, "vnc_port": 7900}
+    assert ports == {}
     assert calls == [
         "stop",
         ("remove", True),
@@ -738,7 +741,7 @@ def test_recreate_container_default_path_does_not_probe(monkeypatch):
             "image_name": None,
             "browser_runtime": "standard_chrome",
         }),
-        ("wait", 4444),
+        ("wait", "http://bp-session-1:4444"),
     ]
 
 

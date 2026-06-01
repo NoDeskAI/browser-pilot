@@ -175,9 +175,6 @@ watch(() => brand.appTitle, (title) => {
             </div>
             <h1 class="text-base font-semibold">{{ bootstrapTitle }}</h1>
             <p class="mt-2 text-sm text-muted-foreground">{{ bootstrapDescription }}</p>
-            <div v-if="bootstrap.currentRevision || bootstrap.targetRevision" class="mt-4 rounded-md bg-muted px-3 py-2 text-xs text-muted-foreground">
-              {{ t('bootstrap.revisionLabel', { current: bootstrap.currentRevision || '-', target: bootstrap.targetRevision || '-' }) }}
-            </div>
             <p v-if="bootstrap.error" class="mt-4 break-words rounded-md bg-destructive/10 px-3 py-2 text-left text-xs text-destructive">
               {{ bootstrap.error }}
             </p>

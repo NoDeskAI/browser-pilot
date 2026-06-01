@@ -262,6 +262,7 @@ export default {
     interactive: '交互',
     viewOnlyTitle: '只读模式（点击切换为交互模式）',
     interactiveTitle: '交互模式（点击切换为只读模式）',
+    viewOnlyLeaseRequired: '当前控制权被其他操作者占用，只能只读查看',
     exitFullscreen: '退出',
     fullscreen: '全屏',
     exitFullscreenTitle: '退出全屏',

@@ -318,17 +318,28 @@ _require_database_env() {
 _require_prod_env() {
     _infer_postgres_env_from_database_url
     export APP_ENV="${APP_ENV:-production}"
+    export NGINX_TLS_CERT_FILE="${NGINX_TLS_CERT_FILE:-fullchain.pem}"
+    export NGINX_TLS_KEY_FILE="${NGINX_TLS_KEY_FILE:-privkey.pem}"
 
     local missing=()
     local key
-    for key in PUBLIC_SITE_ADDRESS APP_PUBLIC_ORIGINS API_BASE_URL BROWSER_VNC_PASSWORD_SECRET BROWSER_RUNTIME_CONTROL_TOKEN POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB MINIO_ROOT_USER MINIO_ROOT_PASSWORD MINIO_BUCKET MINIO_PUBLIC_ENDPOINT; do
+    for key in NGINX_SERVER_NAME APP_PUBLIC_ORIGINS API_BASE_URL BROWSER_VNC_PASSWORD_SECRET BROWSER_RUNTIME_CONTROL_TOKEN POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB MINIO_ROOT_USER MINIO_ROOT_PASSWORD MINIO_BUCKET MINIO_PUBLIC_ENDPOINT; do
         if [[ -z "${!key:-}" ]]; then
             missing+=("$key")
         fi
     done
     if (( ${#missing[@]} > 0 )); then
         echo "缺少生产配置: ${missing[*]}" >&2
-        echo "prod 模式需要公开域名/Origin、VNC 密钥、runtime token、数据库和对象存储公开下载地址。" >&2
+        echo "prod 模式需要 Nginx 域名和 TLS 证书、公开 Origin、VNC 密钥、runtime token、数据库和对象存储公开下载地址。" >&2
+        exit 1
+    fi
+    local nginx_cert_dir="$SCRIPT_DIR/deploy/nginx/certs"
+    if [[ ! -f "$nginx_cert_dir/$NGINX_TLS_CERT_FILE" ]]; then
+        echo "缺少 Nginx TLS 证书: $nginx_cert_dir/$NGINX_TLS_CERT_FILE" >&2
+        exit 1
+    fi
+    if [[ ! -f "$nginx_cert_dir/$NGINX_TLS_KEY_FILE" ]]; then
+        echo "缺少 Nginx TLS 私钥: $nginx_cert_dir/$NGINX_TLS_KEY_FILE" >&2
         exit 1
     fi
     if [[ "${BROWSER_RUNTIME_ACCESS_MODE:-private}" == "published" ]]; then
@@ -371,7 +382,7 @@ do_prod() {
     _require_prod_env
     _ensure_local_compose_runtime_env
     echo "[edition] $EDITION ($EDITION_SOURCE)"
-    echo "[prod] 使用 docker-compose.prod.yml 启动公网边界"
+    echo "[prod] 使用 docker-compose.prod.yml 启动 Nginx 公网边界"
     docker compose -f docker-compose.prod.yml up -d
     if [[ "$MODE" == "foreground" ]]; then
         docker compose -f docker-compose.prod.yml logs -f reverse-proxy backend runtime-worker

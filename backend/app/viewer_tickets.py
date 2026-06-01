@@ -16,6 +16,8 @@ from app.config import VIEWER_TICKET_TTL_SECONDS, origin_allowed
 from app.db import get_pool
 
 VIEWER_MODE_CONTROL = "control"
+VIEWER_MODE_VIEW = "view"
+VIEWER_MODES = {VIEWER_MODE_CONTROL, VIEWER_MODE_VIEW}
 
 
 class ViewerTicketError(Exception):
@@ -33,7 +35,7 @@ class ConsumedViewerTicket:
     tenant_id: str | None
     user_id: str | None
     operator_subject: str
-    lease_id: str
+    lease_id: str | None
     mode: str
     remote_addr: str | None
     user_agent: str | None
@@ -75,10 +77,10 @@ async def issue_viewer_ticket(
     request: Request,
     mode: str = VIEWER_MODE_CONTROL,
 ) -> dict[str, Any]:
-    if mode != VIEWER_MODE_CONTROL:
-        raise ViewerTicketError("Only control viewer tickets are supported", reason="unsupported_viewer_mode", status_code=422)
+    if mode not in VIEWER_MODES:
+        raise ViewerTicketError("Only control and view viewer tickets are supported", reason="unsupported_viewer_mode", status_code=422)
     lease_id = (ctx.lease or {}).get("lease_id") or (ctx.lease or {}).get("id")
-    if not lease_id:
+    if mode == VIEWER_MODE_CONTROL and not lease_id:
         raise ViewerTicketError("Viewer ticket requires an active lease", reason="lease_required", status_code=409)
 
     token = secrets.token_urlsafe(32)
@@ -134,39 +136,40 @@ async def consume_viewer_ticket(
                 FROM session_viewer_tickets
                 WHERE token_hash = $1
                   AND session_id = $2
-                  AND mode = $3
                 FOR UPDATE
                 """,
                 _token_hash(token),
                 session_id,
-                VIEWER_MODE_CONTROL,
             )
             if not ticket:
                 raise ViewerTicketError("Viewer ticket is invalid", reason="ticket_invalid", status_code=403)
+            if ticket["mode"] not in VIEWER_MODES:
+                raise ViewerTicketError("Viewer ticket mode is unsupported", reason="unsupported_viewer_mode", status_code=422)
             if ticket["consumed_at"] is not None:
                 raise ViewerTicketError("Viewer ticket has already been consumed", reason="ticket_consumed", status_code=403)
             if ticket["expires_at"] <= datetime.now(timezone.utc):
                 raise ViewerTicketError("Viewer ticket has expired", reason="ticket_expired", status_code=403)
 
-            lease = await conn.fetchrow(
-                """
-                SELECT id, session_id, tenant_id, current_operator, status, expires_at
-                FROM agent_device_leases
-                WHERE id = $1
-                  AND device_instance_id = $2
-                  AND status = 'active'
-                  AND current_operator = $3
-                  AND (expires_at IS NULL OR expires_at > NOW())
-                FOR UPDATE
-                """,
-                ticket["lease_id"],
-                session_id,
-                ticket["operator_subject"],
-            )
-            if not lease:
-                raise ViewerTicketError("Viewer lease is no longer active", reason="lease_inactive", status_code=409)
-            if ticket["tenant_id"] and lease["tenant_id"] and ticket["tenant_id"] != lease["tenant_id"]:
-                raise ViewerTicketError("Viewer ticket tenant mismatch", reason="tenant_mismatch", status_code=403)
+            if ticket["mode"] == VIEWER_MODE_CONTROL:
+                lease = await conn.fetchrow(
+                    """
+                    SELECT id, session_id, tenant_id, current_operator, status, expires_at
+                    FROM agent_device_leases
+                    WHERE id = $1
+                      AND device_instance_id = $2
+                      AND status = 'active'
+                      AND current_operator = $3
+                      AND (expires_at IS NULL OR expires_at > NOW())
+                    FOR UPDATE
+                    """,
+                    ticket["lease_id"],
+                    session_id,
+                    ticket["operator_subject"],
+                )
+                if not lease:
+                    raise ViewerTicketError("Viewer lease is no longer active", reason="lease_inactive", status_code=409)
+                if ticket["tenant_id"] and lease["tenant_id"] and ticket["tenant_id"] != lease["tenant_id"]:
+                    raise ViewerTicketError("Viewer ticket tenant mismatch", reason="tenant_mismatch", status_code=403)
 
             consumed = await conn.fetchrow(
                 """

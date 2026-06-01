@@ -78,6 +78,9 @@ const LANG_OPTIONS = [
   { value: 'ru', label: 'Русский' },
 ]
 const reconnectExhausted = ref(false)
+const viewerMode = ref<'control' | 'view'>('control')
+const controlViewerError = ref('')
+const connectionError = ref('')
 const networkOpen = ref(false)
 const selectedNetworkEgressId = ref('__direct__')
 const fpOpen = ref(false)
@@ -201,17 +204,38 @@ function normalizeViewerUrl(raw: string): string {
   return url.toString()
 }
 
-async function fetchViewerUrl(): Promise<string> {
+async function requestViewerTicket(mode: 'control' | 'view'): Promise<{ url: string, mode: 'control' | 'view' }> {
   const resp = await api(`/api/sessions/${props.sessionId}/viewer-ticket`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ mode: 'control' }),
+    body: JSON.stringify({ mode }),
   })
   const data = await resp.json().catch(() => null)
   if (!resp.ok || !data?.viewerUrl) {
-    throw new Error(data?.detail || data?.error || t('vnc.requestFailed', { status: resp.status }))
+    const err = new Error(data?.detail || data?.error || t('vnc.requestFailed', { status: resp.status }))
+    ;(err as any).status = resp.status
+    throw err
   }
-  return normalizeViewerUrl(data.viewerUrl)
+  return { url: normalizeViewerUrl(data.viewerUrl), mode: data.mode === 'view' ? 'view' : 'control' }
+}
+
+async function fetchViewerUrl(): Promise<string> {
+  try {
+    const ticket = await requestViewerTicket('control')
+    viewerMode.value = ticket.mode
+    controlViewerError.value = ''
+    connectionError.value = ''
+    return ticket.url
+  } catch (err: any) {
+    if (err?.status !== 409) throw err
+    controlViewerError.value = err?.message || ''
+    const ticket = await requestViewerTicket('view')
+    viewerMode.value = 'view'
+    viewOnly.value = true
+    inputBarOpen.value = false
+    connectionError.value = ''
+    return ticket.url
+  }
 }
 
 function retryConnect() {
@@ -237,7 +261,8 @@ async function connectRFB() {
   let wsUrl = ''
   try {
     wsUrl = await fetchViewerUrl()
-  } catch {
+  } catch (err: any) {
+    connectionError.value = err?.message || t('vnc.requestFailed', { status: 0 })
     if (serial === connectSerial) retryConnect()
     return
   }
@@ -271,6 +296,7 @@ async function connectRFB() {
     rfb = new RFB(el, wsUrl)
   } catch {
     window.WebSocket = OrigWS
+    connectionError.value = t('vnc.requestFailed', { status: 0 })
     retryConnect()
     return
   }
@@ -281,11 +307,12 @@ async function connectRFB() {
   rfb.resizeSession = scaleMode.value === 'resize'
   rfb.qualityLevel = qualityLevel.value[0] ?? 9
   rfb.compressionLevel = compressionLevel.value
-  rfb.viewOnly = viewOnly.value
+  rfb.viewOnly = viewerMode.value === 'view' || viewOnly.value
   rfb.focusOnClick = true
 
   rfb.addEventListener('connect', () => {
     connected.value = true
+    connectionError.value = ''
     reconnectAttempts = 0
     reconnectExhausted.value = false
   })
@@ -399,6 +426,11 @@ function toggleScaleMode() {
 }
 
 function toggleViewOnly() {
+  if (viewerMode.value === 'view') {
+    viewOnly.value = true
+    if (rfb) rfb.viewOnly = true
+    return
+  }
   viewOnly.value = !viewOnly.value
   if (rfb) rfb.viewOnly = viewOnly.value
 }
@@ -780,7 +812,8 @@ watch(annotatedScreenshotOpen, (open) => {
               <span class="text-xs" :class="connected ? 'text-emerald-400' : 'text-red-400'">{{ connected ? t('vnc.connected') : t('vnc.disconnected') }}</span>
             </span>
           </TooltipTrigger>
-          <TooltipContent v-if="desktopName">{{ desktopName }}</TooltipContent>
+          <TooltipContent v-if="connectionError">{{ connectionError }}</TooltipContent>
+          <TooltipContent v-else-if="desktopName">{{ desktopName }}</TooltipContent>
         </Tooltip>
 
         <Button
@@ -895,6 +928,7 @@ watch(annotatedScreenshotOpen, (open) => {
               :model-value="viewOnly"
               @update:model-value="toggleViewOnly"
               size="sm"
+              :disabled="viewerMode === 'view'"
               class="h-6 px-2 text-xs gap-1 data-[state=on]:text-amber-400"
             >
               <Eye v-if="viewOnly" class="size-3.5" />
@@ -902,7 +936,7 @@ watch(annotatedScreenshotOpen, (open) => {
               {{ viewOnly ? t('vnc.viewOnly') : t('vnc.interactive') }}
             </Toggle>
           </TooltipTrigger>
-          <TooltipContent>{{ viewOnly ? t('vnc.viewOnlyTitle') : t('vnc.interactiveTitle') }}</TooltipContent>
+          <TooltipContent>{{ viewerMode === 'view' ? (controlViewerError || t('vnc.viewOnlyLeaseRequired')) : (viewOnly ? t('vnc.viewOnlyTitle') : t('vnc.interactiveTitle')) }}</TooltipContent>
         </Tooltip>
 
         <!-- Fullscreen -->

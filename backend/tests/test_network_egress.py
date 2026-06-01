@@ -193,6 +193,7 @@ def test_prepare_session_clash_gateway_uses_runtime_namespace_and_global_config(
             session_id="session-1",
             selenium_port=55100,
             vnc_port=55101,
+            publish_ports=True,
         )
     )
 
@@ -202,7 +203,7 @@ def test_prepare_session_clash_gateway_uses_runtime_namespace_and_global_config(
     assert gateway.browser_proxy == f"http://127.0.0.1:{network_egress.NETWORK_EGRESS_CLASH_PROXY_PORT}"
     assert gateway.warnings == []
     assert "--cap-add=NET_ADMIN --device /dev/net/tun" in docker_run
-    assert "-p 55100:4444 -p 55101:7900" in docker_run
+    assert "-p 127.0.0.1:55100:4444 -p 127.0.0.1:55101:7900" in docker_run
     assert "bp-egress-session-session-1" in docker_run
     runtime = tmp_path / "runtime" / "sessions" / "session-1" / "clash" / "config.yaml"
     assert yaml.safe_load(runtime.read_text(encoding="utf-8"))["mode"] == "global"

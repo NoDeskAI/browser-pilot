@@ -184,7 +184,7 @@ class FingerprintActionBody(BaseModel):
 
 
 class ViewerTicketBody(BaseModel):
-    mode: Literal["control"] = "control"
+    mode: Literal["control", "view"] = "control"
 
 
 class AppStateBody(BaseModel):
@@ -800,23 +800,33 @@ async def create_viewer_ticket(
 ):
     await verify_session_access(session_id, user)
     mode = (body or ViewerTicketBody()).mode
-    try:
-        ctx = await agent_devices.require_active_lease(
-            session_id,
-            user,
+    if mode == viewer_tickets.VIEWER_MODE_CONTROL:
+        try:
+            ctx = await agent_devices.require_active_lease(
+                session_id,
+                user,
+                action="session.viewer.ticket.issue",
+                side_effect_level="internal",
+            )
+        except agent_devices.AgentDeviceLeaseError as exc:
+            await _record_viewer_rejection(
+                session_id,
+                actor=_operator_subject_for_user(user),
+                actor_owner_user_id=user.id,
+                lease=exc.lease,
+                summary=exc.message,
+                error=exc.reason,
+            )
+            raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+    else:
+        ctx = agent_devices.AgentDeviceActionContext(
+            session_id=session_id,
             action="session.viewer.ticket.issue",
-            side_effect_level="internal",
-        )
-    except agent_devices.AgentDeviceLeaseError as exc:
-        await _record_viewer_rejection(
-            session_id,
             actor=_operator_subject_for_user(user),
             actor_owner_user_id=user.id,
-            lease=exc.lease,
-            summary=exc.message,
-            error=exc.reason,
+            lease={},
+            side_effect_level="internal",
         )
-        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
 
     try:
         payload = await viewer_tickets.issue_viewer_ticket(
@@ -901,6 +911,7 @@ async def proxy_session_vnc(websocket: WebSocket, session_id: str):
                 upstream=upstream,
                 downstream_buffer=downstream_buffer,
                 upstream_buffer=upstream_buffer,
+                view_only=ticket.mode == viewer_tickets.VIEWER_MODE_VIEW,
             )
     except WebSocketDisconnect:
         summary = "Viewer disconnected"
@@ -919,11 +930,12 @@ async def proxy_session_vnc(websocket: WebSocket, session_id: str):
                 lease=ticket.lease,
                 action="session.viewer.connect",
                 outcome=outcome,
-                side_effect_level="external",
+                side_effect_level="none" if ticket.mode == viewer_tickets.VIEWER_MODE_VIEW else "external",
                 summary=summary,
                 details={
                     "ticketId": ticket.id,
                     "mode": ticket.mode,
+                    "viewOnly": ticket.mode == viewer_tickets.VIEWER_MODE_VIEW,
                     "durationMs": duration_ms,
                     "bytesFromViewer": downstream_bytes,
                     "bytesToViewer": upstream_bytes,
