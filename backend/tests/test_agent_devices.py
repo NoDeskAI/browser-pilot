@@ -132,8 +132,12 @@ class FakeConn:
                 lease_mode = "session_bound"
                 task_id = None
                 expires_at = datetime.now(timezone.utc) + timedelta(seconds=agent_devices.MAX_LEASE_TTL_SECONDS)
-            else:
+                updated_at = datetime.now(timezone.utc)
+            elif len(args) == 8:
                 lease_id, device_id, lease_mode, task_id, tenant_id, operator, owner, expires_at = args
+                updated_at = datetime.now(timezone.utc)
+            else:
+                lease_id, device_id, lease_mode, task_id, tenant_id, operator, owner, expires_at, updated_at = args
             lease = _lease(
                 lease_id=lease_id,
                 device_id=device_id,
@@ -144,13 +148,16 @@ class FakeConn:
             )
             lease["lease_mode"] = lease_mode
             lease["tenant_id"] = tenant_id
+            lease["created_at"] = updated_at
+            lease["updated_at"] = updated_at
             self.leases.append(lease)
             return lease
         if "update agent_device_leases set expires_at" in sql:
-            lease_id, device_id, expires_at = args
+            lease_id, device_id, expires_at, *rest = args
+            updated_at = rest[0] if rest else datetime.now(timezone.utc)
             lease = next(lease for lease in self.leases if lease["id"] == lease_id and lease["device_instance_id"] == device_id)
             lease["expires_at"] = expires_at
-            lease["updated_at"] = datetime.now(timezone.utc)
+            lease["updated_at"] = updated_at
             return lease
         if "set status = 'released'" in sql:
             lease_id, device_id = args

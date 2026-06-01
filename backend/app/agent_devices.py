@@ -110,8 +110,8 @@ def _as_utc(value: datetime) -> datetime:
     return value.astimezone(timezone.utc)
 
 
-def _normalize_expires(ttl_seconds: int | None, expires_at: datetime | None) -> datetime:
-    now = datetime.now(timezone.utc)
+def _normalize_expires(ttl_seconds: int | None, expires_at: datetime | None, *, now: datetime | None = None) -> datetime:
+    now = now or datetime.now(timezone.utc)
     if ttl_seconds is not None:
         try:
             ttl = int(ttl_seconds)
@@ -467,7 +467,8 @@ async def acquire_lease(
             reason="task_id_required",
             next_step="fix_request",
         )
-    normalized_expires = _normalize_expires(ttl_seconds, expires_at)
+    lease_updated_at = datetime.now(timezone.utc)
+    normalized_expires = _normalize_expires(ttl_seconds, expires_at, now=lease_updated_at)
 
     pool = get_pool()
     async with pool.acquire() as conn:
@@ -504,9 +505,9 @@ async def acquire_lease(
                 INSERT INTO agent_device_leases (
                     id, device_instance_id, lease_mode, task_id, session_id, tenant_id,
                     operator_subject, operator_owner_user_id, current_operator,
-                    authorized_operators, expires_at
+                    authorized_operators, expires_at, created_at, updated_at
                 )
-                VALUES ($1, $2, $3, $4, $2, $5, $6, $7, $6, '[]'::jsonb, $8)
+                VALUES ($1, $2, $3, $4, $2, $5, $6, $7, $6, '[]'::jsonb, $8, $9, $9)
                 RETURNING *
                 """,
                 str(uuid.uuid4()),
@@ -517,6 +518,7 @@ async def acquire_lease(
                 _operator_subject(user),
                 user.id,
                 normalized_expires,
+                lease_updated_at,
             )
             audit_id = await _insert_audit(
                 conn,
@@ -543,7 +545,8 @@ async def renew_lease(
     ttl_seconds: int | None = None,
     expires_at: datetime | None = None,
 ) -> dict[str, Any]:
-    normalized_expires = _normalize_expires(ttl_seconds, expires_at)
+    lease_updated_at = datetime.now(timezone.utc)
+    normalized_expires = _normalize_expires(ttl_seconds, expires_at, now=lease_updated_at)
     pool = get_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
@@ -611,13 +614,14 @@ async def renew_lease(
                 """
                 UPDATE agent_device_leases
                 SET expires_at = $3,
-                    updated_at = NOW()
+                    updated_at = $4
                 WHERE id = $1 AND device_instance_id = $2
                 RETURNING *
                 """,
                 lease_id,
                 device_id,
                 normalized_expires,
+                lease_updated_at,
             )
             audit_id = await _insert_audit(
                 conn,
@@ -748,7 +752,8 @@ async def reclaim_device(
             reason="task_id_required",
             next_step="fix_request",
         )
-    normalized_expires = _normalize_expires(ttl_seconds, expires_at)
+    lease_updated_at = datetime.now(timezone.utc)
+    normalized_expires = _normalize_expires(ttl_seconds, expires_at, now=lease_updated_at)
     pool = get_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
@@ -797,9 +802,9 @@ async def reclaim_device(
                 INSERT INTO agent_device_leases (
                     id, device_instance_id, lease_mode, task_id, session_id, tenant_id,
                     operator_subject, operator_owner_user_id, current_operator,
-                    authorized_operators, expires_at
+                    authorized_operators, expires_at, created_at, updated_at
                 )
-                VALUES ($1, $2, $3, $4, $2, $5, $6, $7, $6, '[]'::jsonb, $8)
+                VALUES ($1, $2, $3, $4, $2, $5, $6, $7, $6, '[]'::jsonb, $8, $9, $9)
                 RETURNING *
                 """,
                 str(uuid.uuid4()),
@@ -810,6 +815,7 @@ async def reclaim_device(
                 _operator_subject(user),
                 user.id,
                 normalized_expires,
+                lease_updated_at,
             )
             audit_id = await _insert_audit(
                 conn,
