@@ -976,18 +976,22 @@ watch(annotatedScreenshotOpen, (open) => {
         <!-- View-only toggle -->
         <Tooltip>
           <TooltipTrigger as-child>
-            <span class="inline-flex" @click="toggleViewOnly">
-              <Toggle
-                :model-value="viewOnly"
+            <span class="inline-flex">
+              <Button
+                type="button"
+                variant="ghost"
                 size="sm"
+                :aria-pressed="viewOnly"
                 :disabled="switchingControl"
-                class="h-6 px-2 text-xs gap-1 data-[state=on]:text-amber-400"
+                class="h-6 px-2 text-xs gap-1"
+                :class="viewOnly ? 'text-amber-400 hover:text-amber-300' : ''"
+                @click="toggleViewOnly"
               >
                 <Loader2 v-if="switchingControl" class="size-3.5 animate-spin" />
                 <Eye v-else-if="viewOnly" class="size-3.5" />
                 <MousePointer v-else class="size-3.5" />
                 {{ switchingControl ? t('vnc.switchingControl') : (viewOnly ? t('vnc.viewOnly') : t('vnc.interactive')) }}
-              </Toggle>
+              </Button>
             </span>
           </TooltipTrigger>
           <TooltipContent class="max-w-80">{{ viewOnlyToggleTooltip }}</TooltipContent>
