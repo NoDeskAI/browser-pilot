@@ -80,6 +80,8 @@ const LANG_OPTIONS = [
 const reconnectExhausted = ref(false)
 const viewerMode = ref<'control' | 'view'>('control')
 const controlViewerError = ref('')
+const controlSwitchError = ref('')
+const switchingControl = ref(false)
 const connectionError = ref('')
 const networkOpen = ref(false)
 const selectedNetworkEgressId = ref('__direct__')
@@ -168,6 +170,14 @@ const fusionStats = computed(() => {
     { label: 'fusion ms', value: trace.fusion_ms },
   ].filter(item => item.value !== undefined && item.value !== null && item.value !== '')
 })
+const viewOnlyToggleTooltip = computed(() => {
+  if (switchingControl.value) return t('vnc.switchingToControlTitle')
+  if (viewerMode.value === 'view') {
+    const reason = controlSwitchError.value || controlViewerError.value || t('vnc.viewOnlyLeaseRequired')
+    return t('vnc.viewOnlyBlockedReason', { reason })
+  }
+  return viewOnly.value ? t('vnc.viewOnlyTitle') : t('vnc.interactiveTitle')
+})
 
 const totalRecv = ref(0)
 const totalSent = ref(0)
@@ -219,11 +229,23 @@ async function requestViewerTicket(mode: 'control' | 'view'): Promise<{ url: str
   return { url: normalizeViewerUrl(data.viewerUrl), mode: data.mode === 'view' ? 'view' : 'control' }
 }
 
+async function readApiError(resp: Response, fallback: string): Promise<string> {
+  const text = await resp.text().catch(() => '')
+  if (!text) return fallback
+  try {
+    const data = JSON.parse(text)
+    return data?.detail || data?.error || data?.message || fallback
+  } catch {
+    return text || fallback
+  }
+}
+
 async function fetchViewerUrl(): Promise<string> {
   try {
     const ticket = await requestViewerTicket('control')
     viewerMode.value = ticket.mode
     controlViewerError.value = ''
+    controlSwitchError.value = ''
     connectionError.value = ''
     return ticket.url
   } catch (err: any) {
@@ -425,10 +447,39 @@ function toggleScaleMode() {
   }
 }
 
-function toggleViewOnly() {
-  if (viewerMode.value === 'view') {
+async function switchToControl() {
+  if (switchingControl.value) return
+  switchingControl.value = true
+  controlSwitchError.value = ''
+  try {
+    const resp = await api(`/api/agent-devices/${encodeURIComponent(props.sessionId)}/reclaim`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ leaseMode: 'session_bound' }),
+    })
+    if (!resp.ok) {
+      throw new Error(await readApiError(resp, t('vnc.controlSwitchFailed')))
+    }
+    viewOnly.value = false
+    await fetchSessions().catch(() => undefined)
+    await connectRFB()
+    if (viewerMode.value !== 'control') {
+      throw new Error(controlViewerError.value || t('vnc.controlSwitchStillReadOnly'))
+    }
+  } catch (err: any) {
     viewOnly.value = true
     if (rfb) rfb.viewOnly = true
+    controlSwitchError.value = err?.message || t('vnc.controlSwitchFailed')
+    const { toast } = await import('vue-sonner')
+    toast.error(t('vnc.controlSwitchFailedReason', { reason: controlSwitchError.value }))
+  } finally {
+    switchingControl.value = false
+  }
+}
+
+function toggleViewOnly() {
+  if (viewerMode.value === 'view') {
+    void switchToControl()
     return
   }
   viewOnly.value = !viewOnly.value
@@ -924,19 +975,22 @@ watch(annotatedScreenshotOpen, (open) => {
         <!-- View-only toggle -->
         <Tooltip>
           <TooltipTrigger as-child>
-            <Toggle
-              :model-value="viewOnly"
-              @update:model-value="toggleViewOnly"
-              size="sm"
-              :disabled="viewerMode === 'view'"
-              class="h-6 px-2 text-xs gap-1 data-[state=on]:text-amber-400"
-            >
-              <Eye v-if="viewOnly" class="size-3.5" />
-              <MousePointer v-else class="size-3.5" />
-              {{ viewOnly ? t('vnc.viewOnly') : t('vnc.interactive') }}
-            </Toggle>
+            <span class="inline-flex">
+              <Toggle
+                :model-value="viewOnly"
+                @update:model-value="toggleViewOnly"
+                size="sm"
+                :disabled="switchingControl"
+                class="h-6 px-2 text-xs gap-1 data-[state=on]:text-amber-400"
+              >
+                <Loader2 v-if="switchingControl" class="size-3.5 animate-spin" />
+                <Eye v-else-if="viewOnly" class="size-3.5" />
+                <MousePointer v-else class="size-3.5" />
+                {{ switchingControl ? t('vnc.switchingControl') : (viewOnly ? t('vnc.viewOnly') : t('vnc.interactive')) }}
+              </Toggle>
+            </span>
           </TooltipTrigger>
-          <TooltipContent>{{ viewerMode === 'view' ? (controlViewerError || t('vnc.viewOnlyLeaseRequired')) : (viewOnly ? t('vnc.viewOnlyTitle') : t('vnc.interactiveTitle')) }}</TooltipContent>
+          <TooltipContent class="max-w-80">{{ viewOnlyToggleTooltip }}</TooltipContent>
         </Tooltip>
 
         <!-- Fullscreen -->
