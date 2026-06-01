@@ -15,7 +15,7 @@ git clone https://github.com/NoDeskAI/browser-pilot.git
 cd browser-pilot
 
 cp .env.example .env
-# Edit passwords before production/public deployment.
+# Edit passwords before public deployment.
 
 # Build all images and start services
 docker compose build && docker compose up -d
@@ -114,7 +114,7 @@ For local development without Docker for the backend:
 
 ```bash
 cp .env.example .env
-# Edit database credentials before production/public deployment.
+# Edit database credentials before public deployment.
 # ARM users: uncomment SELENIUM_BASE_IMAGE.
 
 ./start.sh          # foreground mode (Ctrl+C to stop)
@@ -129,6 +129,16 @@ When no edition argument is provided, `start.sh` auto-detects EE by checking for
 
 This starts PostgreSQL and bundled S3-compatible object storage in Docker, initializes the default bucket, builds the Selenium image, and runs the backend (uvicorn, port 8000) + frontend dev server (Vite, port 9874) on the host.
 
+For a single-host Docker Compose deployment:
+
+```bash
+./start.sh single-host ce -d
+./start.sh single-host status
+./start.sh single-host stop
+```
+
+`./start.sh prod` is intentionally removed. Use `./start.sh single-host` for the bundled Docker Compose public boundary.
+
 ## Configuration
 
 
@@ -137,29 +147,30 @@ This starts PostgreSQL and bundled S3-compatible object storage in Docker, initi
 | `DATABASE_URL`        | Required in `.env`; see `.env.example`                         | PostgreSQL connection string for local backend development. Keep it aligned with `POSTGRES_*`.                                     |
 | `EDITION`             | `ce` in Docker Compose; auto-detected by `start.sh` when no edition argument is provided | Product edition. Use `ce` for Community Edition or `ee` for Enterprise Edition. EE requires the `ee/` sources to be present.       |
 | `POSTGRES_USER`       | Required in `.env`; see `.env.example`                         | PostgreSQL user used by Docker Compose and local development.                                                                      |
-| `POSTGRES_PASSWORD`   | Required in `.env`; see `.env.example`                         | PostgreSQL password. Change it before production/public deployment.                                                                |
+| `POSTGRES_PASSWORD`   | Required in `.env`; see `.env.example`                         | PostgreSQL password. Change it before public deployment.                                                                           |
 | `POSTGRES_DB`         | Required in `.env`; see `.env.example`                         | PostgreSQL database name.                                                                                                         |
 | `MINIO_ROOT_USER`     | Required in `.env`; see `.env.example`                         | Root user for the bundled S3-compatible storage service.                                                                           |
-| `MINIO_ROOT_PASSWORD` | Required in `.env`; see `.env.example`                         | Root password for the bundled S3-compatible storage service. Change it before production/public deployment.                       |
+| `MINIO_ROOT_PASSWORD` | Required in `.env`; see `.env.example`                         | Root password for the bundled S3-compatible storage service. Change it before public deployment.                                  |
 | `MINIO_BUCKET`        | Required in `.env`; see `.env.example`                         | Bucket created automatically by Docker Compose and preconfigured as the default S3 storage bucket.                                |
 | `MINIO_ENDPOINT`      | `http://localhost:9000` for `start.sh`; container-internal endpoint in Docker Compose | Endpoint used by the backend to reach the bundled S3-compatible storage service.                                      |
 | `MINIO_PUBLIC_ENDPOINT` | `http://localhost:9000` in Docker Compose                    | Public endpoint embedded in S3 signed download URLs. It must be reachable by browsers and CLI clients.                            |
-| `APP_ENV`             | `development` locally; `production` in `docker-compose.prod.yml` | Runtime environment. Production mode enables stricter public-boundary validation.                                                  |
-| `APP_PUBLIC_ORIGINS`  | Required for production/public deployment                     | Comma-separated browser origins allowed to use the public backend, for example `https://browser.example.com`.                      |
-| `API_BASE_URL`        | `http://localhost:8000`                                       | Public backend URL used in built-in signed file URLs. Set it to the external HTTPS origin in production.                           |
-| `NGINX_SERVER_NAME`   | Required for `./start.sh prod`                                 | Hostname served by the bundled production Nginx reverse proxy, for example `browser.example.com`.                                 |
-| `NGINX_TLS_CERT_FILE` | `fullchain.pem`                                                | TLS certificate filename under `deploy/nginx/certs/` for the production Nginx reverse proxy.                                      |
+| `APP_ENV`             | `development` locally; `production` in `docker-compose.single-host.yml` | Runtime environment. Single-host public mode enables stricter public-boundary validation.                                         |
+| `APP_PUBLIC_ORIGINS`  | Required for single-host public deployment                    | Comma-separated browser origins allowed to use the public backend, for example `https://browser.example.com`.                      |
+| `API_BASE_URL`        | `http://localhost:8000`                                       | Public backend URL used in built-in signed file URLs. Set it to the external HTTPS origin in single-host public deployment.        |
+| `NGINX_SERVER_NAME`   | Required for `./start.sh single-host`                         | Hostname served by the bundled single-host Nginx reverse proxy, for example `browser.example.com`.                                |
+| `NGINX_TLS_CERT_FILE` | `fullchain.pem`                                                | TLS certificate filename under `deploy/nginx/certs/` for the single-host Nginx reverse proxy.                                     |
 | `NGINX_TLS_KEY_FILE`  | `privkey.pem`                                                  | TLS private key filename under `deploy/nginx/certs/`. Never commit certificate or key files.                                      |
-| `BROWSER_RUNTIME_ACCESS_MODE` | `private` in app config; local `start.sh` uses `published` | Runtime container reachability mode. Production must stay `private`; direct published browser ports are blocked in production.     |
-| `BROWSER_VNC_PASSWORD_SECRET` | Required for production/public deployment              | Secret used to derive per-session browser viewer credentials. Set a long random value before exposing the service publicly.        |
-| `VIEWER_TICKET_TTL_SECONDS` | `60`                                                     | Lifetime for browser viewer tickets. Production validation allows 10-300 seconds.                                                  |
-| `FILE_DOWNLOAD_URL_TTL_SECONDS` | `300`                                                | Lifetime for generated file download URLs. Production validation allows 30-3600 seconds.                                           |
+| `BROWSER_RUNTIME_PROVIDER` | `docker`                                                 | Runtime provider selector. Non-Docker providers require EE sources and fail closed when the provider is unavailable.               |
+| `BROWSER_RUNTIME_ACCESS_MODE` | `private` in app config; local `start.sh` uses `published` | Runtime container reachability mode. Single-host public deployment must stay `private`; direct published browser ports are blocked. |
+| `BROWSER_VNC_PASSWORD_SECRET` | Required for single-host public deployment             | Secret used to derive per-session browser viewer credentials. Set a long random value before exposing the service publicly.        |
+| `VIEWER_TICKET_TTL_SECONDS` | `60`                                                     | Lifetime for browser viewer tickets. Public-boundary validation allows 10-300 seconds.                                             |
+| `FILE_DOWNLOAD_URL_TTL_SECONDS` | `300`                                                | Lifetime for generated file download URLs. Public-boundary validation allows 30-3600 seconds.                                      |
 | `SELENIUM_BASE_IMAGE` | `selenium/standalone-chrome:latest`                            | Base image for browser containers. ARM users: `seleniarm/standalone-chromium:latest`                                               |
 | `BROWSER_GL_MODE`     | `auto`                                                         | Browser WebGL runtime mode: `auto`, `swiftshader`, `angle-swiftshader`, `angle`, `egl`, or `native`. `auto` resolves to `angle-swiftshader` for ARM Chromium and `swiftshader` elsewhere. |
 | `DOCKER_HOST_ADDR`    | `localhost`                                                    | How the backend reaches browser containers. Set to `host.docker.internal` in Docker deployment (auto-configured by docker-compose) |
 | `BROWSER_RUNTIME_BACKEND_URL` | `http://host.docker.internal:8000` | Backend URL injected into browser runtime agents for internal file ingest callbacks. |
 | `BROWSER_RUNTIME_CONTROL_URL` | — | Optional internal runtime-worker URL. Docker Compose sets this to `http://runtime-worker:8001` so the public backend does not mount Docker socket directly. |
-| `BROWSER_RUNTIME_CONTROL_TOKEN` | — | Shared bearer token used between backend and runtime-worker. Set a long random value before production/public deployment. |
+| `BROWSER_RUNTIME_CONTROL_TOKEN` | — | Shared bearer token used between backend and runtime-worker. Set a long random value before public deployment. |
 | `BROWSER_RUNTIME_COMMAND_MAX_TIMEOUT` | `3600` | Maximum timeout, in seconds, accepted for runtime-worker Docker commands. Large first-time runtime image builds can need a longer timeout. |
 | `CLOAK_BROWSER_IMAGE_NAME` | `browser-pilot-cloak:latest` | Optional Cloak Chromium runtime image used by sessions created with `browserRuntime=cloak_chromium`. |
 | `BROWSER_HOME_URL` | `https://www.google.com/` | Home page opened automatically when a newly started browser is still on a blank/new-tab page. Set empty to disable. |
@@ -168,7 +179,7 @@ This starts PostgreSQL and bundled S3-compatible object storage in Docker, initi
 | `LOG_LEVEL`           | `INFO`                                                         | Backend log verbosity. Set to `DEBUG` for troubleshooting.                                                                         |
 | `JWT_EXPIRE_MINUTES`  | `30`                                                           | Short-lived access JWT lifetime in minutes.                                                                                       |
 | `REMEMBER_ME_DAYS`    | `7`                                                            | Duration for the revocable remember-me cookie used to restore short-lived access tokens.                                           |
-| `NETWORK_EGRESS_DOCKER_NETWORK` | `browser-pilot-net` | Docker bridge network used by browser containers and managed egress containers. |
+| `NETWORK_EGRESS_DOCKER_NETWORK` | `browser-pilot-net`; `browser-pilot-single-host-net` in single-host Compose | Docker bridge network used by browser containers and managed egress containers. |
 | `NETWORK_EGRESS_CONFIG_DIR` | `data/network-egress` | Private config storage for managed Clash/OpenVPN egress profiles. |
 | `NETWORK_EGRESS_CLASH_IMAGE` | `ghcr.io/metacubex/mihomo:latest` | Container image used for managed Clash egress profiles. |
 | `NETWORK_EGRESS_CLASH_PROXY_PORT` | `7890` | Proxy port exposed by managed Clash containers on the internal Docker network. |
@@ -282,7 +293,7 @@ OmniParser code and weights are not vendored in this repository. Check the OmniP
 
 ## Security
 
-The production Docker Compose deployment exposes only the bundled Nginx reverse proxy on ports 80/443. Browser container operations run through an internal `runtime-worker` service; the public backend talks to this worker over the private Compose network with `BROWSER_RUNTIME_CONTROL_TOKEN`, and only the worker mounts `/var/run/docker.sock`. Do not publish the worker port, and set a long random runtime control token before production/public deployment.
+The single-host Docker Compose deployment exposes only the bundled Nginx reverse proxy on ports 80/443. Browser container operations run through an internal `runtime-worker` service; the public backend talks to this worker over the private Compose network with `BROWSER_RUNTIME_CONTROL_TOKEN`, and only the worker mounts `/var/run/docker.sock`. Do not publish the worker port, and set a long random runtime control token before public deployment.
 
 The runtime worker still has full control over the Docker daemon. Treat it as privileged infrastructure: keep it on a dedicated host or VM boundary for SaaS workloads, restrict access to the private service network, and keep authentication in front of the public backend when deploying remotely.
 

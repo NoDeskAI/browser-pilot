@@ -16,7 +16,7 @@ import asyncpg
 import websockets
 from fastapi import APIRouter, Body, Depends, HTTPException, Request, WebSocket
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
 from app import db
@@ -24,7 +24,7 @@ from app import agent_devices
 from app import rfb_proxy
 from app import viewer_tickets
 from app.auth.dependencies import CurrentUser, get_current_user, get_session_aware_user, require_role, verify_session_access
-from app.container import (
+from app.runtime_provider import (
     BROWSER_RUNTIME_CLOAK,
     BROWSER_RUNTIME_STANDARD,
     ensure_container_running,
@@ -55,6 +55,12 @@ from app.network_egress import (
     EgressError,
     EffectiveEgress,
     resolve_egress,
+)
+from app.edition import (
+    assert_tenant_runtime_allowed,
+    browser_images_enabled,
+    ee_features,
+    reject_session_runtime_selection,
 )
 from app.runtime_control import run_runtime_command
 
@@ -149,6 +155,8 @@ async def _record_viewer_rejection(
 
 
 class CreateSessionBody(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     name: str = "新会话"
     devicePreset: str = DEFAULT_PRESET
     proxyUrl: str = ""
@@ -342,6 +350,8 @@ async def _resolve_session_network(proxy_url: str | None, image_tag: str | None)
 
 async def _resolve_session_image(session_id: str) -> str | None:
     """Look up the image_tag for a session from browser_images."""
+    if not browser_images_enabled():
+        return None
     pool = get_pool()
     row = await pool.fetchrow(
         "SELECT chrome_version, tenant_id, COALESCE(browser_runtime, 'standard_chrome') AS browser_runtime FROM sessions WHERE id = $1", session_id,
@@ -692,12 +702,17 @@ async def list_sessions(user: CurrentUser = Depends(get_current_user)):
 async def create_session(body: CreateSessionBody, user: CurrentUser = Depends(get_current_user)):
     if body.proxyUrl.strip():
         raise HTTPException(422, "Manual HTTP/SOCKS proxy is no longer supported. Use a Clash or OpenVPN network egress profile.")
+    reject_session_runtime_selection(body)
 
     pool = get_pool()
+    await assert_tenant_runtime_allowed(user.tenant_id)
     preset_id = body.devicePreset if body.devicePreset in DEVICE_PRESETS else DEFAULT_PRESET
     safe_lang = re.sub(r"[^a-zA-Z0-9_-]", "", body.browserLang or "zh-CN") or "zh-CN"
 
-    if body.browserRuntime == BROWSER_RUNTIME_CLOAK:
+    if not browser_images_enabled():
+        resolved_chrome_version = None
+        resolved_image_tag = None
+    elif body.browserRuntime == BROWSER_RUNTIME_CLOAK:
         await _ensure_cloak_runtime_image()
         resolved_chrome_version = None
         resolved_image_tag = None
@@ -1063,6 +1078,7 @@ async def start_session_container(session_id: str, user: CurrentUser = Depends(g
         session_id, user, action="session.container.start", side_effect_level="internal"
     )
     try:
+        await assert_tenant_runtime_allowed(user.tenant_id, exclude_session_id=session_id)
         await ensure_container_running(session_id)
         await _activate_file_capture(session_id)
         from app.tools.browser.session import ensure_homepage
@@ -1156,6 +1172,7 @@ async def unpause_session_container(session_id: str, user: CurrentUser = Depends
     if rejected:
         return rejected
     try:
+        await assert_tenant_runtime_allowed(user.tenant_id, exclude_session_id=session_id)
         await ensure_container_running(session_id)
         await _activate_file_capture(session_id)
         pool = get_pool()
@@ -1249,6 +1266,7 @@ async def change_device_preset(session_id: str, body: DevicePresetBody, user: Cu
     from app.tools.browser.session import invalidate_session_cache
     invalidate_session_cache(session_id)
     await stop_download_watcher(session_id)
+    await assert_tenant_runtime_allowed(_row_get(row, "tenant_id") or user.tenant_id, exclude_session_id=session_id)
     await recreate_container(
         session_id,
         width=preset_data["width"],
@@ -1311,6 +1329,7 @@ async def change_network_egress(
     from app.tools.browser.session import invalidate_session_cache
     invalidate_session_cache(session_id)
     await stop_download_watcher(session_id)
+    await assert_tenant_runtime_allowed(_row_get(row, "tenant_id") or user.tenant_id, exclude_session_id=session_id)
     await recreate_container(
         session_id,
         width=preset_data["width"],
@@ -1378,6 +1397,7 @@ async def regenerate_fingerprint(session_id: str, body: FingerprintActionBody, u
     fp_ua = fp_profile.get("navigator", {}).get("userAgent") if isinstance(fp_profile, dict) else None
 
     await stop_download_watcher(session_id)
+    await assert_tenant_runtime_allowed(_row_get(row, "tenant_id") or user.tenant_id, exclude_session_id=session_id)
     await recreate_container(
         session_id,
         width=preset_data["width"],
@@ -1405,6 +1425,7 @@ async def regenerate_fingerprint(session_id: str, body: FingerprintActionBody, u
 @router.post("/api/sessions/{session_id}/network-profile/refresh")
 async def refresh_network_profile(session_id: str, user: CurrentUser = Depends(get_session_aware_user)):
     await verify_session_access(session_id, user)
+    await assert_tenant_runtime_allowed(user.tenant_id, exclude_session_id=session_id)
     runtime_ports = await ensure_container_running(session_id)
     await _activate_file_capture(session_id)
     observed = await resolve_network_via_browser(runtime_ports, session_id=session_id, mode="deep")
@@ -1607,6 +1628,9 @@ async def get_site_info(request: Request):
         "features": {
             "sso": EDITION == "ee",
             "multiTenantManagement": EDITION == "ee",
+            "browserImages": True,
+            "runtimeShellTools": True,
+            **ee_features(),
         },
         "auth": {
             "accessTokenMinutes": JWT_EXPIRE_MINUTES,

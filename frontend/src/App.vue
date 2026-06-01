@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useSessions } from './composables/useSessions'
 import { useAuth } from './composables/useAuth'
+import { isPublicShellRoute } from './router'
 import AppHeader from './components/AppHeader.vue'
 import { Toaster } from '@/components/ui/sonner'
 import { toast } from 'vue-sonner'
@@ -17,7 +18,7 @@ const { brand, init: initSessions, fetchBrand, createSession } = useSessions()
 
 const { isAuthenticated, fetchMe, refreshAuth } = useAuth()
 
-const isAuthPage = computed(() => route.path === '/login' || route.path === '/setup')
+const isAuthPage = computed(() => route.path === '/login' || route.path === '/setup' || isPublicShellRoute(route.path))
 const ready = ref(false)
 const bootstrap = reactive({
   status: 'checking',
@@ -92,7 +93,7 @@ async function syncRouteAfterBootstrap() {
     const res = await fetch('/api/site-info')
     const data = await res.json().catch(() => ({}))
     const setupComplete = !!data.setupComplete
-    if (!setupComplete && route.path !== '/setup') {
+    if (!setupComplete && route.path !== '/setup' && !isPublicShellRoute(route.path)) {
       await router.replace('/setup')
       return
     }

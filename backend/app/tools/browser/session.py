@@ -10,7 +10,7 @@ from typing import Any
 import httpx
 
 from app.config import BROWSER_HOME_URL
-from app.container import (
+from app.runtime_provider import (
     BROWSER_RUNTIME_CLOAK,
     BROWSER_RUNTIME_STANDARD,
     ensure_container_running,

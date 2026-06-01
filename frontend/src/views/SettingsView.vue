@@ -7,6 +7,7 @@ import OrgSettings from '../components/OrgSettings.vue'
 import FingerprintPoolSettings from '../components/FingerprintPoolSettings.vue'
 import BrowserImageSettings from '../components/BrowserImageSettings.vue'
 import NetworkEgressSettings from '../components/NetworkEgressSettings.vue'
+import { useSessions } from '../composables/useSessions'
 
 const isEE = __EE__
 const SsoConfigPanel = isEE
@@ -19,6 +20,8 @@ const TenantManager = isEE
 const { t } = useI18n()
 const route = useRoute()
 const router = useRouter()
+const { brand } = useSessions()
+const browserImagesEnabled = computed(() => brand.features.browserImages !== false)
 
 type SettingsTab = 'organization' | 'storage' | 'fingerprintPool' | 'browserImages' | 'networkEgress' | 'sso' | 'tenants'
 
@@ -52,6 +55,7 @@ function resolveTab(section: string | string[] | undefined): SettingsTab | null 
   const tab = sectionToTab[normalized]
   if (!tab) return null
   if (!isEE && (tab === 'sso' || tab === 'tenants')) return null
+  if (tab === 'browserImages' && !browserImagesEnabled.value) return null
   return tab
 }
 
@@ -103,6 +107,7 @@ function goToTab(tab: SettingsTab) {
               {{ t('settings.fingerprintPool') }}
             </button>
             <button
+              v-if="browserImagesEnabled"
               @click="goToTab('browserImages')"
               class="px-3 py-2 text-sm rounded-md transition-colors text-left whitespace-nowrap"
               :class="activeTab === 'browserImages' ? 'bg-accent text-accent-foreground font-medium' : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground'"

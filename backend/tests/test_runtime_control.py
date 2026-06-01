@@ -55,12 +55,24 @@ def test_validate_runtime_command_allows_container_shell_script_argument():
 def test_remote_runtime_requires_control_token(monkeypatch):
     monkeypatch.setattr(runtime_control, "BROWSER_RUNTIME_CONTROL_URL", "http://runtime-worker:8001")
     monkeypatch.setattr(runtime_control, "BROWSER_RUNTIME_CONTROL_TOKEN", "")
+    monkeypatch.setattr(runtime_control, "runtime_shell_commands_enabled", lambda: True)
 
     stdout, stderr, rc = asyncio.run(runtime_control.run_runtime_command("docker ps", timeout=1))
 
     assert stdout == ""
     assert rc == -1
     assert "BROWSER_RUNTIME_CONTROL_TOKEN" in stderr
+
+
+def test_edition_hook_disables_runtime_shell_commands(monkeypatch):
+    monkeypatch.setattr(runtime_control, "runtime_shell_commands_enabled", lambda: False)
+    monkeypatch.setattr(runtime_control, "BROWSER_RUNTIME_CONTROL_URL", "")
+
+    stdout, stderr, rc = asyncio.run(runtime_control.run_runtime_command("docker ps", timeout=1))
+
+    assert stdout == ""
+    assert rc == -1
+    assert "disabled in this edition mode" in stderr
 
 
 def test_docker_compose_keeps_docker_socket_on_runtime_worker_only():

@@ -27,6 +27,7 @@ const { t } = useI18n()
 const router = useRouter()
 const notify = useNotify()
 const {
+  brand,
   state: sessions,
   createSession, deleteSession, renameSession,
   startContainer, pauseContainer, fetchSessions,
@@ -42,7 +43,8 @@ const createVersion = ref('')
 const createNetworkEgressId = ref('__direct__')
 const createRuntime = ref<'standard_chrome' | 'cloak_chromium'>('standard_chrome')
 const DIRECT_EGRESS_VALUE = '__direct__'
-const canCreateSession = computed(() => createRuntime.value === 'cloak_chromium' || hasReadyImages.value)
+const browserImagesEnabled = computed(() => brand.features.browserImages !== false)
+const canCreateSession = computed(() => !browserImagesEnabled.value || createRuntime.value === 'cloak_chromium' || hasReadyImages.value)
 
 const isMac = navigator.platform.includes('Mac')
 const shortcutLabel = isMac ? '⌘N' : 'Ctrl+N'
@@ -210,7 +212,9 @@ onMounted(async () => {
     const [imgs] = await Promise.all([fetchBrowserImages(), fetchNetworkEgress()])
     readyImages.value = imgs
     hasReadyImages.value = imgs.length > 0
-    if (imgs.length > 0 && !createVersion.value) {
+    if (!browserImagesEnabled.value) {
+      createRuntime.value = 'standard_chrome'
+    } else if (imgs.length > 0 && !createVersion.value) {
       createVersion.value = imgs[0].chromeVersion || String(imgs[0].chromeMajor)
     } else if (imgs.length === 0) {
       createRuntime.value = 'cloak_chromium'
@@ -318,7 +322,9 @@ function formatRelativeTime(iso: string): string {
 }
 
 function openCreateDialog() {
-  if (!hasReadyImages.value) {
+  if (!browserImagesEnabled.value) {
+    createRuntime.value = 'standard_chrome'
+  } else if (!hasReadyImages.value) {
     createRuntime.value = 'cloak_chromium'
   }
   if (!createVersion.value && readyImages.value.length > 0) {
@@ -339,7 +345,7 @@ async function handleCreateSession(name?: string, chromeVersion?: string, networ
       createDialogOpen.value = false
       createName.value = ''
       createNetworkEgressId.value = DIRECT_EGRESS_VALUE
-      createRuntime.value = hasReadyImages.value ? 'standard_chrome' : 'cloak_chromium'
+      createRuntime.value = !browserImagesEnabled.value || hasReadyImages.value ? 'standard_chrome' : 'cloak_chromium'
       router.push(`/s/${session.id}`)
     }
   } catch (e: any) {
@@ -783,7 +789,7 @@ async function onPauseContainer(id: string) {
                 <SelectValue :placeholder="t('browserRuntime.label')" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="standard_chrome" :disabled="!hasReadyImages">
+                <SelectItem value="standard_chrome" :disabled="browserImagesEnabled && !hasReadyImages">
                   {{ t('browserRuntime.standard_chrome') }}
                   <span class="text-xs text-muted-foreground">({{ t('browserRuntime.standardHint') }})</span>
                 </SelectItem>
@@ -794,7 +800,7 @@ async function onPauseContainer(id: string) {
               </SelectContent>
             </Select>
           </div>
-          <div v-if="createRuntime === 'standard_chrome'" class="space-y-2">
+          <div v-if="browserImagesEnabled && createRuntime === 'standard_chrome'" class="space-y-2">
             <Label for="create-session-version">{{ t('browserImages.version') }}</Label>
             <Select v-model="createVersion" :disabled="creating">
               <SelectTrigger id="create-session-version">

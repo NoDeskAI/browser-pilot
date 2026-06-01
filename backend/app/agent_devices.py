@@ -8,8 +8,8 @@ from typing import Any
 from fastapi import HTTPException
 
 from app.auth.dependencies import CurrentUser
-from app.container import get_all_container_statuses, get_container_status
 from app.db import get_pool
+from app.runtime_provider import get_all_container_statuses, get_container_status
 
 DEVICE_TYPE = "browser_session"
 AUDIT_BOUNDARY = "browser_pilot"

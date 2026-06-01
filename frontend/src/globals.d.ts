@@ -2,6 +2,7 @@ declare const __EE__: boolean
 
 declare module '@ee/routes' {
   export const eeRoutes: Array<import('vue-router').RouteRecordRaw>
+  export const eePublicRoutePrefixes: string[]
 }
 
 declare module '@ee/components/SsoLoginButton.vue' {

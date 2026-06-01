@@ -11,6 +11,7 @@ from app.config import (
     BROWSER_RUNTIME_CONTROL_TOKEN,
     BROWSER_RUNTIME_CONTROL_URL,
 )
+from app.edition import runtime_shell_commands_enabled
 
 logger = logging.getLogger("runtime_control")
 
@@ -126,6 +127,9 @@ async def run_local_command(cmd: str, timeout: float = 30) -> tuple[str, str, in
 
 
 async def run_runtime_command(cmd: str, timeout: float = 30) -> tuple[str, str, int]:
+    if not runtime_shell_commands_enabled():
+        return "", "runtime shell commands are disabled in this edition mode", -1
+
     if not runtime_control_enabled():
         return await run_local_command(cmd, timeout=timeout)
 

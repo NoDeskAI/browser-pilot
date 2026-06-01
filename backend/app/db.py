@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
@@ -100,6 +101,13 @@ def _alembic_config() -> Config:
     backend_root = Path(__file__).parent.parent
     cfg = Config(str(backend_root / "alembic.ini"))
     cfg.set_main_option("script_location", str(backend_root / "alembic"))
+    version_locations = [backend_root / "alembic" / "versions"]
+    ee_versions = config.PROJECT_ROOT / "ee" / "backend" / "alembic" / "versions"
+    if config.EDITION == "ee" and ee_versions.is_dir():
+        version_locations.append(ee_versions)
+    if len(version_locations) > 1:
+        cfg.set_main_option("path_separator", "os")
+        cfg.set_main_option("version_locations", os.pathsep.join(str(path) for path in version_locations))
     cfg.attributes["skip_logger_setup"] = True
     return cfg
 

@@ -1,5 +1,12 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { token, refreshAuth } from '../composables/useAuth'
+import { eePublicRoutePrefixes, eeRoutes } from '@ee/routes'
+
+const publicRoutePrefixes = __EE__ ? eePublicRoutePrefixes : []
+
+export function isPublicShellRoute(path: string): boolean {
+  return publicRoutePrefixes.some(prefix => path === prefix || path.startsWith(`${prefix}/`))
+}
 
 const router = createRouter({
   history: createWebHistory(),
@@ -24,6 +31,7 @@ const router = createRouter({
     },
     { path: '/login', component: () => import('../views/LoginView.vue') },
     { path: '/setup', component: () => import('../views/SetupView.vue') },
+    ...(__EE__ ? eeRoutes : []),
     { path: '/:pathMatch(.*)*', redirect: '/' },
   ],
 })
@@ -51,7 +59,7 @@ router.beforeEach(async (to) => {
     return true
   }
 
-  if (!info.setupComplete && to.path !== '/setup') {
+  if (!info.setupComplete && to.path !== '/setup' && !isPublicShellRoute(to.path)) {
     return '/setup'
   }
 
@@ -70,10 +78,6 @@ router.beforeEach(async (to) => {
 
 export function invalidateSiteInfoCache() {
   _siteInfoCache = null
-}
-
-if (__EE__) {
-  import('@ee/routes').then(m => m.eeRoutes.forEach((r: any) => router.addRoute(r)))
 }
 
 export default router

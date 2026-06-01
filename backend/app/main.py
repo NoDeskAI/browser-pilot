@@ -15,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from app import db
 from app.config import APP_PUBLIC_ORIGINS, APP_TITLE, validate_public_runtime_config
 from app.logging_config import setup_logging
+from app.runtime_provider import validate_runtime_provider_config
 from app.auth.routes import router as auth_router
 from app.routes.docker import router as docker_router
 from app.routes.browser import router as browser_router
@@ -33,6 +34,7 @@ from app.edition import register_ee
 setup_logging()
 logger = logging.getLogger("access")
 validate_public_runtime_config()
+validate_runtime_provider_config()
 
 
 @asynccontextmanager
