@@ -15,8 +15,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.auth.dependencies import CurrentUser, get_current_user, require_role
-from app.config import BROWSER_RUNTIME_COMMAND_MAX_TIMEOUT, CLOAK_BROWSER_IMAGE_NAME, EE_SAAS_MODE, PROJECT_ROOT
+from app.config import BROWSER_RUNTIME_COMMAND_MAX_TIMEOUT, CLOAK_BROWSER_IMAGE_NAME, PROJECT_ROOT
 from app.db import get_pool
+from app.edition import reject_browser_images_api
 from app.runtime_control import run_runtime_command as _run
 
 logger = logging.getLogger("routes.browser_images")
@@ -41,11 +42,6 @@ _cloak_build_state: dict = {
     "progress": 0,
 }
 _cloak_build_lock = asyncio.Lock()
-
-
-def _reject_browser_images_in_saas() -> None:
-    if EE_SAAS_MODE:
-        raise HTTPException(status_code=403, detail="browser_images_disabled_in_saas")
 
 
 def _now_iso() -> str:
@@ -445,7 +441,7 @@ class BuildBody(BaseModel):
 async def build_cloak_runtime_image(
     user: CurrentUser = Depends(require_role(["superadmin", "admin"])),
 ):
-    _reject_browser_images_in_saas()
+    reject_browser_images_api()
     return await _start_cloak_runtime_build()
 
 
@@ -475,7 +471,7 @@ async def build_image(
     body: BuildBody,
     user: CurrentUser = Depends(require_role(["superadmin", "admin"])),
 ):
-    _reject_browser_images_in_saas()
+    reject_browser_images_api()
     if body.runtime == "cloak_chromium":
         return await _start_cloak_runtime_build()
 
@@ -561,7 +557,7 @@ async def build_image(
 
 @router.get("/api/browser-images")
 async def list_images(user: CurrentUser = Depends(get_current_user)):
-    _reject_browser_images_in_saas()
+    reject_browser_images_api()
     pool = get_pool()
     rows = await pool.fetch(
         "SELECT bi.id, bi.chrome_major, bi.chrome_version, bi.base_image, bi.image_tag, "
@@ -595,7 +591,7 @@ async def available_versions(
     refresh: bool = False,
     user: CurrentUser = Depends(get_current_user),
 ):
-    _reject_browser_images_in_saas()
+    reject_browser_images_api()
     now = time.time()
     if not refresh and _version_cache["versions"] and now - _version_cache["fetched_at"] < _CACHE_TTL:
         return {"versions": _version_cache["versions"], "isArm": _IS_ARM}
@@ -616,7 +612,7 @@ async def delete_image(
     image_id: str,
     user: CurrentUser = Depends(require_role(["superadmin", "admin"])),
 ):
-    _reject_browser_images_in_saas()
+    reject_browser_images_api()
     pool = get_pool()
     if image_id == "cloak_chromium":
         cnt = await pool.fetchval(
@@ -668,7 +664,7 @@ async def delete_image(
 
 @router.get("/api/browser-images/default")
 async def get_default_image(user: CurrentUser = Depends(get_current_user)):
-    _reject_browser_images_in_saas()
+    reject_browser_images_api()
     pool = get_pool()
     row = await pool.fetchrow(
         "SELECT id, chrome_major, chrome_version, image_tag FROM browser_images "

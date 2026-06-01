@@ -132,25 +132,26 @@ class DockerRuntimeProvider:
 _provider: RuntimeProvider | None = None
 
 
-def _load_kubernetes_provider() -> RuntimeProvider:
+def _load_ee_provider(provider_name: str) -> RuntimeProvider:
     if EDITION != "ee":
-        raise RuntimeProviderError("BROWSER_RUNTIME_PROVIDER=kubernetes requires EDITION=ee")
+        raise RuntimeProviderError(f"BROWSER_RUNTIME_PROVIDER={provider_name} requires EDITION=ee")
     try:
-        module = importlib.import_module("ee.backend.runtime.kubernetes_provider")
+        module = importlib.import_module("ee.backend.runtime")
     except ModuleNotFoundError as exc:
         missing_module = exc.name or ""
-        if missing_module in {
-            "ee",
-            "ee.backend",
-            "ee.backend.runtime",
-            "ee.backend.runtime.kubernetes_provider",
-        }:
-            raise RuntimeProviderError("BROWSER_RUNTIME_PROVIDER=kubernetes is not available in this build") from exc
+        if missing_module in {"ee", "ee.backend", "ee.backend.runtime"}:
+            raise RuntimeProviderError(f"BROWSER_RUNTIME_PROVIDER={provider_name} is not available in this build") from exc
         raise
-    provider_class = getattr(module, "KubernetesRuntimeProvider", None)
-    if provider_class is None:
-        raise RuntimeProviderError("EE KubernetesRuntimeProvider is not available")
-    return provider_class()
+    create_provider = getattr(module, "create_provider", None)
+    if not callable(create_provider):
+        raise RuntimeProviderError(f"EE runtime provider factory is not available for {provider_name}")
+    try:
+        return create_provider(provider_name)
+    except ModuleNotFoundError as exc:
+        missing_module = exc.name or ""
+        if missing_module.startswith("ee.backend.runtime."):
+            raise RuntimeProviderError(f"BROWSER_RUNTIME_PROVIDER={provider_name} is not available in this build") from exc
+        raise
 
 
 def get_runtime_provider() -> RuntimeProvider:
@@ -162,10 +163,8 @@ def get_runtime_provider() -> RuntimeProvider:
     if provider_name == "docker":
         _provider = DockerRuntimeProvider()
         return _provider
-    if provider_name == "kubernetes":
-        _provider = _load_kubernetes_provider()
-        return _provider
-    raise RuntimeProviderError(f"Unsupported BROWSER_RUNTIME_PROVIDER: {provider_name}")
+    _provider = _load_ee_provider(provider_name)
+    return _provider
 
 
 def validate_runtime_provider_config() -> None:

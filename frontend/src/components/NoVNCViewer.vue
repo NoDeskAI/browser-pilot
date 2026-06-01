@@ -111,7 +111,7 @@ const currentNetworkEgressId = computed(() => currentSession.value?.networkEgres
 const currentNetworkName = computed(() => currentSession.value?.networkEgressName || t('networkEgress.direct'))
 const currentNetworkStatus = computed(() => currentSession.value?.networkEgressStatus || 'healthy')
 const currentNetworkError = computed(() => currentSession.value?.networkEgressHealthError || '')
-const runtimeShellToolsEnabled = computed(() => !brand.features.saasMode)
+const runtimeShellToolsEnabled = computed(() => brand.features.runtimeShellTools !== false)
 const fpProfile = computed(() => currentSession.value?.fingerprintProfile || null)
 const desktopPresets = computed(() => sessState.devicePresets.filter(p => p.category === 'desktop'))
 const mobilePresets = computed(() => sessState.devicePresets.filter(p => p.category === 'mobile'))

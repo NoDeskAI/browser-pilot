@@ -40,7 +40,7 @@ from app.runtime_provider import (
     sync_fingerprint_profile_to_container,
     stop_container,
 )
-from app.config import CLOAK_BROWSER_IMAGE_NAME, EE_SAAS_MODE
+from app.config import CLOAK_BROWSER_IMAGE_NAME
 from app.db import get_pool
 from app.device_presets import DEVICE_PRESETS, DEFAULT_PRESET, get_preset
 from app.download_watcher import configure_download_behavior, start_download_watcher, stop_download_watcher
@@ -56,7 +56,12 @@ from app.network_egress import (
     EffectiveEgress,
     resolve_egress,
 )
-from app.platform_control import assert_tenant_runtime_allowed
+from app.edition import (
+    assert_tenant_runtime_allowed,
+    browser_images_enabled,
+    ee_features,
+    reject_session_runtime_selection,
+)
 from app.runtime_control import run_runtime_command
 
 logger = logging.getLogger("routes.sessions")
@@ -211,24 +216,6 @@ def _chrome_major(ver: str) -> int:
         raise HTTPException(422, "Invalid Chrome version.") from exc
 
 
-def _reject_saas_runtime_image_selection(body: CreateSessionBody) -> None:
-    if not EE_SAAS_MODE:
-        return
-    extra = body.model_extra or {}
-    fields_set = set(getattr(body, "model_fields_set", set()) or set())
-    forbidden_fields = {
-        "image",
-        "imageTag",
-        "imageDigest",
-        "imageRef",
-        "imageName",
-        "runtimeImage",
-        "customImage",
-    }
-    if "chromeVersion" in fields_set or any(field in extra for field in forbidden_fields):
-        raise HTTPException(status_code=403, detail="runtime_image_not_allowed")
-
-
 async def _resolve_browser_image(pool, tenant_id: str, requested: str | None):
     if requested:
         raw = requested.strip()
@@ -363,7 +350,7 @@ async def _resolve_session_network(proxy_url: str | None, image_tag: str | None)
 
 async def _resolve_session_image(session_id: str) -> str | None:
     """Look up the image_tag for a session from browser_images."""
-    if EE_SAAS_MODE:
+    if not browser_images_enabled():
         return None
     pool = get_pool()
     row = await pool.fetchrow(
@@ -715,14 +702,14 @@ async def list_sessions(user: CurrentUser = Depends(get_current_user)):
 async def create_session(body: CreateSessionBody, user: CurrentUser = Depends(get_current_user)):
     if body.proxyUrl.strip():
         raise HTTPException(422, "Manual HTTP/SOCKS proxy is no longer supported. Use a Clash or OpenVPN network egress profile.")
-    _reject_saas_runtime_image_selection(body)
+    reject_session_runtime_selection(body)
 
     pool = get_pool()
     await assert_tenant_runtime_allowed(user.tenant_id)
     preset_id = body.devicePreset if body.devicePreset in DEVICE_PRESETS else DEFAULT_PRESET
     safe_lang = re.sub(r"[^a-zA-Z0-9_-]", "", body.browserLang or "zh-CN") or "zh-CN"
 
-    if EE_SAAS_MODE:
+    if not browser_images_enabled():
         resolved_chrome_version = None
         resolved_image_tag = None
     elif body.browserRuntime == BROWSER_RUNTIME_CLOAK:
@@ -1622,7 +1609,7 @@ async def get_session_logs(session_id: str, tail: int = 200, log_type: str | Non
 
 @router.get("/api/site-info")
 async def get_site_info(request: Request):
-    from ..config import APP_TITLE, CLI_COMMAND_NAME, EDITION, EE_SAAS_MODE, JWT_EXPIRE_MINUTES, REMEMBER_ME_DAYS
+    from ..config import APP_TITLE, CLI_COMMAND_NAME, EDITION, JWT_EXPIRE_MINUTES, REMEMBER_ME_DAYS
     from .cli import get_cli_install_info
 
     if not db.is_ready():
@@ -1641,8 +1628,9 @@ async def get_site_info(request: Request):
         "features": {
             "sso": EDITION == "ee",
             "multiTenantManagement": EDITION == "ee",
-            "saasMode": EE_SAAS_MODE,
-            "browserImages": not EE_SAAS_MODE,
+            "browserImages": True,
+            "runtimeShellTools": True,
+            **ee_features(),
         },
         "auth": {
             "accessTokenMinutes": JWT_EXPIRE_MINUTES,

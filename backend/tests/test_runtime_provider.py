@@ -45,45 +45,45 @@ def test_runtime_provider_proxies_docker_runtime(monkeypatch):
     assert captured == {"session_id": "session-1"}
 
 
-def test_kubernetes_provider_in_ce_fails_closed(monkeypatch):
-    monkeypatch.setattr(runtime_provider, "BROWSER_RUNTIME_PROVIDER", "kubernetes")
+def test_non_docker_provider_in_ce_fails_closed(monkeypatch):
+    monkeypatch.setattr(runtime_provider, "BROWSER_RUNTIME_PROVIDER", "managed")
     monkeypatch.setattr(runtime_provider, "EDITION", "ce")
 
     with pytest.raises(runtime_provider.RuntimeProviderError, match="requires EDITION=ee"):
         runtime_provider.validate_runtime_provider_config()
 
 
-def test_kubernetes_provider_without_ee_provider_fails_closed(monkeypatch):
-    monkeypatch.setattr(runtime_provider, "BROWSER_RUNTIME_PROVIDER", "kubernetes")
+def test_non_docker_provider_without_ee_runtime_fails_closed(monkeypatch):
+    monkeypatch.setattr(runtime_provider, "BROWSER_RUNTIME_PROVIDER", "managed")
     monkeypatch.setattr(runtime_provider, "EDITION", "ee")
 
     with pytest.raises(runtime_provider.RuntimeProviderError, match="not available"):
         runtime_provider.validate_runtime_provider_config()
 
 
-def test_kubernetes_provider_loads_ee_runtime_module(monkeypatch):
-    module_name = "ee.backend.runtime.kubernetes_provider"
+def test_non_docker_provider_loads_ee_runtime_factory(monkeypatch):
+    module_name = "ee.backend.runtime"
 
-    class FakeKubernetesRuntimeProvider:
-        name = "kubernetes"
+    class FakeRuntimeProvider:
+        name = "managed"
 
     fake_module = types.ModuleType(module_name)
-    fake_module.KubernetesRuntimeProvider = FakeKubernetesRuntimeProvider
+    fake_module.create_provider = lambda provider_name: FakeRuntimeProvider()
     monkeypatch.setitem(sys.modules, "ee", types.ModuleType("ee"))
     monkeypatch.setitem(sys.modules, "ee.backend", types.ModuleType("ee.backend"))
-    monkeypatch.setitem(sys.modules, "ee.backend.runtime", types.ModuleType("ee.backend.runtime"))
     monkeypatch.setitem(sys.modules, module_name, fake_module)
-    monkeypatch.setattr(runtime_provider, "BROWSER_RUNTIME_PROVIDER", "kubernetes")
+    monkeypatch.setattr(runtime_provider, "BROWSER_RUNTIME_PROVIDER", "managed")
     monkeypatch.setattr(runtime_provider, "EDITION", "ee")
 
     provider = runtime_provider.get_runtime_provider()
 
-    assert isinstance(provider, FakeKubernetesRuntimeProvider)
-    assert provider.name == "kubernetes"
+    assert isinstance(provider, FakeRuntimeProvider)
+    assert provider.name == "managed"
 
 
 def test_unknown_runtime_provider_fails_closed(monkeypatch):
     monkeypatch.setattr(runtime_provider, "BROWSER_RUNTIME_PROVIDER", "nomad")
+    monkeypatch.setattr(runtime_provider, "EDITION", "ce")
 
-    with pytest.raises(runtime_provider.RuntimeProviderError, match="Unsupported BROWSER_RUNTIME_PROVIDER"):
+    with pytest.raises(runtime_provider.RuntimeProviderError, match="requires EDITION=ee"):
         runtime_provider.validate_runtime_provider_config()

@@ -63,14 +63,17 @@ def _reset_cloak_state(monkeypatch, **updates):
     monkeypatch.setattr(browser_images, "_cloak_build_state", state)
 
 
-def test_browser_images_api_rejects_tenant_access_in_saas_mode(monkeypatch):
-    monkeypatch.setattr(browser_images, "EE_SAAS_MODE", True)
+def test_browser_images_api_uses_edition_rejection_hook(monkeypatch):
+    def reject():
+        raise HTTPException(status_code=403, detail="browser_images_disabled")
+
+    monkeypatch.setattr(browser_images, "reject_browser_images_api", reject)
 
     with pytest.raises(HTTPException) as exc:
         asyncio.run(browser_images.list_images(_user()))
 
     assert exc.value.status_code == 403
-    assert exc.value.detail == "browser_images_disabled_in_saas"
+    assert exc.value.detail == "browser_images_disabled"
 
 
 def _image_row(

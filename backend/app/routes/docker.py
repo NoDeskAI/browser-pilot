@@ -5,12 +5,12 @@ import logging
 import re
 import shlex
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 
 from app.auth.dependencies import CurrentUser, get_session_aware_user, verify_session_access
-from app.config import EE_SAAS_MODE
 from app.db import get_pool
+from app.edition import reject_container_debug_api
 from app.i18n import t
 from app.runtime_provider import container_name, ensure_localhost_bridge_for_url
 from app.runtime_control import run_runtime_command
@@ -31,11 +31,6 @@ async def _exec_in_container(cname: str, bash_cmd: str, timeout: float = 15) -> 
     return await run_runtime_command(cmd, timeout=timeout)
 
 
-def _reject_saas_docker_api() -> None:
-    if EE_SAAS_MODE:
-        raise HTTPException(status_code=403, detail="docker_runtime_api_disabled_in_saas")
-
-
 DISPLAY = ":99.0"
 WM_CLASS = "chromium"
 
@@ -47,7 +42,7 @@ class NavigateRequest(BaseModel):
 
 @router.post("/api/docker/navigate")
 async def docker_navigate(body: NavigateRequest, request: Request, user: CurrentUser = Depends(get_session_aware_user)):
-    _reject_saas_docker_api()
+    reject_container_debug_api()
     await verify_session_access(body.sessionId, user)
     cname = container_name(body.sessionId)
     logger.info("navigate [%s] -> %s", cname, body.url)
@@ -90,7 +85,7 @@ class ClipboardRequest(BaseModel):
 
 @router.post("/api/docker/clipboard")
 async def docker_clipboard(body: ClipboardRequest, request: Request, user: CurrentUser = Depends(get_session_aware_user)):
-    _reject_saas_docker_api()
+    reject_container_debug_api()
     await verify_session_access(body.sessionId, user)
     cname = container_name(body.sessionId)
 
@@ -124,7 +119,7 @@ class BrowserLangRequest(BaseModel):
 
 @router.post("/api/docker/browser-lang")
 async def docker_browser_lang(body: BrowserLangRequest, user: CurrentUser = Depends(get_session_aware_user)):
-    _reject_saas_docker_api()
+    reject_container_debug_api()
     await verify_session_access(body.sessionId, user)
     cname = container_name(body.sessionId)
     safe_lang = re.sub(r"[^a-zA-Z0-9_-]", "", body.lang or "zh-CN")

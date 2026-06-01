@@ -368,12 +368,18 @@ def test_create_session_rejects_manual_proxy(monkeypatch):
         {"runtimeImage": "registry.example/runtime@sha256:" + "a" * 64},
     ],
 )
-def test_saas_create_session_rejects_runtime_image_fields_by_presence(monkeypatch, payload):
-    monkeypatch.setattr(sessions, "EE_SAAS_MODE", True)
+def test_create_session_uses_runtime_selection_rejection_hook(monkeypatch, payload):
+    def reject(_body):
+        raise sessions.HTTPException(status_code=403, detail="runtime_image_not_allowed")
+
+    monkeypatch.setattr(sessions, "reject_session_runtime_selection", reject)
 
     with pytest.raises(sessions.HTTPException) as exc:
-        sessions._reject_saas_runtime_image_selection(
-            sessions.CreateSessionBody.model_validate({"name": "test", **payload})
+        asyncio.run(
+            sessions.create_session(
+                sessions.CreateSessionBody.model_validate({"name": "test", **payload}),
+                user=SimpleNamespace(tenant_id="tenant-1"),
+            )
         )
 
     assert exc.value.status_code == 403

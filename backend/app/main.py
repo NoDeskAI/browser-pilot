@@ -29,7 +29,6 @@ from app.routes.agent_devices import router as agent_devices_router
 from app.routes.fingerprint_pool import router as fp_pool_router
 from app.routes.browser_images import router as browser_images_router
 from app.routes.network_egress import router as network_egress_router
-from app.routes.platform import router as platform_router
 from app.edition import register_ee
 
 setup_logging()
@@ -122,7 +121,6 @@ app.include_router(agent_devices_router)
 app.include_router(fp_pool_router)
 app.include_router(browser_images_router)
 app.include_router(network_egress_router)
-app.include_router(platform_router)
 
 register_ee(app)
 

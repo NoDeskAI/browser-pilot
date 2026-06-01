@@ -137,26 +137,7 @@ For a single-host Docker Compose deployment:
 ./start.sh single-host stop
 ```
 
-`./start.sh prod` is intentionally removed. The single-host entrypoint is for CE/private/self-host deployments; EE SaaS production is a Kubernetes-only deployment path.
-
-The EE SaaS Kubernetes deployment entrypoint lives under `deploy/ee-saas/`:
-
-```bash
-export BROWSER_PILOT_VALUES=/path/to/browser-pilot-ee-saas.values.yaml
-deploy/ee-saas/deploy.sh plan
-deploy/ee-saas/deploy.sh apply
-deploy/ee-saas/deploy.sh status
-deploy/ee-saas/deploy.sh rollback <revision>
-
-# Sync approved runtime images / tenant namespaces / quota from the platform control plane.
-export BROWSER_PILOT_PLATFORM_API_URL=https://browser.example.com
-export BROWSER_PILOT_PLATFORM_TOKEN=<platform-token>
-deploy/ee-saas/deploy.sh sync-values
-deploy/ee-saas/deploy.sh reconcile-namespaces
-deploy/ee-saas/deploy.sh verify
-```
-
-Use `deploy/ee-saas/values.example.yaml` as the internal values shape. EE SaaS deployment must pin backend/runtime image digests and provide tenant runtime namespaces plus required secrets. The deploy script validates digests as `sha256:<64 hex>` and rejects placeholders or floating tags. The platform API exports override values for approved runtime images, tenant namespaces, and quota-derived ResourceQuota entries so tenant namespace baselines are not hand-assembled; `verify` checks backend SaaS env, admission policy, tenant namespace baselines, and unsafe session Pod rejection in the cluster. Tenant delete is a platform soft delete with a retention window. Physical DB/file-object purge requires an explicit platform-admin purge request, no unfinished runtime placement, and platform audit; Kubernetes namespace and cluster-side residue cleanup remain EE provider/controller responsibilities.
+`./start.sh prod` is intentionally removed. Use `./start.sh single-host` for the bundled Docker Compose public boundary.
 
 ## Configuration
 
@@ -179,10 +160,7 @@ Use `deploy/ee-saas/values.example.yaml` as the internal values shape. EE SaaS d
 | `NGINX_SERVER_NAME`   | Required for `./start.sh single-host`                         | Hostname served by the bundled single-host Nginx reverse proxy, for example `browser.example.com`.                                |
 | `NGINX_TLS_CERT_FILE` | `fullchain.pem`                                                | TLS certificate filename under `deploy/nginx/certs/` for the single-host Nginx reverse proxy.                                     |
 | `NGINX_TLS_KEY_FILE`  | `privkey.pem`                                                  | TLS private key filename under `deploy/nginx/certs/`. Never commit certificate or key files.                                      |
-| `BROWSER_RUNTIME_PROVIDER` | `docker`                                                 | Runtime provider selector. `kubernetes` is reserved for EE SaaS and fails closed until the EE provider is present.                 |
-| `EE_SAAS_MODE`        | `false`                                                        | Enables SaaS-only backend gates: tenant Browser Images APIs are rejected, tenant runtime image selection is blocked, and tenant runtime quota/status checks are enforced. |
-| `SAAS_DEFAULT_ACTIVE_SESSION_LIMIT` | `3`                                           | Default active-session quota written when a SaaS tenant is created without an explicit quota.                                     |
-| `SAAS_DEFAULT_MAX_SESSION_SECONDS` | `3600`                                          | Default max session duration written into SaaS tenant runtime quota records.                                                      |
+| `BROWSER_RUNTIME_PROVIDER` | `docker`                                                 | Runtime provider selector. Non-Docker providers require EE sources and fail closed when the provider is unavailable.               |
 | `BROWSER_RUNTIME_ACCESS_MODE` | `private` in app config; local `start.sh` uses `published` | Runtime container reachability mode. Single-host public deployment must stay `private`; direct published browser ports are blocked. |
 | `BROWSER_VNC_PASSWORD_SECRET` | Required for single-host public deployment             | Secret used to derive per-session browser viewer credentials. Set a long random value before exposing the service publicly.        |
 | `VIEWER_TICKET_TTL_SECONDS` | `60`                                                     | Lifetime for browser viewer tickets. Public-boundary validation allows 10-300 seconds.                                             |
@@ -193,7 +171,7 @@ Use `deploy/ee-saas/values.example.yaml` as the internal values shape. EE SaaS d
 | `BROWSER_RUNTIME_BACKEND_URL` | `http://host.docker.internal:8000` | Backend URL injected into browser runtime agents for internal file ingest callbacks. |
 | `BROWSER_RUNTIME_CONTROL_URL` | — | Optional internal runtime-worker URL. Docker Compose sets this to `http://runtime-worker:8001` so the public backend does not mount Docker socket directly. |
 | `BROWSER_RUNTIME_CONTROL_TOKEN` | — | Shared bearer token used between backend and runtime-worker. Set a long random value before public deployment. |
-| `BROWSER_RUNTIME_COMMAND_MAX_TIMEOUT` | `3600` | Maximum timeout, in seconds, accepted for runtime-worker Docker commands. Runtime shell commands are rejected when `EE_SAAS_MODE=true`. |
+| `BROWSER_RUNTIME_COMMAND_MAX_TIMEOUT` | `3600` | Maximum timeout, in seconds, accepted for runtime-worker Docker commands. Large first-time runtime image builds can need a longer timeout. |
 | `CLOAK_BROWSER_IMAGE_NAME` | `browser-pilot-cloak:latest` | Optional Cloak Chromium runtime image used by sessions created with `browserRuntime=cloak_chromium`. |
 | `BROWSER_HOME_URL` | `https://www.google.com/` | Home page opened automatically when a newly started browser is still on a blank/new-tab page. Set empty to disable. |
 | `BP_LEGACY_DOCKER_DOWNLOAD_WATCHER` | `false` | Temporary fallback for old Selenium images without `file-capture-agent`. When enabled, backend uses Docker copy commands and reports a degraded warning. |
@@ -315,7 +293,7 @@ OmniParser code and weights are not vendored in this repository. Check the OmniP
 
 ## Security
 
-The single-host Docker Compose deployment exposes only the bundled Nginx reverse proxy on ports 80/443. Browser container operations run through an internal `runtime-worker` service; the public backend talks to this worker over the private Compose network with `BROWSER_RUNTIME_CONTROL_TOKEN`, and only the worker mounts `/var/run/docker.sock`. Do not publish the worker port, and set a long random runtime control token before public deployment. EE SaaS production deployment does not use this Compose entrypoint; it is planned as a Kubernetes-only path.
+The single-host Docker Compose deployment exposes only the bundled Nginx reverse proxy on ports 80/443. Browser container operations run through an internal `runtime-worker` service; the public backend talks to this worker over the private Compose network with `BROWSER_RUNTIME_CONTROL_TOKEN`, and only the worker mounts `/var/run/docker.sock`. Do not publish the worker port, and set a long random runtime control token before public deployment.
 
 The runtime worker still has full control over the Docker daemon. Treat it as privileged infrastructure: keep it on a dedicated host or VM boundary for SaaS workloads, restrict access to the private service network, and keep authentication in front of the public backend when deploying remotely.
 

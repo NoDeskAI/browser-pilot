@@ -1,6 +1,0 @@
-apiVersion: v2
-name: browser-pilot-ee-saas
-description: Browser Pilot EE SaaS Kubernetes deployment chart
-type: application
-version: 0.1.0
-appVersion: "0.0.1"

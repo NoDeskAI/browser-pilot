@@ -54,9 +54,6 @@ BP_LEGACY_DOCKER_DOWNLOAD_WATCHER = _env("BP_LEGACY_DOCKER_DOWNLOAD_WATCHER", ""
 
 APP_TITLE = _env("APP_TITLE", "Browser Pilot")
 APP_ENV = _env("APP_ENV", "development").strip().lower()
-EE_SAAS_MODE = _env("EE_SAAS_MODE", "").lower() in {"1", "true", "yes", "on"}
-SAAS_DEFAULT_ACTIVE_SESSION_LIMIT = int(_env("SAAS_DEFAULT_ACTIVE_SESSION_LIMIT", "3"))
-SAAS_DEFAULT_MAX_SESSION_SECONDS = int(_env("SAAS_DEFAULT_MAX_SESSION_SECONDS", "3600"))
 APP_PUBLIC_ORIGINS = [
     part.strip().rstrip("/")
     for part in _env("APP_PUBLIC_ORIGINS", "").split(",")
