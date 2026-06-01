@@ -950,12 +950,13 @@ watch(annotatedScreenshotOpen, (open) => {
         <!-- Scale mode toggle -->
         <Tooltip>
           <TooltipTrigger as-child>
-            <Toggle
-              :model-value="scaleMode === 'scale'"
-              @click="toggleScaleMode"
-              size="sm"
-              class="h-6 px-2 text-xs data-[state=on]:text-blue-400"
-            >{{ scaleMode === 'scale' ? t('vnc.scaleFit') : t('vnc.scaleNative') }}</Toggle>
+            <span class="inline-flex" @click="toggleScaleMode">
+              <Toggle
+                :model-value="scaleMode === 'scale'"
+                size="sm"
+                class="h-6 px-2 text-xs data-[state=on]:text-blue-400"
+              >{{ scaleMode === 'scale' ? t('vnc.scaleFit') : t('vnc.scaleNative') }}</Toggle>
+            </span>
           </TooltipTrigger>
           <TooltipContent>{{ scaleMode === 'scale' ? t('vnc.scaleFitTitle') : t('vnc.scaleNativeTitle') }}</TooltipContent>
         </Tooltip>
@@ -975,10 +976,9 @@ watch(annotatedScreenshotOpen, (open) => {
         <!-- View-only toggle -->
         <Tooltip>
           <TooltipTrigger as-child>
-            <span class="inline-flex">
+            <span class="inline-flex" @click="toggleViewOnly">
               <Toggle
                 :model-value="viewOnly"
-                @click="toggleViewOnly"
                 size="sm"
                 :disabled="switchingControl"
                 class="h-6 px-2 text-xs gap-1 data-[state=on]:text-amber-400"
