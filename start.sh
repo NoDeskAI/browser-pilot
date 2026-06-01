@@ -18,8 +18,10 @@ mkdir -p "$LOG_DIR"
 
 BACKEND_PID_FILE="$LOG_DIR/backend.pid"
 FRONTEND_PID_FILE="$LOG_DIR/frontend.pid"
+MONITOR_PID_FILE="$LOG_DIR/dev-monitor.pid"
 BACKEND_LOG="$LOG_DIR/backend.log"
 FRONTEND_LOG="$LOG_DIR/frontend.log"
+MONITOR_LOG="$LOG_DIR/dev-monitor.log"
 MODE=foreground
 TARGET=dev
 CLI_EDITION=""
@@ -165,13 +167,26 @@ _is_running() {
     [[ -f "$pid_file" ]] && kill -0 "$(cat "$pid_file")" 2>/dev/null
 }
 
+_kill_process_tree() {
+    local pid="${1:-}" child
+    if [[ -z "$pid" ]]; then
+        return
+    fi
+    if command -v pgrep >/dev/null 2>&1; then
+        while read -r child; do
+            [[ -n "$child" ]] && _kill_process_tree "$child"
+        done < <(pgrep -P "$pid" 2>/dev/null || true)
+    fi
+    kill "$pid" 2>/dev/null || true
+}
+
 _kill_pid_file() {
     local pid_file="$1" name="$2"
     if [[ -f "$pid_file" ]]; then
         local pid
         pid=$(cat "$pid_file")
         if kill -0 "$pid" 2>/dev/null; then
-            kill "$pid" 2>/dev/null || true
+            _kill_process_tree "$pid"
             echo "[$name] 已停止 (PID $pid)"
         else
             echo "[$name] 进程不存在 (PID $pid)"
@@ -184,12 +199,13 @@ _kill_pid_file() {
 
 # ------------------------------------------------------------------
 do_stop() {
+    _kill_pid_file "$MONITOR_PID_FILE" "monitor"
     _kill_pid_file "$BACKEND_PID_FILE" "backend"
     _kill_pid_file "$FRONTEND_PID_FILE" "frontend"
 }
 
 do_status() {
-    for name in backend frontend; do
+    for name in backend frontend dev-monitor; do
         local pid_file="$LOG_DIR/${name}.pid"
         if _is_running "$pid_file"; then
             echo "[$name] 运行中 (PID $(cat "$pid_file"))"
@@ -239,6 +255,141 @@ _ensure_deps() {
         echo "[frontend] 安装 Node 依赖 (npm install)..."
         (cd frontend && npm install)
     fi
+}
+
+_port_has_listener() {
+    local port="$1"
+    python3 - "$port" <<'PY'
+import socket
+import sys
+
+port = int(sys.argv[1])
+for host in ("127.0.0.1", "::1"):
+    try:
+        with socket.create_connection((host, port), timeout=0.2):
+            sys.exit(0)
+    except OSError:
+        pass
+sys.exit(1)
+PY
+}
+
+_print_port_owner() {
+    local port="$1"
+    if command -v lsof >/dev/null 2>&1; then
+        lsof -nP -iTCP:"$port" -sTCP:LISTEN 2>/dev/null | sed -n '1,6p' >&2 || true
+    fi
+}
+
+_check_port_available() {
+    local name="$1" port="$2"
+    if _port_has_listener "$port"; then
+        echo "[$name] 端口 $port 已被占用，拒绝半启动。请先停止占用进程或执行 ./start.sh stop。" >&2
+        _print_port_owner "$port"
+        return 1
+    fi
+    return 0
+}
+
+_require_dev_ports_available() {
+    local failed=0
+    _check_port_available "backend" "$BACKEND_PORT" || failed=1
+    _check_port_available "frontend" "$FRONTEND_PORT" || failed=1
+    if (( failed )); then
+        exit 1
+    fi
+}
+
+_http_ok() {
+    local url="$1"
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsS --max-time 2 "$url" >/dev/null 2>&1
+    else
+        python3 - "$url" <<'PY'
+import sys
+import urllib.request
+
+try:
+    with urllib.request.urlopen(sys.argv[1], timeout=2) as response:
+        sys.exit(0 if 200 <= response.status < 400 else 1)
+except Exception:
+    sys.exit(1)
+PY
+    fi
+}
+
+_print_recent_log() {
+    local name="$1" log_file="$2"
+    echo "[$name] 最近日志 ($log_file):" >&2
+    tail -80 "$log_file" >&2 2>/dev/null || true
+}
+
+_stop_started_processes() {
+    local backend_pid="${1:-}" frontend_pid="${2:-}" tail_pid="${3:-}"
+    if [[ -n "$tail_pid" ]]; then
+        _kill_process_tree "$tail_pid"
+    fi
+    if [[ -n "$backend_pid" ]]; then
+        _kill_process_tree "$backend_pid"
+    fi
+    if [[ -n "$frontend_pid" ]]; then
+        _kill_process_tree "$frontend_pid"
+    fi
+    if [[ -n "$tail_pid" ]]; then
+        wait "$tail_pid" 2>/dev/null || true
+    fi
+    if [[ -n "$backend_pid" ]]; then
+        wait "$backend_pid" 2>/dev/null || true
+    fi
+    if [[ -n "$frontend_pid" ]]; then
+        wait "$frontend_pid" 2>/dev/null || true
+    fi
+    rm -f "$BACKEND_PID_FILE" "$FRONTEND_PID_FILE" "$MONITOR_PID_FILE"
+}
+
+_start_pair_monitor() {
+    local backend_pid="$1" frontend_pid="$2"
+    : > "$MONITOR_LOG"
+    (
+        trap '' INT HUP
+        while true; do
+            if ! kill -0 "$backend_pid" 2>/dev/null; then
+                echo "[monitor] backend 进程退出，停止 frontend。"
+                _kill_process_tree "$frontend_pid"
+                rm -f "$BACKEND_PID_FILE" "$FRONTEND_PID_FILE" "$MONITOR_PID_FILE"
+                exit 0
+            fi
+            if ! kill -0 "$frontend_pid" 2>/dev/null; then
+                echo "[monitor] frontend 进程退出，停止 backend。"
+                _kill_process_tree "$backend_pid"
+                rm -f "$BACKEND_PID_FILE" "$FRONTEND_PID_FILE" "$MONITOR_PID_FILE"
+                exit 0
+            fi
+            sleep 1
+        done
+    ) >> "$MONITOR_LOG" 2>&1 &
+    echo $! > "$MONITOR_PID_FILE"
+}
+
+_wait_service_ready() {
+    local name="$1" pid="$2" url="$3" log_file="$4" timeout_seconds="$5"
+    local deadline=$((SECONDS + timeout_seconds))
+    while (( SECONDS < deadline )); do
+        if ! kill -0 "$pid" 2>/dev/null; then
+            echo "[$name] 启动失败，配套服务将一起停止。" >&2
+            _print_recent_log "$name" "$log_file"
+            return 1
+        fi
+        if _http_ok "$url"; then
+            echo "[$name] ready ($url)"
+            return 0
+        fi
+        sleep 1
+    done
+
+    echo "[$name] 启动超时，配套服务将一起停止: $url" >&2
+    _print_recent_log "$name" "$log_file"
+    return 1
 }
 
 _infer_postgres_env_from_database_url() {
@@ -360,6 +511,7 @@ _start_processes() {
     export MINIO_ENDPOINT="${MINIO_ENDPOINT:-http://localhost:9000}"
     echo "[edition] $EDITION ($EDITION_SOURCE)"
     _ensure_deps
+    _require_dev_ports_available
     _ensure_postgres
     _ensure_object_storage
 
@@ -376,6 +528,15 @@ _start_processes() {
 
     echo "[backend]  PID=$backend_pid  port=$BACKEND_PORT  log=$BACKEND_LOG"
     echo "[frontend] PID=$frontend_pid port=$FRONTEND_PORT log=$FRONTEND_LOG"
+
+    if ! _wait_service_ready "backend" "$backend_pid" "http://127.0.0.1:$BACKEND_PORT/readyz" "$BACKEND_LOG" 90; then
+        _stop_started_processes "$backend_pid" "$frontend_pid"
+        exit 1
+    fi
+    if ! _wait_service_ready "frontend" "$frontend_pid" "http://127.0.0.1:$FRONTEND_PORT/" "$FRONTEND_LOG" 45; then
+        _stop_started_processes "$backend_pid" "$frontend_pid"
+        exit 1
+    fi
 }
 
 do_prod() {
@@ -412,22 +573,41 @@ do_foreground() {
     local tail_pid=$!
 
     cleanup() {
+        local exit_code="${1:-130}"
         echo ""
         echo "正在停止..."
-        kill "$tail_pid" 2>/dev/null || true
-        kill "$backend_pid" 2>/dev/null || true
-        kill "$frontend_pid" 2>/dev/null || true
-        wait "$tail_pid" 2>/dev/null || true
-        wait "$backend_pid" 2>/dev/null || true
-        wait "$frontend_pid" 2>/dev/null || true
-        rm -f "$BACKEND_PID_FILE" "$FRONTEND_PID_FILE"
+        _stop_started_processes "$backend_pid" "$frontend_pid" "$tail_pid"
         echo "已停止"
+        exit "$exit_code"
     }
-    trap cleanup SIGINT SIGTERM
+    trap 'cleanup 130' SIGINT
+    trap 'cleanup 143' SIGTERM
 
-    wait "$backend_pid" "$frontend_pid" 2>/dev/null || true
-    kill "$tail_pid" 2>/dev/null || true
-    rm -f "$BACKEND_PID_FILE" "$FRONTEND_PID_FILE"
+    local stopped_name stopped_pid other_pid status
+    while true; do
+        if ! kill -0 "$backend_pid" 2>/dev/null; then
+            stopped_name="backend"
+            stopped_pid="$backend_pid"
+            other_pid="$frontend_pid"
+            break
+        fi
+        if ! kill -0 "$frontend_pid" 2>/dev/null; then
+            stopped_name="frontend"
+            stopped_pid="$frontend_pid"
+            other_pid="$backend_pid"
+            break
+        fi
+        sleep 1
+    done
+
+    set +e
+    wait "$stopped_pid" 2>/dev/null
+    status=$?
+    set -e
+
+    echo "[$stopped_name] 进程退出，停止配套服务..."
+    _stop_started_processes "$backend_pid" "$frontend_pid" "$tail_pid"
+    return "$status"
 }
 
 do_daemon() {
@@ -438,12 +618,13 @@ do_daemon() {
     fi
 
     _start_processes
+    _start_pair_monitor "$(cat "$BACKEND_PID_FILE")" "$(cat "$FRONTEND_PID_FILE")"
     echo ""
     echo "后台模式已启动，Ctrl+C 退出日志查看（不影响后台进程）"
     echo "停止: ./start.sh stop"
     echo ""
 
-    tail -f "$BACKEND_LOG" "$FRONTEND_LOG"
+    tail -f "$BACKEND_LOG" "$FRONTEND_LOG" "$MONITOR_LOG"
 }
 
 # ------------------------------------------------------------------
