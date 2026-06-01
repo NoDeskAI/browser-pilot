@@ -486,6 +486,20 @@ function toggleViewOnly() {
   if (rfb) rfb.viewOnly = viewOnly.value
 }
 
+function onControlTogglePointerUp(event: PointerEvent) {
+  if (event.button !== 0) return
+  event.preventDefault()
+  event.stopPropagation()
+  toggleViewOnly()
+}
+
+function onControlToggleKeydown(event: KeyboardEvent) {
+  if (event.key !== 'Enter' && event.key !== ' ') return
+  event.preventDefault()
+  event.stopPropagation()
+  toggleViewOnly()
+}
+
 function applyQuality() {
   if (rfb) {
     rfb.qualityLevel = qualityLevel.value[0] ?? 9
@@ -977,21 +991,20 @@ watch(annotatedScreenshotOpen, (open) => {
         <Tooltip>
           <TooltipTrigger as-child>
             <span class="inline-flex">
-              <Button
+              <button
                 type="button"
-                variant="ghost"
-                size="sm"
                 :aria-pressed="viewOnly"
                 :disabled="switchingControl"
-                class="h-6 px-2 text-xs gap-1"
+                class="inline-flex h-6 items-center justify-center gap-1 rounded-[min(var(--radius-md),12px)] border border-transparent px-2 text-xs font-medium whitespace-nowrap transition-all outline-none select-none hover:bg-muted hover:text-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0"
                 :class="viewOnly ? 'text-amber-400 hover:text-amber-300' : ''"
-                @click="toggleViewOnly"
+                @pointerup="onControlTogglePointerUp"
+                @keydown="onControlToggleKeydown"
               >
                 <Loader2 v-if="switchingControl" class="size-3.5 animate-spin" />
                 <Eye v-else-if="viewOnly" class="size-3.5" />
                 <MousePointer v-else class="size-3.5" />
                 {{ switchingControl ? t('vnc.switchingControl') : (viewOnly ? t('vnc.viewOnly') : t('vnc.interactive')) }}
-              </Button>
+              </button>
             </span>
           </TooltipTrigger>
           <TooltipContent class="max-w-80">{{ viewOnlyToggleTooltip }}</TooltipContent>
