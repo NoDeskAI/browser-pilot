@@ -661,11 +661,9 @@ async def api_screenshot(
     user: CurrentUser = Depends(get_session_aware_user),
 ):
     await verify_session_access(sessionId, user)
-    ctx, rejected = await agent_devices.begin_compatible_action(
+    ctx = await agent_devices.begin_control_action(
         sessionId, user, action="browser.screenshot", side_effect_level="internal"
     )
-    if rejected:
-        return rejected
     try:
         async with browser_session(sessionId) as (sid, base):
             b64 = await wd_fetch(f"/session/{sid}/screenshot", base_url=base)

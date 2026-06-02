@@ -169,10 +169,11 @@ def validate_public_runtime_config() -> None:
         raise RuntimeError("APP_PUBLIC_ORIGINS cannot be '*' in production")
     if not BROWSER_VNC_PASSWORD_SECRET:
         raise RuntimeError("BROWSER_VNC_PASSWORD_SECRET must be set in production")
-    if not BROWSER_RUNTIME_CONTROL_URL:
-        raise RuntimeError("BROWSER_RUNTIME_CONTROL_URL must be set in production")
-    if not BROWSER_RUNTIME_CONTROL_TOKEN:
-        raise RuntimeError("BROWSER_RUNTIME_CONTROL_TOKEN must be set in production")
+    if BROWSER_RUNTIME_PROVIDER == "docker":
+        if not BROWSER_RUNTIME_CONTROL_URL:
+            raise RuntimeError("BROWSER_RUNTIME_CONTROL_URL must be set in production for docker runtime")
+        if not BROWSER_RUNTIME_CONTROL_TOKEN:
+            raise RuntimeError("BROWSER_RUNTIME_CONTROL_TOKEN must be set in production for docker runtime")
 
 # --- Edition detection ---
 

@@ -47,6 +47,11 @@ def stub_agent_device_governance(monkeypatch):
         ctx.action = kwargs.get("action", "test")
         return ctx, None
 
+    async def fake_begin_control_action(*_args, **kwargs):
+        ctx = FakeActionContext()
+        ctx.action = kwargs.get("action", "test")
+        return ctx
+
     async def fake_complete_compatible_action(_ctx, response, **_kwargs):
         return response
 
@@ -57,6 +62,7 @@ def stub_agent_device_governance(monkeypatch):
         return "audit-1"
 
     monkeypatch.setattr(browser.agent_devices, "begin_compatible_action", fake_begin_compatible_action)
+    monkeypatch.setattr(browser.agent_devices, "begin_control_action", fake_begin_control_action)
     monkeypatch.setattr(browser.agent_devices, "complete_compatible_action", fake_complete_compatible_action)
     monkeypatch.setattr(browser.agent_devices, "fail_compatible_action", fake_fail_compatible_action)
     monkeypatch.setattr(browser.agent_devices, "record_runtime_action", fake_record_runtime_action)
@@ -140,6 +146,46 @@ def test_screenshot_include_base64_false_returns_file_only(monkeypatch):
         "file": {"id": "file-1", "url": "http://localhost:8000/api/files/file-1.png"},
         "screenshot": None,
     }
+
+
+def test_screenshot_does_not_require_active_lease(monkeypatch):
+    raw = b"png-bytes"
+    calls = {"control": 0, "compatible": 0}
+
+    async def fake_verify(*_args, **_kwargs):
+        return None
+
+    async def fake_begin_control_action(*_args, **kwargs):
+        calls["control"] += 1
+
+        class FakeActionContext:
+            session_id = "session-1"
+            action = kwargs.get("action", "test")
+
+        return FakeActionContext()
+
+    async def fake_begin_compatible_action(*_args, **_kwargs):
+        calls["compatible"] += 1
+        return None, {"ok": False, "error": "Device has no active lease"}
+
+    async def fake_wd_fetch(*_args, **_kwargs):
+        return base64.b64encode(raw).decode()
+
+    async def fake_save_bytes(**_kwargs):
+        return {"id": "file-1", "url": "http://localhost:8000/api/files/file-1.png"}
+
+    monkeypatch.setattr(browser, "verify_session_access", fake_verify)
+    monkeypatch.setattr(browser, "browser_session", lambda _session_id: FakeBrowserSession())
+    monkeypatch.setattr(browser, "wd_fetch", fake_wd_fetch)
+    monkeypatch.setattr(file_service, "save_bytes", fake_save_bytes)
+    monkeypatch.setattr(browser.agent_devices, "begin_control_action", fake_begin_control_action)
+    monkeypatch.setattr(browser.agent_devices, "begin_compatible_action", fake_begin_compatible_action)
+
+    result = asyncio.run(browser.api_screenshot("session-1", includeBase64=False, user=_user()))
+
+    assert result["ok"] is True
+    assert result["file"]["id"] == "file-1"
+    assert calls == {"control": 1, "compatible": 0}
 
 
 def test_screenshot_openapi_does_not_expose_store_parameter():

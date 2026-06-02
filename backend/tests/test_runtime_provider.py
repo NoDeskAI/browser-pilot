@@ -81,6 +81,16 @@ def test_non_docker_provider_loads_ee_runtime_factory(monkeypatch):
     assert provider.name == "managed"
 
 
+def test_kubernetes_provider_loads_from_real_ee_runtime(monkeypatch):
+    monkeypatch.setattr(runtime_provider, "BROWSER_RUNTIME_PROVIDER", "kubernetes")
+    monkeypatch.setattr(runtime_provider, "EDITION", "ee")
+
+    provider = runtime_provider.get_runtime_provider()
+
+    assert provider.name == "kubernetes"
+    assert provider.__class__.__module__ == "ee.backend.runtime.kubernetes_provider"
+
+
 def test_unknown_runtime_provider_fails_closed(monkeypatch):
     monkeypatch.setattr(runtime_provider, "BROWSER_RUNTIME_PROVIDER", "nomad")
     monkeypatch.setattr(runtime_provider, "EDITION", "ce")
