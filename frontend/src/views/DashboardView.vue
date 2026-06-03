@@ -31,20 +31,27 @@ const {
   state: sessions,
   createSession, deleteSession, renameSession,
   startContainer, pauseContainer, fetchSessions,
-  fetchBrowserImages,
+  fetchBrowserImageState,
 } = useSessions()
 const { state: egressState, fetchNetworkEgress } = useNetworkEgress()
 
 const readyImages = ref<any[]>([])
+const readyCloakImages = ref<any[]>([])
 const hasReadyImages = ref(false)
+const hasReadyCloakImages = ref(false)
 const createDialogOpen = ref(false)
 const createName = ref('')
 const createVersion = ref('')
+const createBrowserImageId = ref('')
 const createNetworkEgressId = ref('__direct__')
 const createRuntime = ref<'standard_chrome' | 'cloak_chromium'>('standard_chrome')
 const DIRECT_EGRESS_VALUE = '__direct__'
 const browserImagesEnabled = computed(() => brand.features.browserImages !== false)
-const canCreateSession = computed(() => !browserImagesEnabled.value || createRuntime.value === 'cloak_chromium' || hasReadyImages.value)
+const canCreateSession = computed(() => {
+  if (!browserImagesEnabled.value) return true
+  if (createRuntime.value === 'cloak_chromium') return hasReadyCloakImages.value
+  return hasReadyImages.value
+})
 
 const isMac = navigator.platform.includes('Mac')
 const shortcutLabel = isMac ? '⌘N' : 'Ctrl+N'
@@ -195,6 +202,15 @@ watch(autoRefresh, (on) => {
   on ? startTimer() : stopTimer()
 })
 
+watch(createRuntime, (runtime) => {
+  if (runtime === 'cloak_chromium' && !createBrowserImageId.value && readyCloakImages.value.length > 0) {
+    createBrowserImageId.value = readyCloakImages.value[0].id
+  }
+  if (runtime === 'standard_chrome' && !createVersion.value && readyImages.value.length > 0) {
+    createVersion.value = readyImages.value[0].chromeVersion || String(readyImages.value[0].chromeMajor)
+  }
+})
+
 watch(() => sessions.sessions, async () => {
   await nextTick()
   updateAllValueTruncation()
@@ -209,14 +225,22 @@ onMounted(async () => {
     fetchSessions()
   }
   try {
-    const [imgs] = await Promise.all([fetchBrowserImages(), fetchNetworkEgress()])
+    const [imageState] = await Promise.all([fetchBrowserImageState(), fetchNetworkEgress()])
+    const imgs = (imageState.images || []).filter((img: any) => (img.runtime || 'standard_chrome') === 'standard_chrome' && img.status === 'ready')
+    const cloakImgs = (imageState.runtimeImages || []).filter((img: any) => img.runtime === 'cloak_chromium' && img.status === 'ready')
     readyImages.value = imgs
+    readyCloakImages.value = cloakImgs
     hasReadyImages.value = imgs.length > 0
+    hasReadyCloakImages.value = cloakImgs.length > 0
     if (!browserImagesEnabled.value) {
       createRuntime.value = 'standard_chrome'
     } else if (imgs.length > 0 && !createVersion.value) {
       createVersion.value = imgs[0].chromeVersion || String(imgs[0].chromeMajor)
-    } else if (imgs.length === 0) {
+    }
+    if (cloakImgs.length > 0 && !createBrowserImageId.value) {
+      createBrowserImageId.value = cloakImgs[0].id
+    }
+    if (browserImagesEnabled.value && imgs.length === 0 && cloakImgs.length > 0) {
       createRuntime.value = 'cloak_chromium'
     }
   } catch {
@@ -324,22 +348,26 @@ function formatRelativeTime(iso: string): string {
 function openCreateDialog() {
   if (!browserImagesEnabled.value) {
     createRuntime.value = 'standard_chrome'
-  } else if (!hasReadyImages.value) {
+  } else if (!hasReadyImages.value && hasReadyCloakImages.value) {
     createRuntime.value = 'cloak_chromium'
   }
   if (!createVersion.value && readyImages.value.length > 0) {
     createVersion.value = readyImages.value[0].chromeVersion || String(readyImages.value[0].chromeMajor)
   }
+  if (!createBrowserImageId.value && readyCloakImages.value.length > 0) {
+    createBrowserImageId.value = readyCloakImages.value[0].id
+  }
   createDialogOpen.value = true
 }
 
-async function handleCreateSession(name?: string, chromeVersion?: string, networkEgressId?: string, runtime = createRuntime.value) {
+async function handleCreateSession(name?: string, chromeVersion?: string, networkEgressId?: string, runtime = createRuntime.value, browserImageId = createBrowserImageId.value) {
   if (creating.value) return
   creating.value = true
   try {
     const selectedEgress = networkEgressId && networkEgressId !== DIRECT_EGRESS_VALUE ? networkEgressId : null
     const selectedVersion = runtime === 'standard_chrome' ? (chromeVersion || undefined) : undefined
-    const session = await createSession(name?.trim() || undefined, selectedVersion, selectedEgress, runtime)
+    const selectedImageId = runtime === 'cloak_chromium' ? (browserImageId || undefined) : undefined
+    const session = await createSession(name?.trim() || undefined, selectedVersion, selectedEgress, runtime, selectedImageId)
     if (session) {
       notify.success(t('app.sessionCreated'))
       createDialogOpen.value = false
@@ -771,7 +799,7 @@ async function onPauseContainer(id: string) {
         <DialogHeader>
           <DialogTitle>{{ t('dashboard.create') }}</DialogTitle>
         </DialogHeader>
-        <form class="space-y-4" @submit.prevent="handleCreateSession(createName, createVersion, createNetworkEgressId, createRuntime)">
+        <form class="space-y-4" @submit.prevent="handleCreateSession(createName, createVersion, createNetworkEgressId, createRuntime, createBrowserImageId)">
           <div class="space-y-2">
             <Label for="create-session-name">{{ t('session.name') }}</Label>
             <Input
@@ -799,6 +827,27 @@ async function onPauseContainer(id: string) {
                 </SelectItem>
               </SelectContent>
             </Select>
+          </div>
+          <div v-if="browserImagesEnabled && createRuntime === 'cloak_chromium'" class="space-y-2">
+            <Label for="create-session-cloak-image">{{ t('browserImages.cloakImage') }}</Label>
+            <Select v-model="createBrowserImageId" :disabled="creating || readyCloakImages.length === 0">
+              <SelectTrigger id="create-session-cloak-image">
+                <SelectValue :placeholder="t('browserImages.cloakImagePlaceholder')" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem
+                  v-for="img in readyCloakImages"
+                  :key="img.id"
+                  :value="img.id"
+                >
+                  {{ img.name || t('browserImages.cloakRuntime') }}
+                  <span class="text-xs text-muted-foreground">({{ img.imageTag }})</span>
+                </SelectItem>
+              </SelectContent>
+            </Select>
+            <p v-if="readyCloakImages.length === 0" class="text-xs text-muted-foreground">
+              {{ t('browserImages.noReadyCloakImages') }}
+            </p>
           </div>
           <div v-if="browserImagesEnabled && createRuntime === 'standard_chrome'" class="space-y-2">
             <Label for="create-session-version">{{ t('browserImages.version') }}</Label>
@@ -841,7 +890,7 @@ async function onPauseContainer(id: string) {
             <Button type="button" variant="outline" :disabled="creating" @click="createDialogOpen = false">
               {{ t('session.cancel') }}
             </Button>
-            <Button type="submit" :disabled="creating || (createRuntime === 'standard_chrome' && !createVersion)">
+            <Button type="submit" :disabled="creating || (createRuntime === 'standard_chrome' && !createVersion) || (createRuntime === 'cloak_chromium' && browserImagesEnabled && !createBrowserImageId)">
               <Loader2 v-if="creating" class="size-4 animate-spin" />
               {{ creating ? t('session.creating') : t('dashboard.create') }}
             </Button>

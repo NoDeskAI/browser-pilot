@@ -369,7 +369,49 @@ def test_create_session_accepts_cloak_runtime_with_runtime_image(monkeypatch):
     assert result["chromeVersion"] is None
     assert captured == {
         "runtime_check": "docker image inspect browser-pilot-cloak:latest",
-        "image_tag": None,
+        "image_tag": "browser-pilot-cloak:latest",
+        "chrome_version": None,
+    }
+
+
+def test_create_session_accepts_selected_legacy_cloak_runtime_image(monkeypatch):
+    pool = FakePool([])
+    captured = {}
+    monkeypatch.setattr(sessions, "get_pool", lambda: pool)
+    monkeypatch.setattr(sessions, "_generate_session_id", lambda: "session-1")
+
+    async def fake_runtime_command(cmd, timeout=30):
+        captured["runtime_check"] = cmd
+        return "[]", "", 0
+
+    async def fake_network(proxy_url, image_tag):
+        captured["image_tag"] = image_tag
+        return _network()
+
+    async def fake_generate_profile(tenant_id, browser_lang, chrome_version=None):
+        captured["chrome_version"] = chrome_version
+        return _profile(browser_lang)
+
+    monkeypatch.setattr(sessions, "run_runtime_command", fake_runtime_command)
+    monkeypatch.setattr(sessions, "_resolve_session_network", fake_network)
+    monkeypatch.setattr(sessions, "generate_profile", fake_generate_profile)
+
+    result = asyncio.run(
+        sessions.create_session(
+            sessions.CreateSessionBody(
+                name="test",
+                browserRuntime="cloak_chromium",
+                browserImageId="cloak_chromium_legacy",
+            ),
+            _user(),
+        )
+    )
+
+    assert result["browserRuntime"] == "cloak_chromium"
+    assert result["browserImageId"] is None
+    assert captured == {
+        "runtime_check": "docker image inspect browser-pilot-cloak:latest",
+        "image_tag": "browser-pilot-cloak:latest",
         "chrome_version": None,
     }
 

@@ -17,6 +17,7 @@ export interface Session {
   fingerprintProfile?: Record<string, any> | null
   browserLang?: string
   browserRuntime?: 'standard_chrome' | 'cloak_chromium'
+  browserImageId?: string | null
   activeLease?: ActiveSessionLease | null
 }
 

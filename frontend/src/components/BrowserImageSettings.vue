@@ -55,6 +55,7 @@ const images = ref<ImageRow[]>([])
 const loading = ref(false)
 const showBuildDialog = ref(false)
 const buildVersion = ref('')
+const buildImageName = ref('')
 const buildRuntime = ref<ImageRuntime>('standard_chrome')
 const building = ref(false)
 const deleteTarget = ref<ImageRow | null>(null)
@@ -79,10 +80,10 @@ const builtMajors = computed(() => {
 })
 
 const standardImageCount = computed(() => images.value.filter(img => img.runtime === 'standard_chrome').length)
-const cloakImage = computed(() => images.value.find(img => img.runtime === 'cloak_chromium') || null)
-const cloakStatus = computed(() => cloakImage.value?.status || 'missing')
-const cloakImageTag = computed(() => cloakImage.value?.imageTag || 'browser-pilot-cloak:latest')
-const cloakBaseImage = computed(() => cloakImage.value?.baseImage || 'services/cloak-chromium-runtime')
+const cloakImages = computed(() => images.value.filter(img => img.runtime === 'cloak_chromium'))
+const cloakImageCount = computed(() => cloakImages.value.length)
+const cloakBuilding = computed(() => cloakImages.value.some(img => img.status === 'building' || img.status === 'pending'))
+const cloakBaseImage = computed(() => cloakImages.value[0]?.baseImage || 'services/cloak-chromium-runtime')
 
 const filteredVersions = computed(() => {
   const q = searchQuery.value.trim()
@@ -131,6 +132,7 @@ watch(showBuildDialog, (open) => {
   } else {
     buildRuntime.value = 'standard_chrome'
     buildVersion.value = ''
+    buildImageName.value = ''
     searchQuery.value = ''
     versionsError.value = false
   }
@@ -138,6 +140,7 @@ watch(showBuildDialog, (open) => {
 
 watch(buildRuntime, (runtime) => {
   buildVersion.value = ''
+  buildImageName.value = ''
   searchQuery.value = ''
   versionsError.value = false
   if (showBuildDialog.value && runtime === 'standard_chrome' && availableVersions.value.length === 0) {
@@ -148,15 +151,11 @@ watch(buildRuntime, (runtime) => {
 const canSubmitBuild = computed(() => {
   if (building.value) return false
   if (buildRuntime.value === 'standard_chrome') return !!buildVersion.value.trim()
-  return !cloakImage.value || !['building', 'pending'].includes(cloakStatus.value)
+  return true
 })
 
 const buildSubmitLabel = computed(() => {
   if (building.value) return t('browserImages.building')
-  if (buildRuntime.value === 'cloak_chromium') {
-    if (cloakStatus.value === 'ready') return t('browserImages.rebuildCloak')
-    if (cloakStatus.value === 'building' || cloakStatus.value === 'pending') return t('browserImages.isBuilding')
-  }
   return t('browserImages.buildNew')
 })
 
@@ -184,7 +183,7 @@ async function requestBuild(runtime: ImageRuntime, chromeVersion = '') {
   building.value = true
   try {
     const body = runtime === 'cloak_chromium'
-      ? { runtime, force: cloakStatus.value === 'ready' }
+      ? { runtime, imageName: buildImageName.value.trim() }
       : { runtime, chromeVersion: chromeVersion.trim() }
     const res = await api('/api/browser-images/build', {
       method: 'POST',
@@ -209,10 +208,6 @@ async function requestBuild(runtime: ImageRuntime, chromeVersion = '') {
 
 async function handleBuild() {
   await requestBuild(buildRuntime.value, buildVersion.value)
-}
-
-async function handleBuildCloak() {
-  await requestBuild('cloak_chromium')
 }
 
 async function handleDelete(img: ImageRow) {
@@ -282,16 +277,6 @@ function showBuildProgress(img: ImageRow) {
     img.status === 'pending' ||
     (img.runtime === 'cloak_chromium' && img.status === 'failed')
   )
-}
-
-function canBuildRuntimeImage(img: ImageRow) {
-  return img.runtime === 'cloak_chromium' && !['building', 'pending'].includes(img.status)
-}
-
-function buildRuntimeActionLabel(img: ImageRow) {
-  if (img.status === 'ready') return t('browserImages.ready')
-  if (img.status === 'failed') return t('browserImages.rebuildCloak')
-  return t('browserImages.buildCloak')
 }
 
 function buildRuntimeOptionClass(runtime: ImageRuntime) {
@@ -399,16 +384,7 @@ onUnmounted(stopPolling)
             </TableCell>
             <TableCell v-if="isAdmin">
               <Button
-                v-if="img.runtime === 'cloak_chromium' && canBuildRuntimeImage(img)"
-                size="sm"
-                :disabled="building"
-                @click="handleBuildCloak"
-              >
-                <Loader2 v-if="building" class="size-4 animate-spin" />
-                {{ buildRuntimeActionLabel(img) }}
-              </Button>
-              <Button
-                v-else-if="img.runtime === 'cloak_chromium' && (img.status === 'building' || img.status === 'pending')"
+                v-if="img.status === 'building' || img.status === 'pending'"
                 size="sm"
                 disabled
               >
@@ -486,8 +462,8 @@ onUnmounted(stopPolling)
                   <Check v-if="buildRuntime === 'cloak_chromium'" class="size-4 text-primary" />
                 </div>
                 <div class="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
-                  <Badge :variant="statusVariant(cloakStatus) as any" class="text-[11px]">{{ statusLabel(cloakStatus) }}</Badge>
-                  <span class="truncate font-mono">{{ cloakImageTag }}</span>
+                  <Badge v-if="cloakBuilding" variant="secondary" class="text-[11px]">{{ t('browserImages.isBuilding') }}</Badge>
+                  <span>{{ t('browserImages.cloakImageMeta', { n: cloakImageCount }) }}</span>
                 </div>
               </div>
             </div>
@@ -569,12 +545,14 @@ onUnmounted(stopPolling)
 
         <div v-else class="h-full overflow-y-auto rounded-lg border bg-muted/30 p-3">
           <div class="space-y-3">
-            <div class="flex items-start justify-between gap-3">
-              <div class="min-w-0">
-                <div class="text-xs text-muted-foreground">{{ t('browserImages.imageTag') }}</div>
-                <div class="mt-1 truncate font-mono text-xs">{{ cloakImageTag }}</div>
-              </div>
-              <Badge :variant="statusVariant(cloakStatus) as any" class="shrink-0">{{ statusLabel(cloakStatus) }}</Badge>
+            <div class="space-y-1.5">
+              <div class="text-xs font-medium text-muted-foreground">{{ t('browserImages.imageName') }}</div>
+              <Input
+                v-model="buildImageName"
+                :placeholder="t('browserImages.cloakImageNamePlaceholder')"
+                :disabled="building"
+                @keydown.enter="handleBuild"
+              />
             </div>
             <div class="grid gap-2 sm:grid-cols-2">
               <div class="rounded-md border bg-background/60 px-3 py-2">
@@ -582,27 +560,8 @@ onUnmounted(stopPolling)
                 <div class="mt-1 truncate font-mono text-xs">{{ cloakBaseImage }}</div>
               </div>
               <div class="rounded-md border bg-background/60 px-3 py-2">
-                <div class="text-xs text-muted-foreground">{{ t('browserImages.sessions') }}</div>
-                <div class="mt-1 text-xs">{{ t('browserImages.sessionCount', { n: cloakImage?.sessionCount || 0 }) }}</div>
-              </div>
-            </div>
-            <div
-              v-if="cloakImage && showBuildProgress(cloakImage)"
-              class="space-y-1.5"
-            >
-              <div class="flex items-center justify-between gap-3 text-xs text-muted-foreground">
-                <span>{{ stageLabel(cloakImage.buildProgress?.stage) }}</span>
-                <span>
-                  {{ progressValue(cloakImage.buildProgress) }}%
-                  · {{ formatElapsed(cloakImage.buildProgress?.elapsedSeconds) }}
-                </span>
-              </div>
-              <div class="h-2 overflow-hidden rounded-full bg-muted">
-                <div
-                  class="h-full rounded-full bg-primary transition-all"
-                  :class="cloakImage.buildProgress?.indeterminate && 'animate-pulse'"
-                  :style="{ width: `${progressValue(cloakImage.buildProgress)}%` }"
-                />
+                <div class="text-xs text-muted-foreground">{{ t('browserImages.cloakImageCount') }}</div>
+                <div class="mt-1 text-xs">{{ t('browserImages.cloakImageMeta', { n: cloakImageCount }) }}</div>
               </div>
             </div>
           </div>

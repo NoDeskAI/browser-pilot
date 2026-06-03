@@ -1528,7 +1528,9 @@ async def _session_container_params(session_id: str) -> tuple[int, int, str | No
     """Read device_preset + proxy_url + fingerprint_profile + browser_lang + chrome_version from DB and resolve to container params."""
     pool = get_pool()
     row = await pool.fetchrow(
-        "SELECT device_preset, proxy_url, network_egress_id, fingerprint_profile, browser_lang, tenant_id, chrome_version, browser_runtime FROM sessions WHERE id = $1",
+        "SELECT device_preset, proxy_url, network_egress_id, fingerprint_profile, browser_lang, "
+        "tenant_id, chrome_version, browser_runtime, browser_image_id "
+        "FROM sessions WHERE id = $1",
         session_id,
     )
     if not row:
@@ -1559,13 +1561,33 @@ async def _session_container_params(session_id: str) -> tuple[int, int, str | No
 
     chrome_version = _row_get(row, "chrome_version")
     tenant_id = row["tenant_id"]
+    browser_image_id = _row_get(row, "browser_image_id")
     image_name: str | None = None
-    if is_cloak_runtime(browser_runtime):
-        image_name = CLOAK_BROWSER_IMAGE_NAME
+    if browser_image_id and tenant_id:
+        img_row = await pool.fetchrow(
+            "SELECT image_tag FROM browser_images "
+            "WHERE tenant_id = $1 AND id = $2 AND status = 'ready' "
+            "ORDER BY created_at DESC LIMIT 1",
+            tenant_id, browser_image_id,
+        )
+        if img_row:
+            image_name = img_row["image_tag"]
+    if is_cloak_runtime(browser_runtime) and not image_name:
+        img_row = None
+        if tenant_id:
+            img_row = await pool.fetchrow(
+                "SELECT image_tag FROM browser_images "
+                "WHERE tenant_id = $1 AND status = 'ready' "
+                "AND COALESCE(runtime, 'standard_chrome') = 'cloak_chromium' "
+                "ORDER BY created_at DESC LIMIT 1",
+                tenant_id,
+            )
+        image_name = img_row["image_tag"] if img_row else CLOAK_BROWSER_IMAGE_NAME
     elif chrome_version and tenant_id:
         img_row = await pool.fetchrow(
             "SELECT image_tag FROM browser_images "
             "WHERE tenant_id = $1 AND chrome_version = $2 AND status = 'ready' "
+            "AND COALESCE(runtime, 'standard_chrome') = 'standard_chrome' "
             "ORDER BY CASE WHEN image_tag LIKE '%-fpagent' THEN 1 ELSE 0 END, created_at DESC LIMIT 1",
             tenant_id, chrome_version,
         )
@@ -1576,6 +1598,7 @@ async def _session_container_params(session_id: str) -> tuple[int, int, str | No
         img_row = await pool.fetchrow(
             "SELECT image_tag FROM browser_images "
             "WHERE tenant_id = $1 AND status = 'ready' "
+            "AND COALESCE(runtime, 'standard_chrome') = 'standard_chrome' "
             "ORDER BY chrome_major DESC, CASE WHEN image_tag LIKE '%-fpagent' THEN 1 ELSE 0 END, created_at DESC LIMIT 1",
             row["tenant_id"],
         )

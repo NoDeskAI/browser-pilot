@@ -28,19 +28,13 @@ _IS_ARM = _ARCH in ("aarch64", "arm64")
 
 _BUILD_DIR = str(PROJECT_ROOT / "services" / "selenium-chrome")
 _CLOAK_BUILD_DIR = str(PROJECT_ROOT / "services" / "cloak-chromium-runtime")
+_RUNTIME_STANDARD = "standard_chrome"
+_RUNTIME_CLOAK = "cloak_chromium"
+_CLOAK_LEGACY_IMAGE_ID = "cloak_chromium_legacy"
 
 _version_cache: dict = {"versions": [], "fetched_at": 0.0}
 _CACHE_TTL = 21600  # 6 hours
 _CLOAK_BUILD_TIMEOUT = max(3600, BROWSER_RUNTIME_COMMAND_MAX_TIMEOUT)
-_cloak_build_state: dict = {
-    "status": "",
-    "build_log": "",
-    "created_at": None,
-    "started_at": None,
-    "updated_at": None,
-    "stage": "",
-    "progress": 0,
-}
 _cloak_build_lock = asyncio.Lock()
 
 
@@ -124,9 +118,23 @@ def _image_tag_for(ver_tag: str, image_id: str) -> str:
     return f"browser-pilot-selenium:chrome-{slug}-{image_id[:8]}"
 
 
-async def _docker_image_exists(image_tag: str) -> bool:
-    _, _, rc = await _run(f"docker image inspect {shlex.quote(image_tag)}", timeout=20)
-    return rc == 0
+def _safe_image_name(raw: str, fallback: str) -> str:
+    name = re.sub(r"\s+", " ", str(raw or "").strip())
+    return name[:80] or fallback
+
+
+def _slug_for(raw: str, fallback: str) -> str:
+    slug = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(raw or "").strip()).strip(".-").lower()
+    return (slug[:72] or fallback).strip(".-") or fallback
+
+
+def _cloak_image_repo() -> str:
+    return CLOAK_BROWSER_IMAGE_NAME.split(":", 1)[0] or "browser-pilot-cloak"
+
+
+def _cloak_image_tag_for(image_id: str, image_name: str) -> str:
+    slug = _slug_for(image_name, "runtime")
+    return f"{_cloak_image_repo()}:{slug}-{image_id[:8]}"
 
 
 async def _docker_image_created_at(image_tag: str) -> str | None:
@@ -140,45 +148,33 @@ async def _docker_image_created_at(image_tag: str) -> str | None:
     return created_at or None
 
 
-async def _cloak_runtime_image_payload(session_count: int = 0) -> dict:
+async def _legacy_cloak_runtime_image_payload(session_count: int = 0) -> dict | None:
     image_tag = CLOAK_BROWSER_IMAGE_NAME
     docker_created_at = await _docker_image_created_at(image_tag)
-    state_status = _cloak_build_state.get("status") or ""
-    if state_status in {"pending", "building", "failed"}:
-        status = state_status
-        build_log = _cloak_build_state.get("build_log") or ""
-        stage = _cloak_build_state.get("stage") or status
-        progress = int(_cloak_build_state.get("progress") or 0)
-        if status in {"pending", "building"}:
-            progress = _estimated_progress(_elapsed_seconds(_cloak_build_state.get("started_at")), timeout=_CLOAK_BUILD_TIMEOUT)
-    elif docker_created_at:
-        status = "ready"
-        build_log = _cloak_build_state.get("build_log") or "Image is available locally."
-        stage = "ready"
-        progress = 100
-    else:
-        status = state_status or "missing"
-        build_log = _cloak_build_state.get("build_log") or ""
-        stage = _cloak_build_state.get("stage") or status
-        progress = int(_cloak_build_state.get("progress") or 0)
+    if not docker_created_at and session_count <= 0:
+        return None
+    status = "ready" if docker_created_at else "missing"
+    build_log = "Legacy Cloak Chromium image is available locally." if docker_created_at else ""
+    stage = status
+    progress = 100 if docker_created_at else 0
     return {
-        "id": "cloak_chromium",
-        "runtime": "cloak_chromium",
-        "name": "Cloak Chromium",
+        "id": _CLOAK_LEGACY_IMAGE_ID,
+        "runtime": _RUNTIME_CLOAK,
+        "name": "Cloak Chromium Legacy",
         "chromeMajor": None,
         "chromeVersion": None,
         "imageTag": image_tag,
         "baseImage": "services/cloak-chromium-runtime",
         "status": status,
         "buildLog": build_log,
-        "createdAt": docker_created_at or _cloak_build_state.get("created_at"),
+        "createdAt": docker_created_at,
         "sessionCount": int(session_count or 0),
         "buildProgress": _progress_payload(
             status=status,
             stage=stage,
             progress=progress,
-            started_at=_cloak_build_state.get("started_at"),
-            updated_at=_cloak_build_state.get("updated_at"),
+            started_at=None,
+            updated_at=None,
             log=build_log,
             manual_command=f"docker build -t {shlex.quote(image_tag)} {shlex.quote(_CLOAK_BUILD_DIR)}",
         ),
@@ -229,11 +225,13 @@ def _canonical_image_rows(rows) -> list:
 
 def _browser_image_payload(row) -> dict:
     major = _row_value(row, "chrome_major")
+    runtime = _row_value(row, "runtime", _RUNTIME_STANDARD) or _RUNTIME_STANDARD
+    name = _row_value(row, "name", "") or ""
     return {
         "id": _row_value(row, "id"),
-        "runtime": "standard_chrome",
-        "name": f"Chrome {major}",
-        "chromeMajor": major,
+        "runtime": runtime,
+        "name": name or (f"Chrome {major}" if runtime == _RUNTIME_STANDARD else "Cloak Chromium"),
+        "chromeMajor": major if runtime == _RUNTIME_STANDARD else None,
         "chromeVersion": _row_value(row, "chrome_version"),
         "baseImage": _row_value(row, "base_image"),
         "imageTag": _row_value(row, "image_tag"),
@@ -241,12 +239,13 @@ def _browser_image_payload(row) -> dict:
         "buildLog": _row_value(row, "build_log"),
         "createdAt": _row_value(row, "created_at").isoformat() if _row_value(row, "created_at") else None,
         "sessionCount": int(_row_value(row, "session_count", 0) or 0),
-        "buildProgress": _chrome_build_progress(row),
+        "buildProgress": _image_build_progress(row),
     }
 
 
-def _chrome_build_progress(row) -> dict:
+def _image_build_progress(row) -> dict:
     status = str(_row_value(row, "status", "") or "")
+    runtime = _row_value(row, "runtime", _RUNTIME_STANDARD) or _RUNTIME_STANDARD
     created_at = _row_value(row, "created_at")
     started_at = created_at.timestamp() if hasattr(created_at, "timestamp") else None
     if status == "ready":
@@ -264,6 +263,7 @@ def _chrome_build_progress(row) -> dict:
     else:
         progress = 0
         stage = status or "unknown"
+    build_dir = _CLOAK_BUILD_DIR if runtime == _RUNTIME_CLOAK else _BUILD_DIR
     return _progress_payload(
         status=status,
         stage=stage,
@@ -271,7 +271,7 @@ def _chrome_build_progress(row) -> dict:
         started_at=started_at,
         updated_at=None,
         log=str(_row_value(row, "build_log", "") or ""),
-        manual_command=f"docker build -t {_row_value(row, 'image_tag', '')} {_BUILD_DIR}",
+        manual_command=f"docker build -t {_row_value(row, 'image_tag', '')} {build_dir}",
     )
 
 
@@ -361,7 +361,8 @@ async def _do_build(
             )
             duplicate = await conn.fetchrow(
                 "SELECT id, image_tag FROM browser_images "
-                "WHERE tenant_id = $1 AND chrome_version = $2 AND status = 'ready' AND id <> $3 "
+                "WHERE tenant_id = $1 AND chrome_version = $2 AND status = 'ready' "
+                "AND COALESCE(runtime, 'standard_chrome') = 'standard_chrome' AND id <> $3 "
                 "ORDER BY created_at DESC LIMIT 1",
                 tenant_id,
                 detected_version,
@@ -396,44 +397,29 @@ async def _do_build(
     logger.info("Image built: %s -> Chrome %s", image_tag, detected_version)
 
 
-async def _do_build_cloak_runtime() -> None:
-    image_tag = CLOAK_BROWSER_IMAGE_NAME
-    started_at = time.time()
-    _cloak_build_state.update(
-        {
-            "status": "building",
-            "build_log": "Pulling base image and building Cloak Chromium runtime image. First build can take a while.",
-            "created_at": _now_iso(),
-            "started_at": started_at,
-            "updated_at": _now_iso(),
-            "stage": "pulling_base_image",
-            "progress": 8,
-        }
+async def _do_build_cloak_runtime(image_id: str, image_tag: str) -> None:
+    pool = get_pool()
+    await pool.execute(
+        "UPDATE browser_images SET status = 'building', build_log = $1 WHERE id = $2",
+        "Pulling base image and building Cloak Chromium runtime image. First build can take a while.",
+        image_id,
     )
     cmd = f"docker build -t {shlex.quote(image_tag)} {shlex.quote(_CLOAK_BUILD_DIR)}"
     logger.info("Building Cloak runtime image: %s", cmd)
     stdout, stderr, rc = await _run(cmd, timeout=_CLOAK_BUILD_TIMEOUT)
     log_text = (stderr or stdout or "").strip()
     if rc != 0:
-        _cloak_build_state.update(
-            {
-                "status": "failed",
-                "build_log": log_text[:4000] or "Cloak runtime image build failed.",
-                "updated_at": _now_iso(),
-                "stage": "failed",
-                "progress": 100,
-            }
+        await pool.execute(
+            "UPDATE browser_images SET status = 'failed', build_log = $1 WHERE id = $2",
+            log_text[:4000] or "Cloak runtime image build failed.",
+            image_id,
         )
         logger.error("Cloak runtime image build failed: %s", log_text[:300])
         return
-    _cloak_build_state.update(
-        {
-            "status": "ready",
-            "build_log": "Build OK. Cloak Chromium runtime image is available locally.",
-            "updated_at": _now_iso(),
-            "stage": "ready",
-            "progress": 100,
-        }
+    await pool.execute(
+        "UPDATE browser_images SET status = 'ready', build_log = $1 WHERE id = $2",
+        "Build OK. Cloak Chromium runtime image is available locally.",
+        image_id,
     )
     logger.info("Cloak runtime image built: %s", image_tag)
 
@@ -441,7 +427,7 @@ async def _do_build_cloak_runtime() -> None:
 class BuildBody(BaseModel):
     chromeVersion: str = ""
     runtime: Literal["standard_chrome", "cloak_chromium"] = "standard_chrome"
-    force: bool = False
+    imageName: str = ""
 
 
 @router.post("/api/browser-images/cloak/build")
@@ -449,28 +435,34 @@ async def build_cloak_runtime_image(
     user: CurrentUser = Depends(require_role(["superadmin", "admin"])),
 ):
     reject_browser_images_api()
-    return await _start_cloak_runtime_build()
+    return await _start_cloak_runtime_build(user=user, image_name="")
 
 
-async def _start_cloak_runtime_build(force: bool = False):
+async def _start_cloak_runtime_build(*, user: CurrentUser, image_name: str = ""):
     async with _cloak_build_lock:
-        if _cloak_build_state.get("status") in {"pending", "building"}:
-            raise HTTPException(409, "Cloak Chromium runtime image is already being built.")
-        if not force and await _docker_image_exists(CLOAK_BROWSER_IMAGE_NAME):
-            return await _cloak_runtime_image_payload()
-        _cloak_build_state.update(
-            {
-                "status": "pending",
-                "build_log": "Cloak Chromium runtime image build queued.",
-                "created_at": _now_iso(),
-                "started_at": time.time(),
-                "updated_at": _now_iso(),
-                "stage": "queued",
-                "progress": 3,
-            }
+        pool = get_pool()
+        display_name = _safe_image_name(image_name, f"Cloak Chromium {_now_iso()[:19].replace('T', ' ')}")
+        image_id = str(uuid.uuid4())
+        image_tag = _cloak_image_tag_for(image_id, display_name)
+        await pool.execute(
+            "INSERT INTO browser_images "
+            "(id, tenant_id, runtime, name, chrome_major, chrome_version, base_image, image_tag, status, build_log) "
+            "VALUES ($1, $2, 'cloak_chromium', $3, 0, '', $4, $5, 'pending', $6)",
+            image_id,
+            user.tenant_id,
+            display_name,
+            "services/cloak-chromium-runtime",
+            image_tag,
+            "Cloak Chromium runtime image build queued.",
         )
-        asyncio.create_task(_do_build_cloak_runtime())
-        return await _cloak_runtime_image_payload()
+        asyncio.create_task(_do_build_cloak_runtime(image_id, image_tag))
+        return {
+            "id": image_id,
+            "runtime": _RUNTIME_CLOAK,
+            "name": display_name,
+            "status": "building",
+            "imageTag": image_tag,
+        }
 
 
 @router.post("/api/browser-images/build")
@@ -480,7 +472,7 @@ async def build_image(
 ):
     reject_browser_images_api()
     if body.runtime == "cloak_chromium":
-        return await _start_cloak_runtime_build(force=body.force)
+        return await _start_cloak_runtime_build(user=user, image_name=body.imageName)
 
     raw = body.chromeVersion.strip()
     if not raw:
@@ -523,6 +515,7 @@ async def build_image(
         existing_version = await pool.fetchrow(
             "SELECT id, status FROM browser_images "
             "WHERE tenant_id = $1 AND chrome_version = $2 AND status = 'ready' "
+            "AND COALESCE(runtime, 'standard_chrome') = 'standard_chrome' "
             "ORDER BY created_at DESC LIMIT 1",
             user.tenant_id,
             raw,
@@ -532,6 +525,7 @@ async def build_image(
     existing_build = await pool.fetchrow(
         "SELECT id, status FROM browser_images "
         "WHERE tenant_id = $1 AND base_image = $2 AND status IN ('pending', 'building') "
+        "AND COALESCE(runtime, 'standard_chrome') = 'standard_chrome' "
         "ORDER BY created_at DESC LIMIT 1",
         user.tenant_id,
         base_image,
@@ -567,29 +561,54 @@ async def list_images(user: CurrentUser = Depends(get_current_user)):
     reject_browser_images_api()
     pool = get_pool()
     rows = await pool.fetch(
-        "SELECT bi.id, bi.chrome_major, bi.chrome_version, bi.base_image, bi.image_tag, "
+        "SELECT bi.id, COALESCE(bi.runtime, 'standard_chrome') AS runtime, COALESCE(bi.name, '') AS name, "
+        "       bi.chrome_major, bi.chrome_version, bi.base_image, bi.image_tag, "
         "       bi.status, bi.build_log, bi.created_at, "
-        "       COALESCE(sc.cnt, 0) as session_count "
+        "       COALESCE(sc_id.cnt, sc_chrome.cnt, 0) as session_count "
         "FROM browser_images bi "
+        "LEFT JOIN ( "
+        "    SELECT tenant_id, browser_image_id, COUNT(*) as cnt "
+        "    FROM sessions "
+        "    WHERE browser_image_id IS NOT NULL AND browser_image_id != '' "
+        "    GROUP BY tenant_id, browser_image_id "
+        ") sc_id ON bi.tenant_id = sc_id.tenant_id AND bi.id = sc_id.browser_image_id "
         "LEFT JOIN ( "
         "    SELECT tenant_id, chrome_version, COUNT(*) as cnt "
         "    FROM sessions "
-        "    WHERE chrome_version IS NOT NULL AND chrome_version != '' "
+        "    WHERE (browser_image_id IS NULL OR browser_image_id = '') "
+        "      AND chrome_version IS NOT NULL AND chrome_version != '' "
         "    GROUP BY tenant_id, chrome_version "
-        ") sc ON bi.tenant_id = sc.tenant_id AND bi.chrome_version = sc.chrome_version "
+        ") sc_chrome ON bi.tenant_id = sc_chrome.tenant_id "
+        "   AND bi.chrome_version = sc_chrome.chrome_version "
+        "   AND COALESCE(bi.runtime, 'standard_chrome') = 'standard_chrome' "
         "WHERE bi.tenant_id = $1 "
-        "ORDER BY bi.chrome_major DESC",
+        "ORDER BY COALESCE(bi.runtime, 'standard_chrome'), bi.chrome_major DESC, bi.created_at DESC",
         user.tenant_id,
     )
-    canonical_rows = _canonical_image_rows(rows)
-    cloak_session_count = await pool.fetchval(
-        "SELECT COUNT(*) FROM sessions WHERE tenant_id = $1 AND browser_runtime = 'cloak_chromium'",
+    standard_rows = [
+        row for row in rows
+        if (_row_value(row, "runtime", _RUNTIME_STANDARD) or _RUNTIME_STANDARD) == _RUNTIME_STANDARD
+    ]
+    cloak_rows = [
+        row for row in rows
+        if (_row_value(row, "runtime", _RUNTIME_STANDARD) or _RUNTIME_STANDARD) == _RUNTIME_CLOAK
+    ]
+    canonical_rows = _canonical_image_rows(standard_rows)
+    legacy_cloak_session_count = await pool.fetchval(
+        "SELECT COUNT(*) FROM sessions "
+        "WHERE tenant_id = $1 AND browser_runtime = 'cloak_chromium' "
+        "AND (browser_image_id IS NULL OR browser_image_id = '')",
         user.tenant_id,
     )
-    cloak_image = await _cloak_runtime_image_payload(session_count=int(cloak_session_count or 0))
+    runtime_images = [_browser_image_payload(r) for r in cloak_rows]
+    legacy_cloak_image = await _legacy_cloak_runtime_image_payload(
+        session_count=int(legacy_cloak_session_count or 0)
+    )
+    if legacy_cloak_image:
+        runtime_images.append(legacy_cloak_image)
     return {
-        "runtimeImages": [cloak_image],
-        "images": [_browser_image_payload(r) for r in canonical_rows] + [cloak_image],
+        "runtimeImages": runtime_images,
+        "images": [_browser_image_payload(r) for r in canonical_rows] + runtime_images,
     }
 
 
@@ -621,9 +640,11 @@ async def delete_image(
 ):
     reject_browser_images_api()
     pool = get_pool()
-    if image_id == "cloak_chromium":
+    if image_id == _CLOAK_LEGACY_IMAGE_ID:
         cnt = await pool.fetchval(
-            "SELECT COUNT(*) FROM sessions WHERE tenant_id = $1 AND browser_runtime = 'cloak_chromium'",
+            "SELECT COUNT(*) FROM sessions "
+            "WHERE tenant_id = $1 AND browser_runtime = 'cloak_chromium' "
+            "AND (browser_image_id IS NULL OR browser_image_id = '')",
             user.tenant_id,
         )
         if cnt > 0:
@@ -633,28 +654,28 @@ async def delete_image(
             await _run(f"docker rmi {shlex.quote(CLOAK_BROWSER_IMAGE_NAME)}", timeout=30)
         except Exception:
             pass
-        _cloak_build_state.update({
-            "status": "",
-            "build_log": "",
-            "created_at": None,
-            "started_at": None,
-            "updated_at": None,
-            "stage": "",
-            "progress": 0,
-        })
         return {"ok": True}
 
     row = await pool.fetchrow(
-        "SELECT image_tag, chrome_version FROM browser_images WHERE id = $1 AND tenant_id = $2",
+        "SELECT image_tag, chrome_version, COALESCE(runtime, 'standard_chrome') AS runtime "
+        "FROM browser_images WHERE id = $1 AND tenant_id = $2",
         image_id, user.tenant_id,
     )
     if not row:
         raise HTTPException(404, "Image not found")
 
-    if row["chrome_version"]:
+    if row["runtime"] == _RUNTIME_CLOAK:
         cnt = await pool.fetchval(
-            "SELECT COUNT(*) FROM sessions WHERE tenant_id = $1 AND chrome_version = $2",
-            user.tenant_id, row["chrome_version"],
+            "SELECT COUNT(*) FROM sessions WHERE tenant_id = $1 AND browser_image_id = $2",
+            user.tenant_id, image_id,
+        )
+        if cnt > 0:
+            raise HTTPException(409, f"Image is in use by {cnt} session(s). Delete those sessions first.")
+    elif row["chrome_version"]:
+        cnt = await pool.fetchval(
+            "SELECT COUNT(*) FROM sessions "
+            "WHERE tenant_id = $1 AND (browser_image_id = $2 OR chrome_version = $3)",
+            user.tenant_id, image_id, row["chrome_version"],
         )
         if cnt > 0:
             raise HTTPException(409, f"Image is in use by {cnt} session(s). Delete those sessions first.")
@@ -675,7 +696,9 @@ async def get_default_image(user: CurrentUser = Depends(get_current_user)):
     pool = get_pool()
     row = await pool.fetchrow(
         "SELECT id, chrome_major, chrome_version, image_tag FROM browser_images "
-        "WHERE tenant_id = $1 AND status = 'ready' ORDER BY chrome_major DESC LIMIT 1",
+        "WHERE tenant_id = $1 AND status = 'ready' "
+        "AND COALESCE(runtime, 'standard_chrome') = 'standard_chrome' "
+        "ORDER BY chrome_major DESC LIMIT 1",
         user.tenant_id,
     )
     if not row:

@@ -75,6 +75,8 @@ from app.runtime_control import run_runtime_command
 logger = logging.getLogger("routes.sessions")
 router = APIRouter()
 
+_CLOAK_LEGACY_IMAGE_ID = "cloak_chromium_legacy"
+
 SESSION_ID_LENGTH = 12
 SESSION_ID_RETRY_LIMIT = 5
 SESSION_ID_FIRST_CHARS = string.ascii_lowercase
@@ -172,6 +174,7 @@ class CreateSessionBody(BaseModel):
     browserLang: str = "zh-CN"
     chromeVersion: str | None = None
     browserRuntime: Literal["standard_chrome", "cloak_chromium"] = "standard_chrome"
+    browserImageId: str | None = None
 
 
 class UpdateSessionBody(BaseModel):
@@ -229,8 +232,9 @@ async def _resolve_browser_image(pool, tenant_id: str, requested: str | None):
         raw = requested.strip()
         if _is_full_chrome_version(raw):
             row = await pool.fetchrow(
-                "SELECT chrome_version, image_tag FROM browser_images "
+                "SELECT id, chrome_version, image_tag FROM browser_images "
                 "WHERE tenant_id = $1 AND chrome_version = $2 AND status = 'ready' "
+                "AND COALESCE(runtime, 'standard_chrome') = 'standard_chrome' "
                 "ORDER BY CASE WHEN image_tag LIKE '%-fpagent' THEN 1 ELSE 0 END, created_at DESC LIMIT 1",
                 tenant_id,
                 raw,
@@ -238,8 +242,9 @@ async def _resolve_browser_image(pool, tenant_id: str, requested: str | None):
             if row:
                 return row
         row = await pool.fetchrow(
-            "SELECT chrome_version, image_tag FROM browser_images "
+            "SELECT id, chrome_version, image_tag FROM browser_images "
             "WHERE tenant_id = $1 AND chrome_major = $2 AND status = 'ready' "
+            "AND COALESCE(runtime, 'standard_chrome') = 'standard_chrome' "
             "ORDER BY CASE WHEN image_tag LIKE '%-fpagent' THEN 1 ELSE 0 END, created_at DESC LIMIT 1",
             tenant_id,
             _chrome_major(raw),
@@ -249,8 +254,9 @@ async def _resolve_browser_image(pool, tenant_id: str, requested: str | None):
         raise HTTPException(422, f"Chrome {raw} is not available. Please build it first in Settings > Browser Images.")
 
     row = await pool.fetchrow(
-        "SELECT chrome_version, image_tag FROM browser_images "
+        "SELECT id, chrome_version, image_tag FROM browser_images "
         "WHERE tenant_id = $1 AND status = 'ready' "
+        "AND COALESCE(runtime, 'standard_chrome') = 'standard_chrome' "
         "ORDER BY chrome_major DESC, CASE WHEN image_tag LIKE '%-fpagent' THEN 1 ELSE 0 END, created_at DESC LIMIT 1",
         tenant_id,
     )
@@ -259,19 +265,58 @@ async def _resolve_browser_image(pool, tenant_id: str, requested: str | None):
     raise HTTPException(422, "No browser images available. Please build one first in Settings > Browser Images.")
 
 
-async def _ensure_cloak_runtime_image() -> None:
-    _, stderr, rc = await run_runtime_command(
-        f"docker image inspect {shlex.quote(CLOAK_BROWSER_IMAGE_NAME)}",
-        timeout=20,
-    )
-    if rc != 0:
+async def _resolve_cloak_image(pool, tenant_id: str, requested_image_id: str | None):
+    if requested_image_id == _CLOAK_LEGACY_IMAGE_ID:
+        _, stderr, rc = await run_runtime_command(
+            f"docker image inspect {shlex.quote(CLOAK_BROWSER_IMAGE_NAME)}",
+            timeout=20,
+        )
+        if rc == 0:
+            return {"id": None, "image_tag": CLOAK_BROWSER_IMAGE_NAME}
         detail = (
-            "Cloak Chromium runtime image is not built. "
-            "Open Settings > Browser Images and build the Cloak Chromium runtime image first."
+            "Selected legacy Cloak Chromium image is not available locally. "
+            "Build a new Cloak Chromium runtime image in Settings > Browser Images."
         )
         if stderr:
             detail += f" Docker said: {stderr[:160]}"
         raise HTTPException(422, detail)
+
+    if requested_image_id:
+        row = await pool.fetchrow(
+            "SELECT id, image_tag FROM browser_images "
+            "WHERE tenant_id = $1 AND id = $2 AND status = 'ready' "
+            "AND COALESCE(runtime, 'standard_chrome') = 'cloak_chromium' "
+            "ORDER BY created_at DESC LIMIT 1",
+            tenant_id,
+            requested_image_id,
+        )
+        if row:
+            return row
+        raise HTTPException(422, "Selected Cloak Chromium image is not available. Please build it first in Settings > Browser Images.")
+
+    row = await pool.fetchrow(
+        "SELECT id, image_tag FROM browser_images "
+        "WHERE tenant_id = $1 AND status = 'ready' "
+        "AND COALESCE(runtime, 'standard_chrome') = 'cloak_chromium' "
+        "ORDER BY created_at DESC LIMIT 1",
+        tenant_id,
+    )
+    if row:
+        return row
+
+    _, stderr, rc = await run_runtime_command(
+        f"docker image inspect {shlex.quote(CLOAK_BROWSER_IMAGE_NAME)}",
+        timeout=20,
+    )
+    if rc == 0:
+        return {"id": None, "image_tag": CLOAK_BROWSER_IMAGE_NAME}
+    detail = (
+        "Cloak Chromium runtime image is not built. "
+        "Open Settings > Browser Images and build a Cloak Chromium runtime image first."
+    )
+    if stderr:
+        detail += f" Docker said: {stderr[:160]}"
+    raise HTTPException(422, detail)
 
 
 def _egress_payload(effective: EffectiveEgress) -> dict:
@@ -362,16 +407,40 @@ async def _resolve_session_image(session_id: str) -> str | None:
         return None
     pool = get_pool()
     row = await pool.fetchrow(
-        "SELECT chrome_version, tenant_id, COALESCE(browser_runtime, 'standard_chrome') AS browser_runtime FROM sessions WHERE id = $1", session_id,
+        "SELECT chrome_version, tenant_id, browser_image_id, "
+        "COALESCE(browser_runtime, 'standard_chrome') AS browser_runtime "
+        "FROM sessions WHERE id = $1",
+        session_id,
     )
     if not row:
         return None
+    browser_image_id = _row_get(row, "browser_image_id")
+    if browser_image_id and row["tenant_id"]:
+        img_row = await pool.fetchrow(
+            "SELECT image_tag FROM browser_images "
+            "WHERE tenant_id = $1 AND id = $2 AND status = 'ready' "
+            "ORDER BY created_at DESC LIMIT 1",
+            row["tenant_id"], browser_image_id,
+        )
+        if img_row:
+            return img_row["image_tag"]
     if _row_get(row, "browser_runtime", BROWSER_RUNTIME_STANDARD) == BROWSER_RUNTIME_CLOAK:
+        if row["tenant_id"]:
+            img_row = await pool.fetchrow(
+                "SELECT image_tag FROM browser_images "
+                "WHERE tenant_id = $1 AND status = 'ready' "
+                "AND COALESCE(runtime, 'standard_chrome') = 'cloak_chromium' "
+                "ORDER BY created_at DESC LIMIT 1",
+                row["tenant_id"],
+            )
+            if img_row:
+                return img_row["image_tag"]
         return CLOAK_BROWSER_IMAGE_NAME
     if row["chrome_version"] and row["tenant_id"]:
         img_row = await pool.fetchrow(
             "SELECT image_tag FROM browser_images "
             "WHERE tenant_id = $1 AND chrome_version = $2 AND status = 'ready' "
+            "AND COALESCE(runtime, 'standard_chrome') = 'standard_chrome' "
             "ORDER BY CASE WHEN image_tag LIKE '%-fpagent' THEN 1 ELSE 0 END, created_at DESC LIMIT 1",
             row["tenant_id"], row["chrome_version"],
         )
@@ -381,6 +450,7 @@ async def _resolve_session_image(session_id: str) -> str | None:
         img_row = await pool.fetchrow(
             "SELECT image_tag FROM browser_images "
             "WHERE tenant_id = $1 AND status = 'ready' "
+            "AND COALESCE(runtime, 'standard_chrome') = 'standard_chrome' "
             "ORDER BY chrome_major DESC, CASE WHEN image_tag LIKE '%-fpagent' THEN 1 ELSE 0 END, created_at DESC LIMIT 1",
             row["tenant_id"],
         )
@@ -599,6 +669,7 @@ async def list_sessions(user: CurrentUser = Depends(get_current_user)):
             SELECT s.id, s.name, s.created_at, s.updated_at, s.current_url, s.current_title,
                    s.device_preset, s.proxy_url, s.network_egress_id, s.user_id,
                    COALESCE(s.browser_runtime, 'standard_chrome') AS browser_runtime,
+                   s.browser_image_id,
                    s.fingerprint_profile, s.browser_lang,
                    e.name AS network_egress_name,
                    e.type AS network_egress_type,
@@ -630,6 +701,7 @@ async def list_sessions(user: CurrentUser = Depends(get_current_user)):
             SELECT s.id, s.name, s.created_at, s.updated_at, s.current_url, s.current_title,
                    s.device_preset, s.proxy_url, s.network_egress_id, s.user_id,
                    COALESCE(s.browser_runtime, 'standard_chrome') AS browser_runtime,
+                   s.browser_image_id,
                    s.fingerprint_profile, s.browser_lang,
                    e.name AS network_egress_name,
                    e.type AS network_egress_type,
@@ -697,6 +769,7 @@ async def list_sessions(user: CurrentUser = Depends(get_current_user)):
             "fingerprintProfile": fp_response,
             "browserLang": r["browser_lang"] or "zh-CN",
             "browserRuntime": _row_get(r, "browser_runtime", BROWSER_RUNTIME_STANDARD) or BROWSER_RUNTIME_STANDARD,
+            "browserImageId": _row_get(r, "browser_image_id"),
             "activeLease": _active_lease_payload_from_row(r),
             "fileCapture": await _file_capture_payload(sid, container_status=container_status),
             **egress_payload,
@@ -720,14 +793,17 @@ async def create_session(body: CreateSessionBody, user: CurrentUser = Depends(ge
     if not browser_images_enabled():
         resolved_chrome_version = None
         resolved_image_tag = None
+        resolved_browser_image_id = None
     elif body.browserRuntime == BROWSER_RUNTIME_CLOAK:
-        await _ensure_cloak_runtime_image()
+        row_img = await _resolve_cloak_image(pool, user.tenant_id, body.browserImageId)
         resolved_chrome_version = None
-        resolved_image_tag = None
+        resolved_image_tag = row_img["image_tag"]
+        resolved_browser_image_id = _row_get(row_img, "id")
     else:
         row_img = await _resolve_browser_image(pool, user.tenant_id, body.chromeVersion)
         resolved_chrome_version = row_img["chrome_version"]
         resolved_image_tag = row_img["image_tag"]
+        resolved_browser_image_id = _row_get(row_img, "id")
 
     try:
         effective_egress = await resolve_egress(
@@ -764,8 +840,8 @@ async def create_session(body: CreateSessionBody, user: CurrentUser = Depends(ge
                 """
                 INSERT INTO sessions
                     (id, name, device_preset, proxy_url, network_egress_id, tenant_id, user_id,
-                     fingerprint_profile, browser_lang, chrome_version, browser_runtime)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11)
+                     fingerprint_profile, browser_lang, chrome_version, browser_runtime, browser_image_id)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11, $12)
                 """,
                 session_id,
                 body.name,
@@ -778,6 +854,7 @@ async def create_session(body: CreateSessionBody, user: CurrentUser = Depends(ge
                 safe_lang,
                 resolved_chrome_version,
                 body.browserRuntime,
+                resolved_browser_image_id,
             )
             break
         except asyncpg.exceptions.UniqueViolationError as exc:
@@ -802,6 +879,7 @@ async def create_session(body: CreateSessionBody, user: CurrentUser = Depends(ge
             "browserLang": safe_lang,
             "chromeVersion": resolved_chrome_version,
             "browserRuntime": body.browserRuntime,
+            "browserImageId": resolved_browser_image_id,
             **_egress_payload(effective_egress),
         },
         device_id=session_id,

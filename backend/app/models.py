@@ -85,6 +85,7 @@ class Session(Base):
     browser_runtime: Mapped[str] = mapped_column(
         Text, nullable=False, server_default="standard_chrome"
     )
+    browser_image_id: Mapped[str | None] = mapped_column(Text)
     tenant_id: Mapped[str | None] = mapped_column(Text)
     user_id: Mapped[str | None] = mapped_column(Text)
 

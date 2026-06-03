@@ -154,6 +154,7 @@ async function fetchSessions(): Promise<void> {
         fingerprintProfile: s.fingerprintProfile || local?.fingerprintProfile || null,
         browserLang: s.browserLang || 'zh-CN',
         browserRuntime: s.browserRuntime || 'standard_chrome',
+        browserImageId: s.browserImageId ?? null,
         activeLease: s.activeLease || null,
       }
     })
@@ -192,6 +193,7 @@ async function createSession(
   chromeVersion?: string,
   networkEgressId?: string | null,
   browserRuntime: 'standard_chrome' | 'cloak_chromium' = 'standard_chrome',
+  browserImageId?: string | null,
 ): Promise<Session> {
   if (!name) name = i18n.global.t('session.defaultName')
   const browserLang = _LOCALE_TO_BROWSER_LANG[(i18n.global.locale as any).value] ?? 'en-US'
@@ -206,6 +208,7 @@ async function createSession(
 
   const body: Record<string, any> = { name, browserLang, browserRuntime }
   if (brand.features.browserImages !== false && browserRuntime === 'standard_chrome' && effectiveChromeVersion) body.chromeVersion = effectiveChromeVersion
+  if (brand.features.browserImages !== false && browserRuntime === 'cloak_chromium' && browserImageId) body.browserImageId = browserImageId
   if (networkEgressId) body.networkEgressId = networkEgressId
 
   const res = await api('/api/sessions', {
@@ -235,6 +238,7 @@ async function createSession(
     fingerprintProfile: data.fingerprintProfile || null,
     browserLang: data.browserLang || browserLang,
     browserRuntime: data.browserRuntime || browserRuntime,
+    browserImageId: data.browserImageId ?? browserImageId ?? null,
     activeLease: data.agentDevice?.leaseId
       ? {
           id: data.agentDevice.leaseId,
