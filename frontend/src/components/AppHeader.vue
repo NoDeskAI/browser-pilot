@@ -5,9 +5,10 @@ import { useRoute, useRouter } from 'vue-router'
 import { setLocale, getLocale } from '../i18n'
 import { useSessions } from '../composables/useSessions'
 import { useAuth } from '../composables/useAuth'
+import { eeAccountMenuItems } from '@ee/nav'
 import {
   LayoutGrid, Settings, Users, SquareTerminal, LogOut, Languages, User as UserIcon, FolderOpen,
-  Sun, Moon, ShieldCheck, CreditCard
+  Sun, Moon, ShieldCheck
 } from 'lucide-vue-next'
 import { useDark, useToggle } from '@vueuse/core'
 import {
@@ -29,7 +30,6 @@ const toggleDark = useToggle(isDark)
 const showUsersLink = computed(() =>
   user.value && (user.value.role === 'superadmin' || user.value.role === 'admin'),
 )
-const showBillingLink = computed(() => __EE__)
 
 async function handleLogout() {
   await logout()
@@ -155,9 +155,14 @@ function toggleLocale() {
             <UserIcon class="size-4 mr-2" />
             {{ t('auth.accountSettings') }}
           </DropdownMenuItem>
-          <DropdownMenuItem v-if="showBillingLink" @click="router.push('/billing')" class="cursor-pointer">
-            <CreditCard class="size-4 mr-2" />
-            {{ t('billing.nav') }}
+          <DropdownMenuItem
+            v-for="item in eeAccountMenuItems"
+            :key="item.path"
+            @click="router.push(item.path)"
+            class="cursor-pointer"
+          >
+            <component :is="item.icon" v-if="item.icon" class="size-4 mr-2" />
+            {{ t(item.labelKey) }}
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem @click="handleLogout" class="cursor-pointer text-destructive focus:text-destructive">

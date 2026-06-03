@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from app import edition
 
 
-def test_billing_hooks_are_noop_when_not_ee(monkeypatch):
+def test_edition_hooks_are_noop_when_not_ee(monkeypatch):
     def fail_load():
         raise AssertionError("EE hooks should not be loaded")
 
@@ -53,13 +53,13 @@ def test_billing_hooks_are_noop_when_not_ee(monkeypatch):
     asyncio.run(run_hooks())
 
 
-def test_billing_hooks_dispatch_to_ee_hooks(monkeypatch):
+def test_edition_hooks_dispatch_to_ee_hooks(monkeypatch):
     calls = []
 
     class FakeHooks:
         def features(self):
             calls.append(("features", (), {}))
-            return {"billing": True}
+            return {"extension": True}
 
         def before_session_create(self, *args, **kwargs):
             calls.append(("before_session_create", args, kwargs))
@@ -112,7 +112,7 @@ def test_billing_hooks_dispatch_to_ee_hooks(monkeypatch):
     monkeypatch.setattr(edition, "_load_ee_hooks", lambda: FakeHooks())
 
     async def run_hooks():
-        assert edition.ee_features() == {"billing": True}
+        assert edition.ee_features() == {"extension": True}
         await edition.assert_tenant_runtime_allowed("tenant-1", exclude_session_id="session-1")
         await edition.before_session_create(user, body)
         await edition.after_session_created(user, "session-1", body)

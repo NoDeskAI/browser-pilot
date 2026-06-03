@@ -116,7 +116,7 @@ def test_create_session_binds_network_timezone_without_changing_browser_lang(mon
     assert profile["navigator"]["languages"] == ["fr-FR", "fr", "en"]
 
 
-def test_create_session_does_not_consume_running_session_quota(monkeypatch):
+def test_create_session_does_not_consume_runtime_admission_limit(monkeypatch):
     pool = FakePool([
         {"chrome_version": "147.0.0.0", "image_tag": "browser-pilot:test"},
     ])
@@ -127,8 +127,8 @@ def test_create_session_does_not_consume_running_session_quota(monkeypatch):
     async def fake_before_session_create(user, body):
         calls.append(("before_session_create", user.tenant_id, body.name))
 
-    async def fail_runtime_quota_check(*_args, **_kwargs):
-        raise AssertionError("creating an idle session must not check concurrent runtime quota")
+    async def fail_runtime_limit_check(*_args, **_kwargs):
+        raise AssertionError("creating an idle session must not check runtime admission limits")
 
     async def fake_network(proxy_url, image_tag):
         return _network()
@@ -137,19 +137,19 @@ def test_create_session_does_not_consume_running_session_quota(monkeypatch):
         return _profile(browser_lang)
 
     monkeypatch.setattr(sessions, "before_session_create", fake_before_session_create)
-    monkeypatch.setattr(sessions, "assert_tenant_runtime_allowed", fail_runtime_quota_check)
+    monkeypatch.setattr(sessions, "assert_tenant_runtime_allowed", fail_runtime_limit_check)
     monkeypatch.setattr(sessions, "_resolve_session_network", fake_network)
     monkeypatch.setattr(sessions, "generate_profile", fake_generate_profile)
 
     result = asyncio.run(
         sessions.create_session(
-            sessions.CreateSessionBody(name="quota-safe-create"),
+            sessions.CreateSessionBody(name="limit-safe-create"),
             _user(),
         )
     )
 
     assert result["id"] == "session-1"
-    assert calls == [("before_session_create", "tenant-1", "quota-safe-create")]
+    assert calls == [("before_session_create", "tenant-1", "limit-safe-create")]
 
 
 def test_create_session_retries_short_id_collision(monkeypatch):
@@ -499,10 +499,10 @@ def test_start_session_container_is_not_lease_gated(monkeypatch):
         ("unpause_session_container", "before_session_runtime_start"),
     ],
 )
-def test_runtime_quota_http_exception_is_not_wrapped_as_action_failure(monkeypatch, route_name, failing_hook):
+def test_runtime_limit_http_exception_is_not_wrapped_as_action_failure(monkeypatch, route_name, failing_hook):
     detail = {
-        "reason": "quota_exceeded",
-        "metric": "browser.runtime_seconds.monthly",
+        "reason": "limit_exceeded",
+        "metric": "runtime.limit",
         "limit": 3600,
         "used": 3600,
     }
@@ -542,10 +542,10 @@ def test_runtime_quota_http_exception_is_not_wrapped_as_action_failure(monkeypat
             raise sessions.HTTPException(status_code=429, detail=detail)
 
     async def fail_ensure_container_running(*_args, **_kwargs):
-        raise AssertionError("quota errors must stop before runtime startup")
+        raise AssertionError("limit errors must stop before runtime startup")
 
     async def fail_action_failure(*_args, **_kwargs):
-        raise AssertionError("quota HTTPException must not be wrapped as action failure")
+        raise AssertionError("limit HTTPException must not be wrapped as action failure")
 
     monkeypatch.setattr(sessions, "verify_session_access", fake_verify)
     monkeypatch.setattr(sessions, "assert_tenant_runtime_allowed", fake_runtime_allowed)
