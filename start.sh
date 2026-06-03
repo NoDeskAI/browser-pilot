@@ -353,28 +353,116 @@ _stop_started_processes() {
     rm -f "$BACKEND_PID_FILE" "$FRONTEND_PID_FILE" "$MONITOR_PID_FILE"
 }
 
+_start_daemon_process() {
+    local pid_file="$1" log_file="$2" cwd="$3"
+    shift 3
+    python3 - "$pid_file" "$log_file" "$cwd" "$@" <<'PY'
+import os
+import subprocess
+import sys
+
+pid_file, log_file, cwd, *cmd = sys.argv[1:]
+log = open(log_file, "ab", buffering=0)
+process = subprocess.Popen(
+    cmd,
+    cwd=cwd,
+    stdin=subprocess.DEVNULL,
+    stdout=log,
+    stderr=subprocess.STDOUT,
+    start_new_session=True,
+    close_fds=True,
+)
+with open(pid_file, "w", encoding="utf-8") as fh:
+    fh.write(f"{process.pid}\n")
+print(process.pid)
+PY
+}
+
 _start_pair_monitor() {
     local backend_pid="$1" frontend_pid="$2"
     : > "$MONITOR_LOG"
-    (
-        trap '' INT HUP
-        while true; do
-            if ! kill -0 "$backend_pid" 2>/dev/null; then
-                echo "[monitor] backend 进程退出，停止 frontend。"
-                _kill_process_tree "$frontend_pid"
-                rm -f "$BACKEND_PID_FILE" "$FRONTEND_PID_FILE" "$MONITOR_PID_FILE"
-                exit 0
-            fi
-            if ! kill -0 "$frontend_pid" 2>/dev/null; then
-                echo "[monitor] frontend 进程退出，停止 backend。"
-                _kill_process_tree "$backend_pid"
-                rm -f "$BACKEND_PID_FILE" "$FRONTEND_PID_FILE" "$MONITOR_PID_FILE"
-                exit 0
-            fi
-            sleep 1
-        done
-    ) >> "$MONITOR_LOG" 2>&1 &
-    echo $! > "$MONITOR_PID_FILE"
+    python3 - "$MONITOR_PID_FILE" "$MONITOR_LOG" "$BACKEND_PID_FILE" "$FRONTEND_PID_FILE" "$backend_pid" "$frontend_pid" <<'PY'
+import os
+import signal
+import subprocess
+import sys
+
+monitor_pid_file, log_file, backend_pid_file, frontend_pid_file, backend_pid, frontend_pid = sys.argv[1:]
+monitor_code = r'''
+import os
+import signal
+import sys
+import time
+
+log_file, monitor_pid_file, backend_pid_file, frontend_pid_file, backend_pid, frontend_pid = sys.argv[1:]
+backend_pid = int(backend_pid)
+frontend_pid = int(frontend_pid)
+
+def alive(pid):
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+def kill_group(pid):
+    try:
+        os.killpg(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    except OSError:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            return
+
+def cleanup():
+    for path in (monitor_pid_file, backend_pid_file, frontend_pid_file):
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+
+with open(log_file, "a", encoding="utf-8") as log:
+    while True:
+        if not alive(backend_pid):
+            log.write("[monitor] backend 进程退出，停止 frontend。\n")
+            log.flush()
+            kill_group(frontend_pid)
+            cleanup()
+            sys.exit(0)
+        if not alive(frontend_pid):
+            log.write("[monitor] frontend 进程退出，停止 backend。\n")
+            log.flush()
+            kill_group(backend_pid)
+            cleanup()
+            sys.exit(0)
+        time.sleep(1)
+'''
+log = open(log_file, "ab", buffering=0)
+process = subprocess.Popen(
+    [
+        sys.executable,
+        "-c",
+        monitor_code,
+        log_file,
+        monitor_pid_file,
+        backend_pid_file,
+        frontend_pid_file,
+        backend_pid,
+        frontend_pid,
+    ],
+    stdin=subprocess.DEVNULL,
+    stdout=log,
+    stderr=subprocess.STDOUT,
+    start_new_session=True,
+    close_fds=True,
+)
+with open(monitor_pid_file, "w", encoding="utf-8") as fh:
+    fh.write(f"{process.pid}\n")
+PY
 }
 
 _wait_service_ready() {
@@ -524,13 +612,24 @@ _start_processes() {
     : > "$BACKEND_LOG"
     : > "$FRONTEND_LOG"
 
-    (cd backend && uv run uvicorn app.main:app --host 0.0.0.0 --port "$BACKEND_PORT" --reload) >> "$BACKEND_LOG" 2>&1 &
-    local backend_pid=$!
-    echo $backend_pid > "$BACKEND_PID_FILE"
+    local backend_pid frontend_pid
+    if [[ "$MODE" == "daemon" ]]; then
+        backend_pid=$(_start_daemon_process "$BACKEND_PID_FILE" "$BACKEND_LOG" "$SCRIPT_DIR/backend" \
+            uv run uvicorn app.main:app --host 0.0.0.0 --port "$BACKEND_PORT" --reload)
+    else
+        (cd backend && uv run uvicorn app.main:app --host 0.0.0.0 --port "$BACKEND_PORT" --reload) >> "$BACKEND_LOG" 2>&1 &
+        backend_pid=$!
+        echo $backend_pid > "$BACKEND_PID_FILE"
+    fi
 
-    (cd frontend && npm run dev -- --port "$FRONTEND_PORT") >> "$FRONTEND_LOG" 2>&1 &
-    local frontend_pid=$!
-    echo $frontend_pid > "$FRONTEND_PID_FILE"
+    if [[ "$MODE" == "daemon" ]]; then
+        frontend_pid=$(_start_daemon_process "$FRONTEND_PID_FILE" "$FRONTEND_LOG" "$SCRIPT_DIR/frontend" \
+            npm run dev -- --port "$FRONTEND_PORT")
+    else
+        (cd frontend && npm run dev -- --port "$FRONTEND_PORT") >> "$FRONTEND_LOG" 2>&1 &
+        frontend_pid=$!
+        echo $frontend_pid > "$FRONTEND_PID_FILE"
+    fi
 
     echo "[backend]  PID=$backend_pid  port=$BACKEND_PORT  log=$BACKEND_LOG"
     echo "[frontend] PID=$frontend_pid port=$FRONTEND_PORT log=$FRONTEND_LOG"
@@ -626,11 +725,10 @@ do_daemon() {
     _start_processes
     _start_pair_monitor "$(cat "$BACKEND_PID_FILE")" "$(cat "$FRONTEND_PID_FILE")"
     echo ""
-    echo "后台模式已启动，Ctrl+C 退出日志查看（不影响后台进程）"
+    echo "后台模式已启动"
     echo "停止: ./start.sh stop"
+    echo "日志: tail -f $BACKEND_LOG $FRONTEND_LOG $MONITOR_LOG"
     echo ""
-
-    tail -f "$BACKEND_LOG" "$FRONTEND_LOG" "$MONITOR_LOG"
 }
 
 # ------------------------------------------------------------------
