@@ -12,6 +12,7 @@ from fastapi import HTTPException
 
 from app.auth.dependencies import CurrentUser
 from app.db import get_pool
+from app.edition import after_file_deleted, after_file_store_failed, after_file_stored, before_file_store
 from app.file_urls import FILE_DOWNLOAD_URL_TTL_SECONDS, backend_download_url
 from app.file_store import get_store
 
@@ -30,6 +31,31 @@ def _safe_filename(name: str, default: str = "file") -> str:
 def _content_type(filename: str, fallback: str = "application/octet-stream") -> str:
     guessed, _encoding = mimetypes.guess_type(filename)
     return guessed or fallback
+
+
+def _safe_key_part(value: str) -> str:
+    safe = re.sub(r"[\x00-\x1f/\\:]+", "_", str(value or "").strip())
+    return safe.strip(" .") or "unknown"
+
+
+def _object_key(
+    *,
+    tenant_id: str | None,
+    user_id: str | None,
+    session_id: str,
+    file_id: str,
+    filename: str,
+) -> str:
+    session_part = _safe_key_part(session_id)
+    file_part = _safe_key_part(file_id)
+    filename_part = _safe_filename(filename, "file")
+    if tenant_id:
+        tenant_part = _safe_key_part(tenant_id)
+        if user_id:
+            user_part = _safe_key_part(user_id)
+            return f"files/tenants/{tenant_part}/users/{user_part}/sessions/{session_part}/{file_part}/{filename_part}"
+        return f"files/tenants/{tenant_part}/sessions/{session_part}/{file_part}/{filename_part}"
+    return f"files/{session_part}/{file_part}/{filename_part}"
 
 
 async def _file_url(row: Any) -> str:
@@ -188,25 +214,55 @@ async def save_bytes(
 
     session = await _session_context(session_id)
     file_id = uuid.uuid4().hex
-    object_key = f"files/{session_id}/{file_id}/{filename}"
-    store = await get_store()
-    await store.save_bytes(data, key=object_key, content_type=content_type)
-    return await _insert_file_record(
+    tenant_id = _row_value(session, "tenant_id")
+    user_id = _row_value(session, "user_id")
+    object_key = _object_key(
+        tenant_id=tenant_id,
+        user_id=user_id,
+        session_id=session_id,
+        file_id=file_id,
+        filename=filename,
+    )
+    await before_file_store(
         file_id=file_id,
         session_id=session_id,
-        tenant_id=_row_value(session, "tenant_id"),
-        user_id=_row_value(session, "user_id"),
+        tenant_id=tenant_id,
+        user_id=user_id,
         source=source,
-        filename=filename,
-        content_type=content_type,
         size_bytes=size_bytes,
-        storage=store.storage_name,
-        object_key=object_key,
-        source_id=source_id,
-        source_path=source_path,
-        source_mtime=source_mtime,
-        sha256=sha256,
     )
+    store = await get_store()
+    try:
+        await store.save_bytes(data, key=object_key, content_type=content_type)
+        file = await _insert_file_record(
+            file_id=file_id,
+            session_id=session_id,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            source=source,
+            filename=filename,
+            content_type=content_type,
+            size_bytes=size_bytes,
+            storage=store.storage_name,
+            object_key=object_key,
+            source_id=source_id,
+            source_path=source_path,
+            source_mtime=source_mtime,
+            sha256=sha256,
+        )
+    except Exception as exc:
+        await after_file_store_failed(
+            file_id=file_id,
+            session_id=session_id,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            source=source,
+            size_bytes=size_bytes,
+            error=exc,
+        )
+        raise
+    await after_file_stored(file)
+    return file
 
 
 async def save_file(
@@ -238,25 +294,55 @@ async def save_file(
 
     session = await _session_context(session_id)
     file_id = uuid.uuid4().hex
-    object_key = f"files/{session_id}/{file_id}/{filename}"
-    store = await get_store()
-    await store.save_file(path, key=object_key, content_type=content_type)
-    return await _insert_file_record(
+    tenant_id = _row_value(session, "tenant_id")
+    user_id = _row_value(session, "user_id")
+    object_key = _object_key(
+        tenant_id=tenant_id,
+        user_id=user_id,
+        session_id=session_id,
+        file_id=file_id,
+        filename=filename,
+    )
+    await before_file_store(
         file_id=file_id,
         session_id=session_id,
-        tenant_id=_row_value(session, "tenant_id"),
-        user_id=_row_value(session, "user_id"),
+        tenant_id=tenant_id,
+        user_id=user_id,
         source=source,
-        filename=filename,
-        content_type=content_type,
         size_bytes=size_bytes,
-        storage=store.storage_name,
-        object_key=object_key,
-        source_id=source_id,
-        source_path=source_path,
-        source_mtime=source_mtime,
-        sha256=sha256,
     )
+    store = await get_store()
+    try:
+        await store.save_file(path, key=object_key, content_type=content_type)
+        file = await _insert_file_record(
+            file_id=file_id,
+            session_id=session_id,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            source=source,
+            filename=filename,
+            content_type=content_type,
+            size_bytes=size_bytes,
+            storage=store.storage_name,
+            object_key=object_key,
+            source_id=source_id,
+            source_path=source_path,
+            source_mtime=source_mtime,
+            sha256=sha256,
+        )
+    except Exception as exc:
+        await after_file_store_failed(
+            file_id=file_id,
+            session_id=session_id,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            source=source,
+            size_bytes=size_bytes,
+            error=exc,
+        )
+        raise
+    await after_file_stored(file)
+    return file
 
 
 async def _insert_file_record(
@@ -417,6 +503,7 @@ async def _delete_file_row(
         logger.error("File row delete failed %s result=%s", log_context, result)
         raise HTTPException(500, "Failed to delete file record")
 
+    await after_file_deleted(file=row, object_deleted=object_deleted, record_deleted=True)
     return {
         "ok": True,
         "objectDeleted": object_deleted,

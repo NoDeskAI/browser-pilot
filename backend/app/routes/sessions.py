@@ -57,7 +57,15 @@ from app.network_egress import (
     resolve_egress,
 )
 from app.edition import (
+    after_session_created,
+    after_session_runtime_start_failed,
+    after_session_runtime_started,
+    after_session_runtime_stopped,
+    after_viewer_stream,
     assert_tenant_runtime_allowed,
+    before_session_create,
+    before_session_runtime_start,
+    before_viewer_ticket_issue,
     browser_images_enabled,
     ee_features,
     reject_session_runtime_selection,
@@ -703,9 +711,9 @@ async def create_session(body: CreateSessionBody, user: CurrentUser = Depends(ge
     if body.proxyUrl.strip():
         raise HTTPException(422, "Manual HTTP/SOCKS proxy is no longer supported. Use a Clash or OpenVPN network egress profile.")
     reject_session_runtime_selection(body)
+    await before_session_create(user, body)
 
     pool = get_pool()
-    await assert_tenant_runtime_allowed(user.tenant_id)
     preset_id = body.devicePreset if body.devicePreset in DEVICE_PRESETS else DEFAULT_PRESET
     safe_lang = re.sub(r"[^a-zA-Z0-9_-]", "", body.browserLang or "zh-CN") or "zh-CN"
 
@@ -782,6 +790,7 @@ async def create_session(body: CreateSessionBody, user: CurrentUser = Depends(ge
     else:
         raise HTTPException(status_code=500, detail="Could not allocate session id") from last_collision
 
+    await after_session_created(user, session_id, body)
     logger.info("Session created: %s (%s) preset=%s lang=%s chrome=%s", session_id, body.name, preset_id, safe_lang, resolved_chrome_version or "default")
     return agent_devices.control_action_response(
         {
@@ -815,6 +824,7 @@ async def create_viewer_ticket(
 ):
     await verify_session_access(session_id, user)
     mode = (body or ViewerTicketBody()).mode
+    await before_viewer_ticket_issue(user, session_id, mode=mode)
     if mode == viewer_tickets.VIEWER_MODE_CONTROL:
         try:
             ctx = await agent_devices.require_active_lease(
@@ -937,8 +947,9 @@ async def proxy_session_vnc(websocket: WebSocket, session_id: str):
         logger.warning("Viewer proxy failed for %s: %s", session_id, exc)
     finally:
         duration_ms = int((time.monotonic() - started_at) * 1000)
+        audit_id: str | None = None
         with contextlib.suppress(Exception):
-            await agent_devices.record_action_event(
+            audit_id = await agent_devices.record_action_event(
                 session_id=session_id,
                 actor=ticket.operator_subject,
                 actor_owner_user_id=ticket.user_id,
@@ -957,6 +968,17 @@ async def proxy_session_vnc(websocket: WebSocket, session_id: str):
                     "remoteAddr": ticket.remote_addr,
                     "userAgent": ticket.user_agent,
                 },
+                error=error_reason,
+            )
+        with contextlib.suppress(Exception):
+            await after_viewer_stream(
+                session_id=session_id,
+                ticket=ticket,
+                outcome=outcome,
+                duration_ms=duration_ms,
+                bytes_from_viewer=downstream_bytes,
+                bytes_to_viewer=upstream_bytes,
+                audit_event_id=audit_id,
                 error=error_reason,
             )
         if websocket.application_state == WebSocketState.CONNECTED:
@@ -1062,6 +1084,7 @@ async def delete_session(
     )
     await stop_download_watcher(session_id)
     await remove_container(session_id)
+    await after_session_runtime_stopped(user, session_id, action="session.delete")
     await pool.execute("DELETE FROM sessions WHERE id = $1", session_id)
     logger.info("Session deleted: %s", session_id)
     return {"ok": True, "files": file_result}
@@ -1077,9 +1100,13 @@ async def start_session_container(session_id: str, user: CurrentUser = Depends(g
     ctx = await agent_devices.begin_control_action(
         session_id, user, action="session.container.start", side_effect_level="internal"
     )
+    runtime_start_reserved = False
     try:
         await assert_tenant_runtime_allowed(user.tenant_id, exclude_session_id=session_id)
+        await before_session_runtime_start(user, session_id, action="session.container.start")
+        runtime_start_reserved = True
         await ensure_container_running(session_id)
+        await after_session_runtime_started(user, session_id, action="session.container.start")
         await _activate_file_capture(session_id)
         from app.tools.browser.session import ensure_homepage
 
@@ -1114,7 +1141,14 @@ async def start_session_container(session_id: str, user: CurrentUser = Depends(g
             summary="Started browser container",
             details={"homePage": home_page},
         )
+    except HTTPException as exc:
+        if runtime_start_reserved:
+            with contextlib.suppress(Exception):
+                await after_session_runtime_start_failed(user, session_id, action="session.container.start", error=exc)
+        raise
     except Exception as exc:
+        if runtime_start_reserved:
+            await after_session_runtime_start_failed(user, session_id, action="session.container.start", error=exc)
         logger.error("Container start failed for %s: %s", session_id, exc)
         return await agent_devices.fail_compatible_action(ctx, str(exc))
 
@@ -1131,6 +1165,7 @@ async def stop_session_container(session_id: str, user: CurrentUser = Depends(ge
         await stop_download_watcher(session_id)
         await stop_container(session_id)
         await mark_file_capture_status(session_id, "unavailable", "container_stopped")
+        await after_session_runtime_stopped(user, session_id, action="session.container.stop")
         return await agent_devices.complete_compatible_action(
             ctx,
             {"ok": True},
@@ -1153,6 +1188,7 @@ async def pause_session_container(session_id: str, user: CurrentUser = Depends(g
         await stop_download_watcher(session_id)
         await pause_container(session_id)
         await mark_file_capture_status(session_id, "unavailable", "container_paused")
+        await after_session_runtime_stopped(user, session_id, action="session.container.pause")
         return await agent_devices.complete_compatible_action(
             ctx,
             {"ok": True},
@@ -1171,9 +1207,13 @@ async def unpause_session_container(session_id: str, user: CurrentUser = Depends
     )
     if rejected:
         return rejected
+    runtime_start_reserved = False
     try:
         await assert_tenant_runtime_allowed(user.tenant_id, exclude_session_id=session_id)
+        await before_session_runtime_start(user, session_id, action="session.container.unpause")
+        runtime_start_reserved = True
         await ensure_container_running(session_id)
+        await after_session_runtime_started(user, session_id, action="session.container.unpause")
         await _activate_file_capture(session_id)
         pool = get_pool()
         row = await pool.fetchrow(
@@ -1203,7 +1243,14 @@ async def unpause_session_container(session_id: str, user: CurrentUser = Depends
             },
             summary="Unpaused browser container",
         )
+    except HTTPException as exc:
+        if runtime_start_reserved:
+            with contextlib.suppress(Exception):
+                await after_session_runtime_start_failed(user, session_id, action="session.container.unpause", error=exc)
+        raise
     except Exception as exc:
+        if runtime_start_reserved:
+            await after_session_runtime_start_failed(user, session_id, action="session.container.unpause", error=exc)
         logger.error("Container unpause failed for %s: %s", session_id, exc)
         return await agent_devices.fail_compatible_action(ctx, str(exc))
 
@@ -1267,16 +1314,22 @@ async def change_device_preset(session_id: str, body: DevicePresetBody, user: Cu
     invalidate_session_cache(session_id)
     await stop_download_watcher(session_id)
     await assert_tenant_runtime_allowed(_row_get(row, "tenant_id") or user.tenant_id, exclude_session_id=session_id)
-    await recreate_container(
-        session_id,
-        width=preset_data["width"],
-        height=preset_data["height"],
-        user_agent=fp_ua,
-        proxy=proxy,
-        fingerprint_profile=fp_profile,
-        browser_lang=row["browser_lang"] or "zh-CN",
-        image_name=image_name,
-    )
+    await before_session_runtime_start(user, session_id, action="session.device_preset.recreate")
+    try:
+        await recreate_container(
+            session_id,
+            width=preset_data["width"],
+            height=preset_data["height"],
+            user_agent=fp_ua,
+            proxy=proxy,
+            fingerprint_profile=fp_profile,
+            browser_lang=row["browser_lang"] or "zh-CN",
+            image_name=image_name,
+        )
+    except Exception as exc:
+        await after_session_runtime_start_failed(user, session_id, action="session.device_preset.recreate", error=exc)
+        raise
+    await after_session_runtime_started(user, session_id, action="session.device_preset.recreate")
     await _activate_file_capture(session_id)
     fp_response = await _with_runtime_health(session_id, fp_profile)
     return {"ok": True, "devicePreset": body.preset, "fingerprintProfile": fp_response}
@@ -1330,16 +1383,22 @@ async def change_network_egress(
     invalidate_session_cache(session_id)
     await stop_download_watcher(session_id)
     await assert_tenant_runtime_allowed(_row_get(row, "tenant_id") or user.tenant_id, exclude_session_id=session_id)
-    await recreate_container(
-        session_id,
-        width=preset_data["width"],
-        height=preset_data["height"],
-        user_agent=fp_ua,
-        proxy=effective_egress.proxy_url or None,
-        fingerprint_profile=fp_profile,
-        browser_lang=row["browser_lang"] or "zh-CN",
-        image_name=image_name,
-    )
+    await before_session_runtime_start(user, session_id, action="session.network_egress.recreate")
+    try:
+        await recreate_container(
+            session_id,
+            width=preset_data["width"],
+            height=preset_data["height"],
+            user_agent=fp_ua,
+            proxy=effective_egress.proxy_url or None,
+            fingerprint_profile=fp_profile,
+            browser_lang=row["browser_lang"] or "zh-CN",
+            image_name=image_name,
+        )
+    except Exception as exc:
+        await after_session_runtime_start_failed(user, session_id, action="session.network_egress.recreate", error=exc)
+        raise
+    await after_session_runtime_started(user, session_id, action="session.network_egress.recreate")
     await _activate_file_capture(session_id)
     fp_response = await _with_runtime_health(session_id, fp_profile)
     return {
@@ -1398,16 +1457,22 @@ async def regenerate_fingerprint(session_id: str, body: FingerprintActionBody, u
 
     await stop_download_watcher(session_id)
     await assert_tenant_runtime_allowed(_row_get(row, "tenant_id") or user.tenant_id, exclude_session_id=session_id)
-    await recreate_container(
-        session_id,
-        width=preset_data["width"],
-        height=preset_data["height"],
-        user_agent=fp_ua,
-        proxy=proxy,
-        fingerprint_profile=fp_profile,
-        browser_lang=row["browser_lang"] or "zh-CN",
-        image_name=image_name,
-    )
+    await before_session_runtime_start(user, session_id, action="session.fingerprint.recreate")
+    try:
+        await recreate_container(
+            session_id,
+            width=preset_data["width"],
+            height=preset_data["height"],
+            user_agent=fp_ua,
+            proxy=proxy,
+            fingerprint_profile=fp_profile,
+            browser_lang=row["browser_lang"] or "zh-CN",
+            image_name=image_name,
+        )
+    except Exception as exc:
+        await after_session_runtime_start_failed(user, session_id, action="session.fingerprint.recreate", error=exc)
+        raise
+    await after_session_runtime_started(user, session_id, action="session.fingerprint.recreate")
     await _activate_file_capture(session_id)
     fp_response = await _with_runtime_health(session_id, fp_profile)
     return {
@@ -1426,7 +1491,13 @@ async def regenerate_fingerprint(session_id: str, body: FingerprintActionBody, u
 async def refresh_network_profile(session_id: str, user: CurrentUser = Depends(get_session_aware_user)):
     await verify_session_access(session_id, user)
     await assert_tenant_runtime_allowed(user.tenant_id, exclude_session_id=session_id)
-    runtime_ports = await ensure_container_running(session_id)
+    await before_session_runtime_start(user, session_id, action="session.network_profile.refresh")
+    try:
+        runtime_ports = await ensure_container_running(session_id)
+    except Exception as exc:
+        await after_session_runtime_start_failed(user, session_id, action="session.network_profile.refresh", error=exc)
+        raise
+    await after_session_runtime_started(user, session_id, action="session.network_profile.refresh")
     await _activate_file_capture(session_id)
     observed = await resolve_network_via_browser(runtime_ports, session_id=session_id, mode="deep")
     observed_payload = _stable_network_payload(observed)

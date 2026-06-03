@@ -116,6 +116,42 @@ def test_create_session_binds_network_timezone_without_changing_browser_lang(mon
     assert profile["navigator"]["languages"] == ["fr-FR", "fr", "en"]
 
 
+def test_create_session_does_not_consume_running_session_quota(monkeypatch):
+    pool = FakePool([
+        {"chrome_version": "147.0.0.0", "image_tag": "browser-pilot:test"},
+    ])
+    calls = []
+    monkeypatch.setattr(sessions, "get_pool", lambda: pool)
+    monkeypatch.setattr(sessions, "_generate_session_id", lambda: "session-1")
+
+    async def fake_before_session_create(user, body):
+        calls.append(("before_session_create", user.tenant_id, body.name))
+
+    async def fail_runtime_quota_check(*_args, **_kwargs):
+        raise AssertionError("creating an idle session must not check concurrent runtime quota")
+
+    async def fake_network(proxy_url, image_tag):
+        return _network()
+
+    async def fake_generate_profile(tenant_id, browser_lang, chrome_version=None):
+        return _profile(browser_lang)
+
+    monkeypatch.setattr(sessions, "before_session_create", fake_before_session_create)
+    monkeypatch.setattr(sessions, "assert_tenant_runtime_allowed", fail_runtime_quota_check)
+    monkeypatch.setattr(sessions, "_resolve_session_network", fake_network)
+    monkeypatch.setattr(sessions, "generate_profile", fake_generate_profile)
+
+    result = asyncio.run(
+        sessions.create_session(
+            sessions.CreateSessionBody(name="quota-safe-create"),
+            _user(),
+        )
+    )
+
+    assert result["id"] == "session-1"
+    assert calls == [("before_session_create", "tenant-1", "quota-safe-create")]
+
+
 def test_create_session_retries_short_id_collision(monkeypatch):
     pool = FakePool([
         {"chrome_version": "147.0.0.0", "image_tag": "browser-pilot:test"},
@@ -452,6 +488,78 @@ def test_start_session_container_is_not_lease_gated(monkeypatch):
     assert result["agentDevice"]["leaseId"] is None
     assert result["agentDevice"]["currentOperator"] is None
     assert result["agentDevice"]["action"] == "session.container.start"
+
+
+@pytest.mark.parametrize(
+    ("route_name", "failing_hook"),
+    [
+        ("start_session_container", "assert_tenant_runtime_allowed"),
+        ("start_session_container", "before_session_runtime_start"),
+        ("unpause_session_container", "assert_tenant_runtime_allowed"),
+        ("unpause_session_container", "before_session_runtime_start"),
+    ],
+)
+def test_runtime_quota_http_exception_is_not_wrapped_as_action_failure(monkeypatch, route_name, failing_hook):
+    detail = {
+        "reason": "quota_exceeded",
+        "metric": "browser.runtime_seconds.monthly",
+        "limit": 3600,
+        "used": 3600,
+    }
+
+    async def fake_verify(_session_id, _user):
+        return None
+
+    async def fake_begin_control_action(session_id, user, *, action, side_effect_level):
+        return sessions.agent_devices.AgentDeviceActionContext(
+            session_id=session_id,
+            action=action,
+            actor=f"user:{user.id}",
+            actor_owner_user_id=user.id,
+            lease=None,
+            side_effect_level=side_effect_level,
+        )
+
+    async def fake_begin_compatible_action(session_id, user, *, action, side_effect_level):
+        return (
+            sessions.agent_devices.AgentDeviceActionContext(
+                session_id=session_id,
+                action=action,
+                actor=f"user:{user.id}",
+                actor_owner_user_id=user.id,
+                lease=None,
+                side_effect_level=side_effect_level,
+            ),
+            None,
+        )
+
+    async def fake_runtime_allowed(*_args, **_kwargs):
+        if failing_hook == "assert_tenant_runtime_allowed":
+            raise sessions.HTTPException(status_code=429, detail=detail)
+
+    async def fake_before_runtime_start(*_args, **_kwargs):
+        if failing_hook == "before_session_runtime_start":
+            raise sessions.HTTPException(status_code=429, detail=detail)
+
+    async def fail_ensure_container_running(*_args, **_kwargs):
+        raise AssertionError("quota errors must stop before runtime startup")
+
+    async def fail_action_failure(*_args, **_kwargs):
+        raise AssertionError("quota HTTPException must not be wrapped as action failure")
+
+    monkeypatch.setattr(sessions, "verify_session_access", fake_verify)
+    monkeypatch.setattr(sessions, "assert_tenant_runtime_allowed", fake_runtime_allowed)
+    monkeypatch.setattr(sessions, "before_session_runtime_start", fake_before_runtime_start)
+    monkeypatch.setattr(sessions, "ensure_container_running", fail_ensure_container_running)
+    monkeypatch.setattr(sessions.agent_devices, "begin_control_action", fake_begin_control_action)
+    monkeypatch.setattr(sessions.agent_devices, "begin_compatible_action", fake_begin_compatible_action)
+    monkeypatch.setattr(sessions.agent_devices, "fail_compatible_action", fail_action_failure)
+
+    with pytest.raises(sessions.HTTPException) as exc:
+        asyncio.run(getattr(sessions, route_name)("session-1", _user()))
+
+    assert exc.value.status_code == 429
+    assert exc.value.detail == detail
 
 
 def test_regenerate_fingerprint_preserves_network_and_does_not_fallback_to_utc(monkeypatch):

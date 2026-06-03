@@ -7,7 +7,7 @@ import { useSessions } from '../composables/useSessions'
 import { useAuth } from '../composables/useAuth'
 import {
   LayoutGrid, Settings, Users, SquareTerminal, LogOut, Languages, User as UserIcon, FolderOpen,
-  Sun, Moon, ShieldCheck
+  Sun, Moon, ShieldCheck, CreditCard
 } from 'lucide-vue-next'
 import { useDark, useToggle } from '@vueuse/core'
 import {
@@ -29,6 +29,7 @@ const toggleDark = useToggle(isDark)
 const showUsersLink = computed(() =>
   user.value && (user.value.role === 'superadmin' || user.value.role === 'admin'),
 )
+const showBillingLink = computed(() => __EE__)
 
 async function handleLogout() {
   await logout()
@@ -153,6 +154,10 @@ function toggleLocale() {
           <DropdownMenuItem @click="router.push('/account')" class="cursor-pointer">
             <UserIcon class="size-4 mr-2" />
             {{ t('auth.accountSettings') }}
+          </DropdownMenuItem>
+          <DropdownMenuItem v-if="showBillingLink" @click="router.push('/billing')" class="cursor-pointer">
+            <CreditCard class="size-4 mr-2" />
+            {{ t('billing.nav') }}
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem @click="handleLogout" class="cursor-pointer text-destructive focus:text-destructive">

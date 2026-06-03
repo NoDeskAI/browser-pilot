@@ -5,11 +5,18 @@ import json
 import logging
 import random
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 from typing import Any
 
 import httpx
 
 from app.config import BROWSER_HOME_URL
+from app.edition import (
+    after_session_runtime_start_failed,
+    after_session_runtime_started,
+    assert_tenant_runtime_allowed,
+    before_session_runtime_start,
+)
 from app.runtime_provider import (
     BROWSER_RUNTIME_CLOAK,
     BROWSER_RUNTIME_STANDARD,
@@ -24,6 +31,14 @@ from app.tools.browser.scripts import OBSERVE_SCRIPT, get_stealth_script
 logger = logging.getLogger("browser.session")
 
 _client: httpx.AsyncClient | None = None
+
+
+async def _session_runtime_actor(chat_session_id: str) -> SimpleNamespace:
+    pool = get_pool()
+    row = await pool.fetchrow("SELECT tenant_id, user_id FROM sessions WHERE id = $1", chat_session_id)
+    tenant_id = row["tenant_id"] if row else None
+    user_id = row["user_id"] if row else None
+    return SimpleNamespace(id=user_id, tenant_id=tenant_id)
 
 
 def _response_preview(text: str, limit: int = 240) -> str:
@@ -326,7 +341,16 @@ async def ensure_session(chat_session_id: str) -> tuple[str, str]:
 
     bs = _sessions[chat_session_id]
 
-    await ensure_container_running(chat_session_id)
+    runtime_actor = await _session_runtime_actor(chat_session_id)
+    if runtime_actor.tenant_id:
+        await assert_tenant_runtime_allowed(runtime_actor.tenant_id, exclude_session_id=chat_session_id)
+    await before_session_runtime_start(runtime_actor, chat_session_id, action="browser.ensure_session")
+    try:
+        await ensure_container_running(chat_session_id)
+    except Exception as exc:
+        await after_session_runtime_start_failed(runtime_actor, chat_session_id, action="browser.ensure_session", error=exc)
+        raise
+    await after_session_runtime_started(runtime_actor, chat_session_id, action="browser.ensure_session")
     bs.selenium_base = await resolve_selenium_base_url(chat_session_id)
 
     async with bs.lock:

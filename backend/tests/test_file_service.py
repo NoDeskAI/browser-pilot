@@ -62,6 +62,7 @@ class FakePool:
             "session-1": {"tenant_id": "tenant-1", "user_id": "user-1", "name": "Session 1"},
             "session-2": {"tenant_id": "tenant-2", "user_id": "user-2", "name": "Session 2"},
             "session-3": {"tenant_id": "tenant-1", "user_id": "user-2", "name": "Session 3"},
+            "session-system": {"tenant_id": "tenant-1", "user_id": None, "name": "System Session"},
         }
         self._created_count = 0
 
@@ -234,7 +235,29 @@ def test_save_bytes_creates_file_record_and_signed_backend_url(monkeypatch):
         parts["signature"],
     )
     assert "object-storage:9000" not in result["url"]
-    assert row["object_key"] == f"files/session-1/{result['id']}/screenshot.png"
+    assert row["object_key"] == f"files/tenants/tenant-1/users/user-1/sessions/session-1/{result['id']}/screenshot.png"
+    assert store.objects[row["object_key"]] == (b"png-bytes", "image/png")
+
+
+def test_save_bytes_without_user_uses_tenant_session_object_key(monkeypatch):
+    store = FakeStore()
+    pool = FakePool()
+    monkeypatch.setattr(file_service, "get_store", lambda: asyncio.sleep(0, store))
+    monkeypatch.setattr(file_service, "get_pool", lambda: pool)
+
+    result = asyncio.run(
+        file_service.save_bytes(
+            session_id="session-system",
+            source="screenshot",
+            data=b"png-bytes",
+            filename="screenshot.png",
+            content_type="image/png",
+        )
+    )
+
+    row = pool.rows[result["id"]]
+    assert row["user_id"] is None
+    assert row["object_key"] == f"files/tenants/tenant-1/sessions/session-system/{result['id']}/screenshot.png"
     assert store.objects[row["object_key"]] == (b"png-bytes", "image/png")
 
 

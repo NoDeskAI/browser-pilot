@@ -14,6 +14,7 @@ from app.auth.jwt import create_access_token
 from app.auth.password import hash_password, verify_password
 from app.config import REMEMBER_ME_DAYS
 from app.db import get_pool
+from app.edition import after_tenant_setup
 
 logger = logging.getLogger("auth.routes")
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -224,6 +225,8 @@ async def setup(body: SetupBody):
         "UPDATE sessions SET tenant_id = $1, user_id = $2 WHERE tenant_id IS NULL",
         tenant_id, user_id,
     )
+
+    await after_tenant_setup(tenant_id=tenant_id, user_id=user_id)
 
     token = create_access_token(user_id, tenant_id, "superadmin")
     logger.info("Setup completed: tenant=%s user=%s", tenant_id, user_id)

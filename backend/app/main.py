@@ -29,7 +29,7 @@ from app.routes.agent_devices import router as agent_devices_router
 from app.routes.fingerprint_pool import router as fp_pool_router
 from app.routes.browser_images import router as browser_images_router
 from app.routes.network_egress import router as network_egress_router
-from app.edition import register_ee
+from app.edition import register_ee, start_ee_services, stop_ee_services
 
 setup_logging()
 logger = logging.getLogger("access")
@@ -40,10 +40,12 @@ validate_runtime_provider_config()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_task = asyncio.create_task(db.init_db())
+    await start_ee_services(app)
     yield
     from app.download_watcher import stop_all_download_watchers
 
     await stop_all_download_watchers()
+    await stop_ee_services(app)
     init_task.cancel()
     with contextlib.suppress(asyncio.CancelledError):
         await init_task

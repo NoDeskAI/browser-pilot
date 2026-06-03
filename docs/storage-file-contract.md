@@ -123,11 +123,19 @@ FileStore 是文件产物的唯一持久化抽象。
 - Builtin 模式返回带签名的后端 `/api/files/...` URL。
 - S3 模式返回后端生成的 S3 预签名 URL，使用公开可访问的 `s3PublicEndpoint`；不能向浏览器暴露 `http://minio:9000` 这类部署内部对象存储地址。
 
-S3 模式下，S3 对象 key 建议包含 session 维度：
+S3 模式下，S3 对象 key 建议包含 tenant / user / session 维度：
 
 ```text
-files/{sessionId}/{fileId}/{filename}
+files/tenants/{tenantId}/users/{userId}/sessions/{sessionId}/{fileId}/{filename}
 ```
+
+系统生成且没有用户归属的文件省略 user 层：
+
+```text
+files/tenants/{tenantId}/sessions/{sessionId}/{fileId}/{filename}
+```
+
+历史对象 key `files/{sessionId}/{fileId}/{filename}` 继续通过 `session_files.object_key` 读取和删除。
 
 ## UI / API 要求
 
