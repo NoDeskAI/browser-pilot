@@ -80,6 +80,7 @@ const LANG_OPTIONS = [
 ]
 const reconnectExhausted = ref(false)
 const viewerMode = ref<'control' | 'view'>('control')
+const preferredViewerMode = ref<'control' | 'view'>('control')
 const controlViewerError = ref('')
 const controlSwitchError = ref('')
 const switchingControl = ref(false)
@@ -242,7 +243,15 @@ async function readApiError(resp: Response, fallback: string): Promise<string> {
   }
 }
 
-async function fetchViewerUrl(): Promise<string> {
+async function fetchViewerUrl(mode: 'control' | 'view' = preferredViewerMode.value): Promise<string> {
+  if (mode === 'view') {
+    const ticket = await requestViewerTicket('view')
+    viewerMode.value = 'view'
+    viewOnly.value = true
+    inputBarOpen.value = false
+    connectionError.value = ''
+    return ticket.url
+  }
   try {
     const ticket = await requestViewerTicket('control')
     viewerMode.value = ticket.mode
@@ -271,7 +280,7 @@ function retryConnect() {
   }
 }
 
-async function connectRFB() {
+async function connectRFB(mode: 'control' | 'view' = preferredViewerMode.value) {
   const serial = ++connectSerial
   if (rfb) {
     try { rfb.disconnect() } catch { /* already disconnected */ }
@@ -284,7 +293,7 @@ async function connectRFB() {
 
   let wsUrl = ''
   try {
-    wsUrl = await fetchViewerUrl()
+    wsUrl = await fetchViewerUrl(mode)
   } catch (err: any) {
     connectionError.value = err?.message || t('vnc.requestFailed', { status: 0 })
     if (serial === connectSerial) retryConnect()
@@ -369,7 +378,7 @@ function manualReconnect() {
 function scheduleReconnect() {
   if (reconnectTimer) clearTimeout(reconnectTimer)
   reconnectTimer = setTimeout(() => {
-    if (!connected.value) void connectRFB()
+    if (!connected.value) void connectRFB(preferredViewerMode.value)
   }, 3000)
 }
 
@@ -457,6 +466,7 @@ async function switchToControl() {
   switchingControl.value = true
   controlSwitchError.value = ''
   try {
+    preferredViewerMode.value = 'control'
     const resp = await api(`/api/agent-devices/${encodeURIComponent(props.sessionId)}/reclaim`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -467,11 +477,12 @@ async function switchToControl() {
     }
     viewOnly.value = false
     await fetchSessions().catch(() => undefined)
-    await connectRFB()
+    await connectRFB('control')
     if (viewerMode.value !== 'control') {
       throw new Error(controlViewerError.value || t('vnc.controlSwitchStillReadOnly'))
     }
   } catch (err: any) {
+    preferredViewerMode.value = 'view'
     viewOnly.value = true
     if (rfb) rfb.viewOnly = true
     controlSwitchError.value = err?.message || t('vnc.controlSwitchFailed')
@@ -482,13 +493,48 @@ async function switchToControl() {
   }
 }
 
+async function releaseControlToViewOnly() {
+  if (switchingControl.value) return
+  const leaseId = activeSession.value?.activeLease?.leaseId || activeSession.value?.activeLease?.id
+  if (!leaseId) {
+    preferredViewerMode.value = 'view'
+    viewOnly.value = true
+    await connectRFB('view')
+    return
+  }
+
+  switchingControl.value = true
+  controlSwitchError.value = ''
+  try {
+    const resp = await api(`/api/agent-devices/${encodeURIComponent(props.sessionId)}/leases/${encodeURIComponent(leaseId)}/release`, {
+      method: 'POST',
+    })
+    if (!resp.ok) {
+      throw new Error(await readApiError(resp, t('vnc.controlReleaseFailed')))
+    }
+    preferredViewerMode.value = 'view'
+    viewOnly.value = true
+    inputBarOpen.value = false
+    await fetchSessions().catch(() => undefined)
+    await connectRFB('view')
+  } catch (err: any) {
+    preferredViewerMode.value = 'control'
+    viewOnly.value = false
+    if (rfb) rfb.viewOnly = false
+    controlSwitchError.value = err?.message || t('vnc.controlReleaseFailed')
+    const { toast } = await import('vue-sonner')
+    toast.error(t('vnc.controlReleaseFailedReason', { reason: controlSwitchError.value }))
+  } finally {
+    switchingControl.value = false
+  }
+}
+
 function toggleViewOnly() {
   if (viewerMode.value === 'view') {
     void switchToControl()
     return
   }
-  viewOnly.value = !viewOnly.value
-  if (rfb) rfb.viewOnly = viewOnly.value
+  void releaseControlToViewOnly()
 }
 
 function onControlTogglePointerUp(event: PointerEvent) {

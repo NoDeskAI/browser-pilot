@@ -277,6 +277,8 @@ export default {
     controlSwitchFailed: '无法切换到交互模式',
     controlSwitchFailedReason: '无法切换到交互模式：{reason}',
     controlSwitchStillReadOnly: '回收后仍未拿到控制 viewer ticket',
+    controlReleaseFailed: '无法切换到只读模式',
+    controlReleaseFailedReason: '无法切换到只读模式：{reason}',
     exitFullscreen: '退出',
     fullscreen: '全屏',
     exitFullscreenTitle: '退出全屏',

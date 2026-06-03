@@ -277,6 +277,8 @@ export default {
     controlSwitchFailed: 'Could not switch to interactive mode',
     controlSwitchFailedReason: 'Could not switch to interactive mode: {reason}',
     controlSwitchStillReadOnly: 'Control viewer ticket was still unavailable after reclaim',
+    controlReleaseFailed: 'Could not switch to view-only mode',
+    controlReleaseFailedReason: 'Could not switch to view-only mode: {reason}',
     exitFullscreen: 'Exit',
     fullscreen: 'Fullscreen',
     exitFullscreenTitle: 'Exit fullscreen',
