@@ -198,7 +198,7 @@ Session files are managed through the backend FileStore. Users and session-scope
 
 Browser Pilot runs Alembic migrations automatically when the backend starts. Normal upgrades only require restarting the new version; users do not need to run migration commands manually.
 
-If migration fails, the backend keeps `/healthz` alive but reports `/readyz` as unavailable and the frontend shows the database update error. Downgrades do not automatically roll back schema changes; use an app version compatible with the current database or restore a matching backup.
+If migration fails, the backend keeps `/healthz` alive but reports `/readyz` as unavailable and the frontend shows a generic service startup failure while detailed migration errors stay in backend logs. Downgrades do not automatically roll back schema changes; use an app version compatible with the current database or restore a matching backup.
 
 ### Browser Runtimes
 

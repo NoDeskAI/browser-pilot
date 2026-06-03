@@ -176,9 +176,6 @@ watch(() => brand.appTitle, (title) => {
             </div>
             <h1 class="text-base font-semibold">{{ bootstrapTitle }}</h1>
             <p class="mt-2 text-sm text-muted-foreground">{{ bootstrapDescription }}</p>
-            <p v-if="bootstrap.error" class="mt-4 break-words rounded-md bg-destructive/10 px-3 py-2 text-left text-xs text-destructive">
-              {{ bootstrap.error }}
-            </p>
             <p v-if="bootstrapFailed" class="mt-3 text-xs text-muted-foreground">{{ t('bootstrap.logsHint') }}</p>
           </div>
         </div>
