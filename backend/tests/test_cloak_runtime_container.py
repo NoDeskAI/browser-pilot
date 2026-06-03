@@ -17,3 +17,13 @@ def test_cloak_runtime_hides_container_chrome_artifacts():
     assert "(class=Chromium-browser)" in start
     assert "(class=Google-chrome)" in dockerfile
     assert "(class=Google-chrome)" in start
+
+
+def test_cloak_driver_recovers_crashed_targets_before_reusing_page():
+    root = Path(__file__).resolve().parents[2]
+    driver = (root / "services/cloak-chromium-runtime/bp_cloak_driver.py").read_text()
+
+    assert 'page.on("crash"' in driver
+    assert "def is_target_crash_error" in driver
+    assert "async def recover_page" in driver
+    assert "page = await state.recover_page()" in driver

@@ -109,3 +109,31 @@ def test_grid_ready_probe_ignores_proxy_environment(monkeypatch):
     asyncio.run(container._wait_grid_ready(4444))
 
     assert captured["trust_env"] is False
+
+
+def test_quick_observe_falls_back_to_current_page_when_dom_collection_fails(monkeypatch):
+    calls = []
+
+    async def fake_wd_fetch(url_path, method="GET", body=None, timeout=30.0, *, base_url=""):
+        calls.append((url_path, method, timeout, base_url))
+        if url_path.endswith("/execute/sync"):
+            raise RuntimeError("WebDriver Error: Page.evaluate: Target crashed ")
+        if url_path.endswith("/url"):
+            return "https://www.xiaohongshu.com/explore"
+        if url_path.endswith("/title"):
+            return "小红书"
+        raise AssertionError(f"unexpected WebDriver call: {url_path}")
+
+    monkeypatch.setattr(browser_session, "wd_fetch", fake_wd_fetch)
+
+    result = asyncio.run(browser_session.quick_observe("wd-1", base_url="http://selenium.local"))
+
+    assert result == {
+        "url": "https://www.xiaohongshu.com/explore",
+        "title": "小红书",
+        "elementCount": 0,
+        "observeFailed": True,
+    }
+    assert calls[0][0] == "/session/wd-1/execute/sync"
+    assert calls[1][0] == "/session/wd-1/url"
+    assert calls[2][0] == "/session/wd-1/title"

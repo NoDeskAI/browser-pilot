@@ -24,14 +24,39 @@ class DriverState:
         self.cdp = None
         self.started = False
         self.handles = {}
+        self.crashed_pages = set()
+        self.watched_pages = set()
         self.timeouts = {"script": 30000, "pageLoad": 60000, "implicit": 0}
 
     def reset_page_state(self) -> None:
         self.page = None
         self.cdp = None
         self.handles = {}
+        self.crashed_pages = set()
+        self.watched_pages = set()
+
+    def mark_page_crashed(self, page) -> None:
+        self.crashed_pages.add(id(page))
+        if page is self.page:
+            self.cdp = None
+
+    def mark_page_closed(self, page) -> None:
+        self.crashed_pages.discard(id(page))
+        if page is self.page:
+            self.cdp = None
+
+    def is_page_usable(self, page) -> bool:
+        return bool(page) and not page.is_closed() and id(page) not in self.crashed_pages
+
+    def watch_page(self, page) -> None:
+        if id(page) in self.watched_pages:
+            return
+        self.watched_pages.add(id(page))
+        page.on("crash", lambda *_args, _page=page: self.mark_page_crashed(_page))
+        page.on("close", lambda *_args, _page=page: self.mark_page_closed(_page))
 
     def handle_for_page(self, page) -> str:
+        self.watch_page(page)
         for handle, known_page in self.handles.items():
             if known_page is page:
                 return handle
@@ -43,9 +68,9 @@ class DriverState:
         if not self.context:
             return []
         for page in self.context.pages:
-            if not page.is_closed():
+            if self.is_page_usable(page):
                 self.handle_for_page(page)
-        return [(handle, page) for handle, page in self.handles.items() if not page.is_closed()]
+        return [(handle, page) for handle, page in self.handles.items() if self.is_page_usable(page)]
 
     def remember_new_page(self, page) -> None:
         self.handle_for_page(page)
@@ -54,8 +79,8 @@ class DriverState:
 
     async def ensure_started(self):
         async with self.lock:
-            if self.started and self.page and not self.page.is_closed():
-                return self.page
+            if self.started and self.context:
+                return self.page if self.page else (self.context.pages[0] if self.context.pages else None)
 
             width = int(os.getenv("SE_SCREEN_WIDTH", "1280") or "1280")
             height = int(os.getenv("SE_SCREEN_HEIGHT", "800") or "800")
@@ -98,10 +123,31 @@ class DriverState:
 
     async def active_page(self):
         page = await self.ensure_started()
-        if page.is_closed():
-            self.started = False
-            return await self.ensure_started()
+        if not self.is_page_usable(page):
+            return await self.recover_page()
         return page
+
+    async def recover_page(self, url: str | None = None):
+        await self.ensure_started()
+        previous = self.page
+        restore_url = (url or getattr(previous, "url", "") or "").strip()
+        if previous:
+            self.mark_page_crashed(previous)
+
+        for _handle, page in self.open_pages():
+            if self.is_page_usable(page):
+                self.page = page
+                self.cdp = None
+                await self.page.bring_to_front()
+                return self.page
+
+        self.page = await self.context.new_page()
+        self.handle_for_page(self.page)
+        self.cdp = None
+        if restore_url and not restore_url.startswith(("about:", "chrome:", "edge:")):
+            await self.page.goto(restore_url, wait_until="domcontentloaded", timeout=self.timeouts.get("pageLoad", 60000))
+        await self.page.bring_to_front()
+        return self.page
 
     async def active_cdp(self):
         await self.active_page()
@@ -232,7 +278,14 @@ async def get_url(_request: web.Request) -> web.Response:
 async def set_url(request: web.Request) -> web.Response:
     body = await request.json()
     page = await state.active_page()
-    await page.goto(body.get("url", "about:blank"), wait_until="domcontentloaded", timeout=60000)
+    url = body.get("url", "about:blank")
+    try:
+        await page.goto(url, wait_until="domcontentloaded", timeout=60000)
+    except Exception as exc:
+        if not is_target_crash_error(exc):
+            raise
+        page = await state.recover_page("about:blank")
+        await page.goto(url, wait_until="domcontentloaded", timeout=60000)
     return ok(None)
 
 
@@ -312,20 +365,41 @@ async def execute_sync(request: web.Request) -> web.Response:
     script = body.get("script") or ""
     args = body.get("args") or []
     page = await state.active_page()
-    result = await page.evaluate(
+    try:
+        result = await evaluate_script(page, script, args)
+    except Exception as exc:
+        if not is_target_crash_error(exc):
+            raise
+        page = await state.recover_page()
+        result = await evaluate_script(page, script, args)
+    return ok(result)
+
+
+async def screenshot(_request: web.Request) -> web.Response:
+    page = await state.active_page()
+    try:
+        data = await page.screenshot(type="png", full_page=False)
+    except Exception as exc:
+        if not is_target_crash_error(exc):
+            raise
+        page = await state.recover_page()
+        data = await page.screenshot(type="png", full_page=False)
+    return ok(base64.b64encode(data).decode("ascii"))
+
+
+def is_target_crash_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return "target crashed" in message or "page crashed" in message
+
+
+async def evaluate_script(page, script: str, args: list[Any]) -> Any:
+    return await page.evaluate(
         """([source, args]) => {
             const fn = new Function(...args.map((_, i) => `arg${i}`), source);
             return fn(...args);
         }""",
         [script, args],
     )
-    return ok(result)
-
-
-async def screenshot(_request: web.Request) -> web.Response:
-    page = await state.active_page()
-    data = await page.screenshot(type="png", full_page=False)
-    return ok(base64.b64encode(data).decode("ascii"))
 
 
 KEY_MAP = {
@@ -381,7 +455,14 @@ async def cdp_execute(request: web.Request) -> web.Response:
     if not cmd:
         return error("invalid argument", "Missing CDP cmd", 400)
     cdp = await state.active_cdp()
-    result = await cdp.send(cmd, params)
+    try:
+        result = await cdp.send(cmd, params)
+    except Exception as exc:
+        if not is_target_crash_error(exc):
+            raise
+        await state.recover_page()
+        cdp = await state.active_cdp()
+        result = await cdp.send(cmd, params)
     return ok(result)
 
 

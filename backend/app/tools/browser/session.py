@@ -478,7 +478,15 @@ async def quick_observe(sid: str, *, base_url: str) -> dict:
             "viewportOffset": vp_offset,
         }
     except Exception:
-        return {"url": "(observe failed)", "title": "", "elementCount": 0}
+        try:
+            url = await wd_fetch(f"/session/{sid}/url", timeout=5, base_url=base_url)
+        except Exception:
+            url = ""
+        try:
+            title = await wd_fetch(f"/session/{sid}/title", timeout=5, base_url=base_url)
+        except Exception:
+            title = ""
+        return {"url": url, "title": title, "elementCount": 0, "observeFailed": True}
 
 
 def human_key_actions(text: str) -> list[dict]:

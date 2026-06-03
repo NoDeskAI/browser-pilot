@@ -157,6 +157,7 @@ async def api_current(sessionId: str = Query(...), user: CurrentUser = Depends(g
         async with browser_session(sessionId) as (sid, base):
             url = await wd_fetch(f"/session/{sid}/url", timeout=5, base_url=base)
             title = await wd_fetch(f"/session/{sid}/title", timeout=5, base_url=base)
+        await _update_session_page(sessionId, url, title)
         return await agent_devices.complete_compatible_action(
             ctx,
             {"ok": True, "url": url, "title": title},
