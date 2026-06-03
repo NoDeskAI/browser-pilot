@@ -9,7 +9,7 @@ import AppHeader from './components/AppHeader.vue'
 import { Toaster } from '@/components/ui/sonner'
 import { toast } from 'vue-sonner'
 import { TooltipProvider } from '@/components/ui/tooltip'
-import { AlertTriangle, Database, Loader2 } from 'lucide-vue-next'
+import { Database, Loader2 } from 'lucide-vue-next'
 
 const route = useRoute()
 const router = useRouter()
@@ -22,26 +22,25 @@ const isAuthPage = computed(() => route.path === '/login' || route.path === '/se
 const ready = ref(false)
 const bootstrap = reactive({
   status: 'checking',
-  error: '',
-  currentRevision: '',
-  targetRevision: '',
 })
 const bootstrapReady = computed(() => bootstrap.status === 'ready')
-const bootstrapFailed = computed(() => bootstrap.status === 'migration_failed' || bootstrap.status === 'incompatible_schema')
-const showStartupScreen = computed(() => bootstrapFailed.value || !bootstrapReady.value || !ready.value)
+const bootstrapUnavailable = computed(() => (
+  bootstrap.status === 'service_unavailable' ||
+  bootstrap.status === 'migration_failed' ||
+  bootstrap.status === 'incompatible_schema'
+))
+const showStartupScreen = computed(() => bootstrapUnavailable.value || !bootstrapReady.value || !ready.value)
 const bootstrapTitle = computed(() => {
   if (bootstrap.status === 'checking') return t('bootstrap.checkingTitle')
   if (bootstrap.status === 'migrating') return t('bootstrap.migratingTitle')
-  if (bootstrap.status === 'migration_failed') return t('bootstrap.migrationFailedTitle')
-  if (bootstrap.status === 'incompatible_schema') return t('bootstrap.incompatibleTitle')
+  if (bootstrapUnavailable.value) return t('bootstrap.unavailableTitle')
   if (bootstrap.status === 'waiting_database') return t('bootstrap.waitingDatabaseTitle')
   return t('bootstrap.checkingTitle')
 })
 const bootstrapDescription = computed(() => {
   if (bootstrap.status === 'checking') return t('bootstrap.checkingDescription')
   if (bootstrap.status === 'migrating') return t('bootstrap.migratingDescription')
-  if (bootstrap.status === 'migration_failed') return t('bootstrap.migrationFailedDescription')
-  if (bootstrap.status === 'incompatible_schema') return t('bootstrap.incompatibleDescription')
+  if (bootstrapUnavailable.value) return t('bootstrap.unavailableDescription')
   if (bootstrap.status === 'waiting_database') return t('bootstrap.waitingDatabaseDescription')
   return t('bootstrap.checkingDescription')
 })
@@ -76,13 +75,9 @@ async function waitForBootstrap() {
       bootstrap.status = res.ok && (status === 'ready' || status === 'ok')
         ? 'ready'
         : (status || 'waiting_database')
-      bootstrap.error = db.error || ''
-      bootstrap.currentRevision = db.currentRevision || ''
-      bootstrap.targetRevision = db.targetRevision || ''
-      if (res.ok || bootstrapFailed.value) return
+      if (res.ok || bootstrapUnavailable.value) return
     } catch (err: any) {
       bootstrap.status = 'waiting_database'
-      bootstrap.error = err?.message || ''
     }
     await sleep(1500)
   }
@@ -125,7 +120,7 @@ function handleKeydown(e: KeyboardEvent) {
 onMounted(async () => {
   document.addEventListener('keydown', handleKeydown)
   await waitForBootstrap()
-  if (bootstrapFailed.value) return
+  if (bootstrapUnavailable.value) return
   await fetchBrand()
   if (!isAuthenticated.value) {
     await refreshAuth()
@@ -170,13 +165,11 @@ watch(() => brand.appTitle, (title) => {
         <div class="flex-1 flex items-center justify-center p-6">
           <div class="w-full max-w-md rounded-lg border bg-card p-6 text-center shadow-sm">
             <div class="mx-auto mb-4 flex size-11 items-center justify-center rounded-full bg-muted">
-              <AlertTriangle v-if="bootstrapFailed" class="size-5 text-destructive" />
-              <Loader2 v-else-if="bootstrap.status === 'migrating' || bootstrap.status === 'checking' || (bootstrapReady && !ready)" class="size-5 animate-spin text-muted-foreground" />
+              <Loader2 v-if="bootstrap.status === 'migrating' || bootstrap.status === 'checking' || (bootstrapReady && !ready)" class="size-5 animate-spin text-muted-foreground" />
               <Database v-else class="size-5 text-muted-foreground" />
             </div>
             <h1 class="text-base font-semibold">{{ bootstrapTitle }}</h1>
             <p class="mt-2 text-sm text-muted-foreground">{{ bootstrapDescription }}</p>
-            <p v-if="bootstrapFailed" class="mt-3 text-xs text-muted-foreground">{{ t('bootstrap.logsHint') }}</p>
           </div>
         </div>
       </template>

@@ -63,12 +63,27 @@ app.add_middleware(
 
 SKIP_LOG_PATHS = {"/api/docker/status", "/api/site-info", "/healthz", "/readyz"}
 DB_BOOTSTRAP_EXEMPT_PATHS = {"/api/site-info", "/healthz", "/readyz"}
+BLOCKED_BOOTSTRAP_STATUSES = {"migration_failed", "incompatible_schema"}
+
+
+def _public_bootstrap_state(state: dict) -> dict:
+    public_status = (
+        "service_unavailable"
+        if state.get("status") in BLOCKED_BOOTSTRAP_STATUSES
+        else state.get("status", "waiting_database")
+    )
+    return {
+        "status": public_status,
+        "attempt": state.get("attempt", 0),
+        "updatedAt": state.get("updatedAt", ""),
+    }
 
 
 def _bootstrap_response(status_code: int = 503) -> JSONResponse:
     state = db.get_bootstrap_state()
-    status = "ok" if state["status"] == "ready" else state["status"]
-    return JSONResponse({"status": status, "database": state}, status_code=status_code)
+    public_state = _public_bootstrap_state(state)
+    status = "ok" if public_state["status"] == "ready" else public_state["status"]
+    return JSONResponse({"status": status, "database": public_state}, status_code=status_code)
 
 
 @app.middleware("http")
