@@ -16,6 +16,26 @@ for _ in $(seq 1 50); do
   sleep 0.1
 done
 
+FLUXBOX_HOME="${HOME:-/root}"
+mkdir -p "$FLUXBOX_HOME/.fluxbox"
+cat > "$FLUXBOX_HOME/.fluxbox/apps" <<'EOF'
+[app] (class=Chromium-browser)
+  [Maximized] {yes}
+[end]
+[app] (class=Google-chrome)
+  [Maximized] {yes}
+[end]
+[app] (name=chromium-browser)
+  [Maximized] {yes}
+[end]
+[app] (name=google-chrome)
+  [Maximized] {yes}
+[end]
+EOF
+cat > "$FLUXBOX_HOME/.fluxbox/init" <<'EOF'
+session.screen0.toolbar.visible: false
+EOF
+
 fluxbox >/tmp/fluxbox.log 2>&1 &
 # Some fluxbox defaults can spawn an xmessage warning when no wallpaper setter
 # is available. It is harmless, but it covers the noVNC screen and looks like a

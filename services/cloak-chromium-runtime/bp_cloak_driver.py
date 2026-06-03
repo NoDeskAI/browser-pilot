@@ -71,6 +71,7 @@ class DriverState:
             args = [
                 f"--fingerprint={seed}",
                 f"--window-size={width},{height}",
+                "--test-type",
                 "--remote-allow-origins=*",
                 "--disable-session-crashed-bubble",
             ]
