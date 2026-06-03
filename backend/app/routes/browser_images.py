@@ -143,18 +143,24 @@ async def _docker_image_created_at(image_tag: str) -> str | None:
 async def _cloak_runtime_image_payload(session_count: int = 0) -> dict:
     image_tag = CLOAK_BROWSER_IMAGE_NAME
     docker_created_at = await _docker_image_created_at(image_tag)
-    if docker_created_at:
-        status = "ready"
-        build_log = _cloak_build_state.get("build_log") or "Image is available locally."
-        stage = "ready"
-        progress = 100
-    else:
-        status = _cloak_build_state.get("status") or "missing"
+    state_status = _cloak_build_state.get("status") or ""
+    if state_status in {"pending", "building", "failed"}:
+        status = state_status
         build_log = _cloak_build_state.get("build_log") or ""
         stage = _cloak_build_state.get("stage") or status
         progress = int(_cloak_build_state.get("progress") or 0)
         if status in {"pending", "building"}:
             progress = _estimated_progress(_elapsed_seconds(_cloak_build_state.get("started_at")), timeout=_CLOAK_BUILD_TIMEOUT)
+    elif docker_created_at:
+        status = "ready"
+        build_log = _cloak_build_state.get("build_log") or "Image is available locally."
+        stage = "ready"
+        progress = 100
+    else:
+        status = state_status or "missing"
+        build_log = _cloak_build_state.get("build_log") or ""
+        stage = _cloak_build_state.get("stage") or status
+        progress = int(_cloak_build_state.get("progress") or 0)
     return {
         "id": "cloak_chromium",
         "runtime": "cloak_chromium",
@@ -435,6 +441,7 @@ async def _do_build_cloak_runtime() -> None:
 class BuildBody(BaseModel):
     chromeVersion: str = ""
     runtime: Literal["standard_chrome", "cloak_chromium"] = "standard_chrome"
+    force: bool = False
 
 
 @router.post("/api/browser-images/cloak/build")
@@ -445,11 +452,11 @@ async def build_cloak_runtime_image(
     return await _start_cloak_runtime_build()
 
 
-async def _start_cloak_runtime_build():
+async def _start_cloak_runtime_build(force: bool = False):
     async with _cloak_build_lock:
         if _cloak_build_state.get("status") in {"pending", "building"}:
             raise HTTPException(409, "Cloak Chromium runtime image is already being built.")
-        if await _docker_image_exists(CLOAK_BROWSER_IMAGE_NAME):
+        if not force and await _docker_image_exists(CLOAK_BROWSER_IMAGE_NAME):
             return await _cloak_runtime_image_payload()
         _cloak_build_state.update(
             {
@@ -473,7 +480,7 @@ async def build_image(
 ):
     reject_browser_images_api()
     if body.runtime == "cloak_chromium":
-        return await _start_cloak_runtime_build()
+        return await _start_cloak_runtime_build(force=body.force)
 
     raw = body.chromeVersion.strip()
     if not raw:

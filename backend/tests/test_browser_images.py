@@ -288,8 +288,9 @@ def test_build_rejects_exact_ready_version_before_start(monkeypatch):
 def test_build_cloak_runtime_uses_existing_build_path(monkeypatch):
     called = {"count": 0}
 
-    async def fake_start_cloak_runtime_build():
+    async def fake_start_cloak_runtime_build(force=False):
         called["count"] += 1
+        assert force is False
         return {"id": "cloak_chromium", "status": "pending"}
 
     monkeypatch.setattr(browser_images, "_start_cloak_runtime_build", fake_start_cloak_runtime_build)
@@ -303,6 +304,40 @@ def test_build_cloak_runtime_uses_existing_build_path(monkeypatch):
 
     assert called["count"] == 1
     assert result == {"id": "cloak_chromium", "status": "pending"}
+
+
+def test_force_build_cloak_runtime_rebuilds_existing_image(monkeypatch):
+    _reset_cloak_state(monkeypatch)
+    queued = {"count": 0}
+
+    async def fake_image_exists(image_tag):
+        assert image_tag == browser_images.CLOAK_BROWSER_IMAGE_NAME
+        return True
+
+    async def fake_do_build():
+        raise AssertionError("build task should be queued, not awaited inline")
+
+    monkeypatch.setattr(browser_images, "_docker_image_exists", fake_image_exists)
+    monkeypatch.setattr(browser_images, "_do_build_cloak_runtime", fake_do_build)
+
+    def fake_create_task(coro):
+        queued["count"] += 1
+        coro.close()
+        return object()
+
+    monkeypatch.setattr(browser_images.asyncio, "create_task", fake_create_task)
+
+    result = asyncio.run(
+        browser_images.build_image(
+            browser_images.BuildBody(runtime="cloak_chromium", force=True),
+            _user(),
+        )
+    )
+
+    assert result["id"] == "cloak_chromium"
+    assert result["status"] == "pending"
+    assert result["buildProgress"]["stage"] == "queued"
+    assert queued["count"] == 1
 
 
 def test_delete_cloak_runtime_removes_local_image_and_resets_state(monkeypatch):

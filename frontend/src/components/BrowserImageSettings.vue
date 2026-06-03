@@ -148,13 +148,13 @@ watch(buildRuntime, (runtime) => {
 const canSubmitBuild = computed(() => {
   if (building.value) return false
   if (buildRuntime.value === 'standard_chrome') return !!buildVersion.value.trim()
-  return !cloakImage.value || canBuildRuntimeImage(cloakImage.value)
+  return !cloakImage.value || !['building', 'pending'].includes(cloakStatus.value)
 })
 
 const buildSubmitLabel = computed(() => {
   if (building.value) return t('browserImages.building')
   if (buildRuntime.value === 'cloak_chromium') {
-    if (cloakStatus.value === 'ready') return t('browserImages.ready')
+    if (cloakStatus.value === 'ready') return t('browserImages.rebuildCloak')
     if (cloakStatus.value === 'building' || cloakStatus.value === 'pending') return t('browserImages.isBuilding')
   }
   return t('browserImages.buildNew')
@@ -184,7 +184,7 @@ async function requestBuild(runtime: ImageRuntime, chromeVersion = '') {
   building.value = true
   try {
     const body = runtime === 'cloak_chromium'
-      ? { runtime }
+      ? { runtime, force: cloakStatus.value === 'ready' }
       : { runtime, chromeVersion: chromeVersion.trim() }
     const res = await api('/api/browser-images/build', {
       method: 'POST',
@@ -285,7 +285,7 @@ function showBuildProgress(img: ImageRow) {
 }
 
 function canBuildRuntimeImage(img: ImageRow) {
-  return img.runtime === 'cloak_chromium' && !['ready', 'building', 'pending'].includes(img.status)
+  return img.runtime === 'cloak_chromium' && !['building', 'pending'].includes(img.status)
 }
 
 function buildRuntimeActionLabel(img: ImageRow) {
