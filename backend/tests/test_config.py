@@ -1,3 +1,5 @@
+import importlib
+
 import pytest
 
 from app import config
@@ -27,6 +29,18 @@ def test_require_database_url_reports_missing_value(monkeypatch):
     message = str(exc.value)
     assert "DATABASE_URL is not set" in message
     assert "Copy .env.example to .env" in message
+
+
+def test_minio_region_uses_environment(monkeypatch):
+    monkeypatch.setenv("MINIO_REGION", "cn-beijing")
+    reloaded = importlib.reload(config)
+
+    try:
+        assert reloaded.MINIO_REGION == "cn-beijing"
+        assert reloaded.BUNDLED_S3_REGION == "cn-beijing"
+    finally:
+        monkeypatch.delenv("MINIO_REGION", raising=False)
+        importlib.reload(config)
 
 
 def _set_valid_production_public_config(monkeypatch):
