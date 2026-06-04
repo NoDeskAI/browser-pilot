@@ -52,7 +52,7 @@ function toggleLocale() {
           class="size-7 object-contain mix-blend-multiply dark:invert dark:mix-blend-screen"
         />
         <span class="text-sm font-semibold truncate">{{ brand.appTitle }}</span>
-        <Badge v-if="brand.edition === 'ee'" variant="outline" class="text-[10px] uppercase px-1 hidden sm:inline-flex">EE</Badge>
+        <Badge v-if="brand.edition === 'ee'" variant="outline" class="text-[10px] px-1 hidden sm:inline-flex">Cloud</Badge>
       </div>
 
       <nav class="flex items-center gap-1 shrink-0">
