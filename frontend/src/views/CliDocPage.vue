@@ -52,7 +52,8 @@ function setupBlockEn(c: string, url: string, installShell: string): string {
     ? `\n# Verify API reachability and token auth.\n${c} session list`
     : ''
   return `# Cursor/Agent: run this whole block before any ${c} command in every fresh workspace, container, or shell session.
-command -v ${c} >/dev/null 2>&1 || ${installShell}
+# Refresh the local CLI so stale ${c} wrappers left in PATH do not hide new commands.
+${installShell}
 ${c} config set api-url "${url}"${tokenConfig}
 ${c} config show${verify}`
 }
@@ -65,7 +66,8 @@ function setupBlockZh(c: string, url: string, installShell: string): string {
     ? `\n# 验证 API 连通性和 Token 认证。\n${c} session list`
     : ''
   return `# Cursor/Agent：在每个新的工作区、容器或 shell session 开始时，先完整运行本段，再执行任何 ${c} 命令。
-command -v ${c} >/dev/null 2>&1 || ${installShell}
+# 这会刷新本地 CLI，避免 PATH 中残留旧版 ${c} wrapper。
+${installShell}
 ${c} config set api-url "${url}"${tokenConfig}
 ${c} config show${verify}`
 }
@@ -80,6 +82,8 @@ ${c} session create --name "Task" --runtime cloak_chromium # Create with Cloak C
 ${c} session use <session-id>        # Activate session
 ${c} session start <session-id>      # Start browser container
 ${c} session stop <session-id>       # Stop browser container
+${c} session pause <session-id>      # Hibernate browser container
+${c} session unpause <session-id>    # Resume hibernated browser container
 ${c} session set-network <egress-id|direct> # Switch active session network egress
 ${c} session delete <session-id>     # Delete session; completed files are kept in Files
 ${c} session delete <session-id> --delete-files # Also delete all completed files
@@ -173,6 +177,8 @@ ${c} session create --name "任务" --runtime cloak_chromium # 使用 Cloak Chro
 ${c} session use <session-id>        # 激活会话
 ${c} session start <session-id>      # 启动浏览器容器
 ${c} session stop <session-id>       # 停止浏览器容器
+${c} session pause <session-id>      # 休眠浏览器容器
+${c} session unpause <session-id>    # 恢复已休眠浏览器容器
 ${c} session set-network <egress-id|direct> # 切换当前会话网络出口
 ${c} session delete <session-id>     # 删除会话，已完成文件保留到文件页
 ${c} session delete <session-id> --delete-files # 同时删除全部已完成文件
@@ -383,6 +389,8 @@ ${c} session create --name "Task" --network-egress <egress-id|direct> --json # C
 ${c} session create --name "Task" --runtime cloak_chromium --json # Create with Cloak Chromium runtime
 ${c} --session "<session-id>" session start      # Start browser container
 ${c} --session "<session-id>" session stop       # Stop browser container
+${c} --session "<session-id>" session pause      # Hibernate browser container
+${c} --session "<session-id>" session unpause    # Resume hibernated browser container
 ${c} --session "<session-id>" session set-network <egress-id|direct> # Switch network egress
 ${c} --session "<session-id>" session delete     # Delete session; completed files are kept in Files
 ${c} --session "<session-id>" session delete --delete-files # Also delete all completed files
@@ -472,6 +480,8 @@ ${c} session create --name "任务" --network-egress <egress-id|direct> --json #
 ${c} session create --name "任务" --runtime cloak_chromium --json # 使用 Cloak Chromium 运行时创建
 ${c} --session "<session-id>" session start      # 启动浏览器容器
 ${c} --session "<session-id>" session stop       # 停止浏览器容器
+${c} --session "<session-id>" session pause      # 休眠浏览器容器
+${c} --session "<session-id>" session unpause    # 恢复已休眠浏览器容器
 ${c} --session "<session-id>" session set-network <egress-id|direct> # 切换网络出口
 ${c} --session "<session-id>" session delete     # 删除会话，已完成文件保留到文件页
 ${c} --session "<session-id>" session delete --delete-files # 同时删除全部已完成文件

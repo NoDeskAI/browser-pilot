@@ -324,6 +324,16 @@ cmd_session_stop() {
   _api_post "/api/sessions/$sid/container/stop" | _out
 }
 
+cmd_session_pause() {
+  local sid="${1:-$(_sid)}"
+  _api_post "/api/sessions/$sid/container/pause" | _out
+}
+
+cmd_session_unpause() {
+  local sid="${1:-$(_sid)}"
+  _api_post "/api/sessions/$sid/container/unpause" | _out
+}
+
 cmd_session_delete() {
   local sid="" delete_files=false
   while [[ $# -gt 0 ]]; do
@@ -779,9 +789,11 @@ case "${1:-}" in
       use)      shift; cmd_session_use "$@" ;;
       start)    shift; cmd_session_start "$@" ;;
       stop)     shift; cmd_session_stop "$@" ;;
+      pause)    shift; cmd_session_pause "$@" ;;
+      unpause|resume) shift; cmd_session_unpause "$@" ;;
       set-network) shift; cmd_session_set_network "$@" ;;
       delete)   shift; cmd_session_delete "$@" ;;
-      *)        echo "Usage: $CLI_NAME session {list|create|use|start|stop|set-network|delete}" ;;
+      *)        echo "Usage: $CLI_NAME session {list|create|use|start|stop|pause|unpause|set-network|delete}" ;;
     esac
     ;;
   network-egress|network)
@@ -860,6 +872,8 @@ Sessions:
   session use <id>             Set active session
   session start <id>           Start browser container
   session stop <id>            Stop browser container
+  session pause <id>           Hibernate browser container
+  session unpause <id>         Resume hibernated browser container
   session set-network <id|direct>
                                Switch the target session network egress
   session delete <id>          Delete session and container; completed files are kept in Files
