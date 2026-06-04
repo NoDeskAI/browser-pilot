@@ -31,11 +31,24 @@ def test_require_database_url_reports_missing_value(monkeypatch):
     assert "Copy .env.example to .env" in message
 
 
-def test_minio_region_uses_environment(monkeypatch):
+def test_s3_region_uses_environment(monkeypatch):
+    monkeypatch.setenv("S3_REGION", "cn-beijing")
+    reloaded = importlib.reload(config)
+
+    try:
+        assert reloaded.S3_REGION == "cn-beijing"
+        assert reloaded.BUNDLED_S3_REGION == "cn-beijing"
+    finally:
+        monkeypatch.delenv("S3_REGION", raising=False)
+        importlib.reload(config)
+
+
+def test_legacy_minio_region_still_works(monkeypatch):
     monkeypatch.setenv("MINIO_REGION", "cn-beijing")
     reloaded = importlib.reload(config)
 
     try:
+        assert reloaded.S3_REGION == "cn-beijing"
         assert reloaded.MINIO_REGION == "cn-beijing"
         assert reloaded.BUNDLED_S3_REGION == "cn-beijing"
     finally:

@@ -26,6 +26,14 @@ def _env(key: str, default: str) -> str:
     return os.getenv(key, default)
 
 
+def _env_first(keys: tuple[str, ...], default: str) -> str:
+    for key in keys:
+        value = _env(key, "")
+        if value:
+            return value
+    return default
+
+
 DATABASE_URL = _env("DATABASE_URL", "")
 
 
@@ -63,23 +71,37 @@ CLI_COMMAND_NAME = _env("CLI_COMMAND_NAME", "bpilot")
 CONTAINER_PREFIX = _env("CONTAINER_PREFIX", "bp")
 BROWSER_GL_MODE = _env("BROWSER_GL_MODE", "auto")
 
-# --- Bundled S3-compatible storage bootstrap ---
+# --- S3-compatible storage bootstrap ---
 
-MINIO_STORAGE_BOOTSTRAP = _env("MINIO_STORAGE_BOOTSTRAP", "").lower() in {"1", "true", "yes", "on"}
-MINIO_ROOT_USER = _env("MINIO_ROOT_USER", "")
-MINIO_ROOT_PASSWORD = _env("MINIO_ROOT_PASSWORD", "")
-MINIO_BUCKET = _env("MINIO_BUCKET", "")
-MINIO_ENDPOINT = _env("MINIO_ENDPOINT", "http://localhost:9000")
-MINIO_PUBLIC_ENDPOINT = _env("MINIO_PUBLIC_ENDPOINT", MINIO_ENDPOINT)
-MINIO_REGION = _env("MINIO_REGION", "us-east-1")
+S3_STORAGE_BOOTSTRAP = _env_first(("S3_STORAGE_BOOTSTRAP", "MINIO_STORAGE_BOOTSTRAP"), "").lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+S3_ACCESS_KEY = _env_first(("S3_ACCESS_KEY", "MINIO_ROOT_USER"), "")
+S3_SECRET_KEY = _env_first(("S3_SECRET_KEY", "MINIO_ROOT_PASSWORD"), "")
+S3_BUCKET = _env_first(("S3_BUCKET", "MINIO_BUCKET"), "")
+S3_ENDPOINT = _env_first(("S3_ENDPOINT", "MINIO_ENDPOINT"), "http://localhost:9000")
+S3_PUBLIC_ENDPOINT = _env_first(("S3_PUBLIC_ENDPOINT", "MINIO_PUBLIC_ENDPOINT"), S3_ENDPOINT)
+S3_REGION = _env_first(("S3_REGION", "MINIO_REGION"), "us-east-1")
 
-BUNDLED_S3_STORAGE_BOOTSTRAP = MINIO_STORAGE_BOOTSTRAP
-BUNDLED_S3_ACCESS_KEY = MINIO_ROOT_USER
-BUNDLED_S3_SECRET_KEY = MINIO_ROOT_PASSWORD
-BUNDLED_S3_BUCKET = MINIO_BUCKET
-BUNDLED_S3_ENDPOINT = MINIO_ENDPOINT
-BUNDLED_S3_PUBLIC_ENDPOINT = MINIO_PUBLIC_ENDPOINT
-BUNDLED_S3_REGION = MINIO_REGION
+# Legacy MinIO-named aliases are kept so existing deployments do not break.
+MINIO_STORAGE_BOOTSTRAP = S3_STORAGE_BOOTSTRAP
+MINIO_ROOT_USER = S3_ACCESS_KEY
+MINIO_ROOT_PASSWORD = S3_SECRET_KEY
+MINIO_BUCKET = S3_BUCKET
+MINIO_ENDPOINT = S3_ENDPOINT
+MINIO_PUBLIC_ENDPOINT = S3_PUBLIC_ENDPOINT
+MINIO_REGION = S3_REGION
+
+BUNDLED_S3_STORAGE_BOOTSTRAP = S3_STORAGE_BOOTSTRAP
+BUNDLED_S3_ACCESS_KEY = S3_ACCESS_KEY
+BUNDLED_S3_SECRET_KEY = S3_SECRET_KEY
+BUNDLED_S3_BUCKET = S3_BUCKET
+BUNDLED_S3_ENDPOINT = S3_ENDPOINT
+BUNDLED_S3_PUBLIC_ENDPOINT = S3_PUBLIC_ENDPOINT
+BUNDLED_S3_REGION = S3_REGION
 
 
 def ensure_project_root_importable() -> None:
