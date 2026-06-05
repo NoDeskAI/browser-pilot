@@ -128,6 +128,29 @@
   h1, h2, h3, h4, h5, h6 {
     user-select: none;
   }
+  button,
+  button *,
+  label,
+  summary,
+  [role='button'],
+  [role='button'] *,
+  [role='tab'],
+  [role='tab'] *,
+  [role='menuitem'],
+  [role='menuitem'] *,
+  [role='option'],
+  [role='option'] *,
+  [data-slot='badge'],
+  [data-slot='table-head'],
+  [data-slot='card-title'],
+  [data-slot='card-description'],
+  [data-slot='dialog-title'],
+  [data-slot='dialog-description'],
+  [data-slot='alert-dialog-title'],
+  [data-slot='alert-dialog-description'],
+  kbd[data-slot='kbd'] {
+    user-select: none;
+  }
   body {
     @apply bg-background text-foreground font-sans;
     margin: 0;
