@@ -1,0 +1,63 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: browser-pilot-ee-saas-public-20260604
+  namespace: browser-pilot
+  labels:
+    app.kubernetes.io/name: browser-pilot
+    app.kubernetes.io/component: ingress
+    app.kubernetes.io/part-of: browser-pilot-ee-saas
+  annotations:
+    ingress.vke.volcengine.com/alb-instance-name: alb-browser-pilot-ee-saas-20260604
+    ingress.vke.volcengine.com/loadbalancer-backend-protocol: http
+    ingress.vke.volcengine.com/loadbalancer-healthcheck-domain: ""
+    ingress.vke.volcengine.com/loadbalancer-healthcheck-enabled: "true"
+    ingress.vke.volcengine.com/loadbalancer-healthcheck-httpcode: http_2xx,http_3xx
+    ingress.vke.volcengine.com/loadbalancer-healthcheck-interval: "2"
+    ingress.vke.volcengine.com/loadbalancer-healthcheck-method: GET
+    ingress.vke.volcengine.com/loadbalancer-healthcheck-path: /healthz
+    ingress.vke.volcengine.com/loadbalancer-healthcheck-protocol: http
+    ingress.vke.volcengine.com/loadbalancer-healthcheck-timeout: "2"
+    ingress.vke.volcengine.com/loadbalancer-healthy-threshold: "3"
+    ingress.vke.volcengine.com/loadbalancer-pass-through: "true"
+    ingress.vke.volcengine.com/loadbalancer-port: "443"
+    ingress.vke.volcengine.com/loadbalancer-protocol: https
+    ingress.vke.volcengine.com/loadbalancer-scheduler: wrr
+    ingress.vke.volcengine.com/loadbalancer-unhealthy-threshold: "3"
+    vke.volcengine.com/description: Browser Pilot EE SaaS split frontend/backend public entry
+spec:
+  ingressClassName: alb
+  tls:
+    - secretName: cert-nodeskai-com
+  rules:
+    - host: bpilot.nodeskai.com
+      http:
+        paths:
+          - path: /api/*
+            pathType: Prefix
+            backend:
+              service:
+                name: browser-pilot-ee-saas-browser-pilot-backend
+                port:
+                  number: 8000
+          - path: /healthz
+            pathType: Prefix
+            backend:
+              service:
+                name: browser-pilot-ee-saas-browser-pilot-backend
+                port:
+                  number: 8000
+          - path: /readyz
+            pathType: Prefix
+            backend:
+              service:
+                name: browser-pilot-ee-saas-browser-pilot-backend
+                port:
+                  number: 8000
+          - path: /*
+            pathType: Prefix
+            backend:
+              service:
+                name: browser-pilot-ee-saas-browser-pilot-frontend
+                port:
+                  number: 8080

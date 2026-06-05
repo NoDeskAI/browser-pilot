@@ -1,0 +1,23 @@
+ARG EDITION=ce
+
+FROM alpine AS context
+WORKDIR /ctx
+COPY . .
+RUN mkdir -p ee/frontend
+
+FROM node:22-slim AS frontend
+ARG EDITION
+WORKDIR /build
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+COPY frontend/ ./
+COPY --from=context /ctx/ee/frontend/ /ee/frontend/
+RUN EDITION=$EDITION npm run build
+
+FROM nginx:1.27-alpine
+COPY deploy/nginx/frontend.conf /etc/nginx/conf.d/default.conf
+COPY --from=frontend /build/dist /usr/share/nginx/html
+RUN sed -i 's|pid        /run/nginx.pid;|pid        /tmp/nginx.pid;|' /etc/nginx/nginx.conf \
+    && chown -R nginx:nginx /usr/share/nginx/html /etc/nginx/conf.d /var/cache/nginx /run /tmp
+USER nginx
+EXPOSE 8080
