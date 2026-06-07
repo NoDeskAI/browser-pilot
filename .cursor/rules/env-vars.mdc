@@ -34,6 +34,7 @@ alwaysApply: true
 | `DATABASE_URL` | config.py | 无代码默认；从 `.env` / 环境变量读取，`.env.example` 仅提供本地开发示例 | 数据库连接 |
 | `DOCKER_HOST_ADDR` | config.py | `localhost` | 后端访问浏览器容器地址 |
 | `API_BASE_URL` | config.py | `http://localhost:8000` | 内置存储文件 URL 前缀 |
+| `PLATFORM_JWT_SECRET` | config.py | 降级为 `JWT_SECRET` | Platform 管理端独立 JWT 签名密钥 |
 | `OPENAI_API_KEY` | auto_name.py | （空） | Session 自动命名 |
 | `LOG_LEVEL` | logging_config.py | `INFO` | 日志级别 |
 | `APP_TITLE` | config.py | `Browser Pilot` | 品牌名称 |

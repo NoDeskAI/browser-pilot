@@ -157,6 +157,7 @@ def _resolve_jwt_secret() -> str:
 
 
 JWT_SECRET = _resolve_jwt_secret()
+PLATFORM_JWT_SECRET = _env("PLATFORM_JWT_SECRET", "") or JWT_SECRET
 
 
 # --- Public deployment guardrails ---

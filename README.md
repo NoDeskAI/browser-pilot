@@ -178,6 +178,7 @@ For a single-host Docker Compose deployment:
 | `OPENAI_API_KEY`      | —                                                              | Optional. When set, uses LLM to auto-name sessions on first navigation. Without it, sessions are named by page title.              |
 | `LOG_LEVEL`           | `INFO`                                                         | Backend log verbosity. Set to `DEBUG` for troubleshooting.                                                                         |
 | `JWT_EXPIRE_MINUTES`  | `30`                                                           | Short-lived access JWT lifetime in minutes.                                                                                       |
+| `PLATFORM_JWT_SECRET` | Falls back to `JWT_SECRET`                                     | Separate signing key for Platform admin tokens. When set, platform and tenant tokens are cryptographically isolated.               |
 | `REMEMBER_ME_DAYS`    | `7`                                                            | Duration for the revocable remember-me cookie used to restore short-lived access tokens.                                           |
 | `NETWORK_EGRESS_DOCKER_NETWORK` | `browser-pilot-net`; `browser-pilot-single-host-net` in single-host Compose | Docker bridge network used by browser containers and managed egress containers. |
 | `NETWORK_EGRESS_CONFIG_DIR` | `data/network-egress` | Private config storage for managed Clash/OpenVPN egress profiles. |
