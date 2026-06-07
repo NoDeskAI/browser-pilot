@@ -1,0 +1,33 @@
+---
+description: K8s 部署流程与构建参数规范
+alwaysApply: true
+---
+# 部署规范
+
+## 核心原则：构建必须正确
+
+构建前先确认目标环境，确保产物和部署环境匹配。不能盲目执行命令。
+
+**构建前必问**：
+1. 目标环境是什么？（EE SaaS / CE 自部署 / 本地开发）
+2. 该环境需要哪些构建参数？（EDITION、平台架构、基础镜像）
+3. 产物如何验证？（路由 chunk 是否存在、EE 模块是否加载）
+
+当前生产环境是 **EE SaaS**，因此构建必须包含 `--build-arg EDITION=ee`。如果未来部署 CE 实例，则不需要该参数。参数跟着环境走，不是死记。
+
+## 镜像 Registry 与 Tag 规范
+
+- Registry 和 Namespace 从当前 K8s deployment 的 image 字段获取，不要硬编码
+- 前端镜像 tag 格式: `{main_sha}-{ee_sha}-frontend-{timestamp}-amd64`
+- 后端镜像 tag 格式: `{main_sha}-{ee_sha}-backend-{timestamp}-amd64`
+- 通过 `kubectl -n browser-pilot get deploy -o wide` 确认当前使用的 registry 和镜像名
+
+## 按需部署
+
+- 只改了前端代码 → 只构建和部署前端
+- 只改了后端代码 → 只构建和部署后端
+- 两边都改了 → 两个都部署
+
+## 部署后验证
+
+更新 K8s deployment 后，用 `kubectl rollout status` 确认 pod 就绪。涉及关键功能变更时，抽查产物确认构建正确（如 EE 路由 chunk 是否存在）。

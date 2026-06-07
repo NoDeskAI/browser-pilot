@@ -1,0 +1,59 @@
+---
+description: "Guidelines for implementing Day/Night (Light/Dark) mode and UI/UX design."
+globs: "*.vue, *.ts, *.tsx, *.css"
+---
+
+# UX/UI Day/Night Mode Guidelines
+
+This project supports both Day (Light) and Night (Dark) modes. All new UI components and pages must be designed to adapt seamlessly to both modes.
+
+## Core Principles
+
+1. **Mandatory Dual-Mode Support**
+   - Never assume the app will only be viewed in dark mode or light mode.
+   - Every new component, page, or feature must look good and function correctly in both modes.
+   - Test your UI changes by toggling the theme in the header.
+
+2. **Strict Use of Semantic Colors**
+   - **DO NOT** hardcode absolute color values in your Tailwind classes or CSS unless absolutely necessary (e.g., `bg-white`, `text-black`, `bg-gray-900`, `#ffffff`, `#000000`).
+   - **DO** use the semantic CSS variables defined in `src/style.css` via Tailwind utility classes.
+     - Backgrounds: `bg-background`, `bg-card`, `bg-popover`, `bg-muted`
+     - Text: `text-foreground`, `text-muted-foreground`, `text-primary-foreground`
+     - Borders: `border-border`, `border-input`
+     - Action/States: `bg-primary`, `bg-secondary`, `bg-destructive`, `bg-accent`
+
+3. **Component Adaptation**
+   - **Shadows and Borders**: Dark mode often relies more on subtle borders (`border-border`) rather than shadows (`shadow-sm`, `shadow-md`) to distinguish elevation, whereas light mode often uses shadows. Ensure elements have clear boundaries in both modes.
+   - **Third-Party Components**: When integrating charts, code editors, terminal emulators, or other complex components, ensure their themes are linked to the current app theme (using `isDark` from `@vueuse/core` or CSS variables).
+
+4. **Opacity and Alpha Channels**
+   - Use Tailwind's opacity modifiers with semantic colors when you need a lighter version of a color (e.g., `bg-primary/10`, `text-muted-foreground/80`). This ensures the alpha blending looks correct on both light and dark backgrounds.
+
+## Implementation Example
+
+### ❌ Bad (Hardcoded Colors)
+```vue
+<div class="bg-white border border-gray-200 text-gray-900 shadow-sm">
+  <h2 class="text-black">Title</h2>
+  <p class="text-gray-500">Description</p>
+</div>
+```
+
+### ✅ Good (Semantic Colors)
+```vue
+<div class="bg-card border border-border text-card-foreground">
+  <h2 class="text-foreground">Title</h2>
+  <p class="text-muted-foreground">Description</p>
+</div>
+```
+
+## Using Theme State in Logic
+If you need to programmatically access the current theme (e.g., to pass a "theme" prop to a chart library), use `@vueuse/core`:
+
+```typescript
+import { useDark } from '@vueuse/core'
+
+const isDark = useDark()
+
+// isDark.value will be true in Night mode, false in Day mode
+```

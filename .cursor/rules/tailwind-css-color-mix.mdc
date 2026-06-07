@@ -1,0 +1,53 @@
+---
+description: Tailwind CSS 结合十六进制 CSS 变量与透明度时的避坑指南及 color-mix 原生替代方案
+globs: frontend/**/*.{css,vue,ts,tsx}
+alwaysApply: false
+---
+
+# Tailwind CSS 变量透明度与原生 CSS 避坑指南
+
+当项目中的 CSS 变量（如 `--muted-foreground`）定义为**绝对十六进制值**（如 `#a0a0a0`）时，在与 Tailwind 的透明度修饰符（如 `/30`）结合使用，或在全局原生伪元素（如 `::-webkit-scrollbar`）中混用时，极易产生编译失败或浏览器无法识别的无效 CSS。
+
+## 核心避坑规则
+
+### 1. 谨慎在伪元素/原生 CSS 中使用 `@apply` 加透明度
+
+当全局变量为 `#hex` 格式时，Tailwind 会将 `@apply bg-muted-foreground/30` 尝试编译为 `rgba(#a0a0a0, 0.3)`，这是**非法的 CSS 语法**，会导致浏览器静默丢弃该规则（例如导致自定义滚动条样式失效，回退为原生丑陋的样式）。
+
+```css
+/* ❌ BAD: 当变量是十六进制时，会编译出非法 CSS rgba(#a0a0a0, 0.3) */
+::-webkit-scrollbar-thumb {
+  @apply bg-muted-foreground/30 rounded-full;
+}
+```
+
+### 2. 使用 `color-mix()` 作为安全、现代的透明度替代方案
+
+在必须写原生 CSS（如自定义滚动条）或者脱离 Tailwind 工具类的地方，**请直接使用现代原生的 `color-mix` 函数**来进行颜色和透明度的混合。它能完美解析十六进制变量并实现等效的透明度效果！
+
+```css
+/* ✅ GOOD: 使用纯原生现代 CSS 函数进行透明度混合，100% 兼容十六进制变量 */
+::-webkit-scrollbar-thumb {
+  background-color: color-mix(in srgb, var(--muted-foreground) 30%, transparent);
+  border-radius: 9999px;
+}
+```
+
+### 3. 注意原生属性对颜色的支持格式
+
+在如 `scrollbar-color` 等原生属性中，同样不可使用 `hsl(var(--xxx) / 0.3)` 去包裹一个十六进制变量。
+
+```css
+/* ❌ BAD: 将十六进制传入 hsl 函数也是非法的 */
+* {
+  scrollbar-color: hsl(var(--muted-foreground) / 0.3) transparent;
+}
+
+/* ✅ GOOD: 统一使用 color-mix 解决透明度混合 */
+* {
+  scrollbar-color: color-mix(in srgb, var(--muted-foreground) 30%, transparent) transparent;
+}
+```
+
+## 适用场景
+当你修改全局 `style.css`、自定义浏览器原生控件样式（如滚动条、range input 等）或在 `.vue` 组件的 `<style>` 块中编写原生 CSS 且需要结合透明度时，请务必遵守此规则，首选 `color-mix()`。
