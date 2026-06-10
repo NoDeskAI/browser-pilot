@@ -8,7 +8,7 @@ interface SiteInfo {
   appTitle: string
   edition: string
   setupComplete: boolean
-  features: { sso: boolean; multiTenantManagement: boolean; browserImages?: boolean; runtimeShellTools?: boolean; managedRuntime?: boolean }
+  features: { sso: boolean; multiTenantManagement: boolean; browserImages?: boolean; fileStorage?: boolean; runtimeShellTools?: boolean; managedRuntime?: boolean }
   auth?: { accessTokenMinutes: number; rememberMeDays: number }
   cliCommandName: string
   cliInstallCommand: string
@@ -18,7 +18,7 @@ interface BrandConfig {
   appTitle: string
   edition: string
   setupComplete: boolean
-  features: { sso: boolean; multiTenantManagement: boolean; browserImages: boolean; runtimeShellTools: boolean; managedRuntime: boolean }
+  features: { sso: boolean; multiTenantManagement: boolean; browserImages: boolean; fileStorage: boolean; runtimeShellTools: boolean; managedRuntime: boolean }
   auth: { accessTokenMinutes: number; rememberMeDays: number }
   cliCommandName: string
   cliInstallCommand: string
@@ -28,7 +28,7 @@ const brand = reactive<BrandConfig>({
   appTitle: 'Browser Pilot',
   edition: 'ce',
   setupComplete: false,
-  features: { sso: false, multiTenantManagement: false, browserImages: true, runtimeShellTools: true, managedRuntime: false },
+  features: { sso: false, multiTenantManagement: false, browserImages: true, fileStorage: true, runtimeShellTools: true, managedRuntime: false },
   auth: { accessTokenMinutes: 30, rememberMeDays: 7 },
   cliCommandName: 'bpilot',
   cliInstallCommand: 'curl -fsSL http://localhost:8000/api/cli/install | bash',

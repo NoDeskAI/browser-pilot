@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 from app.auth.dependencies import CurrentUser, require_role
 from app.db import get_pool
+from app.edition import reject_file_storage_api
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +92,7 @@ async def _verify_s3_connection(cfg: StorageConfig) -> None:
 
 @router.get("/api/settings/storage")
 async def get_storage_settings(_user: CurrentUser = Depends(require_role(["superadmin", "admin"]))):
+    reject_file_storage_api()
     config = await _load_storage_config()
     if config:
         return _public_storage_config(config)
@@ -99,6 +101,7 @@ async def get_storage_settings(_user: CurrentUser = Depends(require_role(["super
 
 @router.put("/api/settings/storage")
 async def save_storage_settings(body: StorageConfig, _user: CurrentUser = Depends(require_role(["superadmin", "admin"]))):
+    reject_file_storage_api()
     existing = await _load_storage_config()
     if body.storage == "s3":
         if not body.s3SecretKey and existing and existing.get("storage") == "s3":

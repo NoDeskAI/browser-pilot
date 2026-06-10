@@ -103,6 +103,13 @@ def reject_browser_images_api() -> None:
         reject()
 
 
+def reject_file_storage_api() -> None:
+    hooks = _load_ee_hooks()
+    reject = getattr(hooks, "reject_file_storage_api", None) if hooks else None
+    if callable(reject):
+        reject()
+
+
 def reject_container_debug_api() -> None:
     hooks = _load_ee_hooks()
     reject = getattr(hooks, "reject_container_debug_api", None) if hooks else None

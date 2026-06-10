@@ -22,6 +22,7 @@ const route = useRoute()
 const router = useRouter()
 const { brand } = useSessions()
 const browserImagesEnabled = computed(() => brand.features.browserImages !== false)
+const fileStorageEnabled = computed(() => brand.features.fileStorage !== false)
 
 type SettingsTab = 'organization' | 'storage' | 'fingerprintPool' | 'browserImages' | 'networkEgress' | 'sso' | 'tenants'
 
@@ -55,6 +56,7 @@ function resolveTab(section: string | string[] | undefined): SettingsTab | null 
   const tab = sectionToTab[normalized]
   if (!tab) return null
   if (!isEE && (tab === 'sso' || tab === 'tenants')) return null
+  if (tab === 'storage' && !fileStorageEnabled.value) return null
   if (tab === 'browserImages' && !browserImagesEnabled.value) return null
   return tab
 }
@@ -93,6 +95,7 @@ function goToTab(tab: SettingsTab) {
               {{ t('settings.organization') }}
             </button>
             <button
+              v-if="fileStorageEnabled"
               @click="goToTab('storage')"
               class="px-3 py-2 text-sm rounded-md transition-colors text-left whitespace-nowrap"
               :class="activeTab === 'storage' ? 'bg-accent text-accent-foreground font-medium' : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground'"
