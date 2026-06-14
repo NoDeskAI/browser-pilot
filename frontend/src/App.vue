@@ -18,7 +18,12 @@ const { brand, init: initSessions, fetchBrand, createSession } = useSessions()
 
 const { isAuthenticated, fetchMe, refreshAuth } = useAuth()
 
-const isAuthPage = computed(() => route.path === '/login' || route.path === '/setup' || isPublicShellRoute(route.path))
+const isAuthPage = computed(() => (
+  route.path === '/login' ||
+  route.path === '/register' ||
+  route.path === '/setup' ||
+  isPublicShellRoute(route.path)
+))
 const ready = ref(false)
 const bootstrap = reactive({
   status: 'checking',

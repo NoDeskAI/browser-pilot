@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, defineAsyncComponent, onMounted } from 'vue'
+import { ref, defineAsyncComponent, onMounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { useAuth } from '../composables/useAuth'
@@ -9,6 +9,13 @@ import { Loader2 } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { useNotify } from '@/composables/useNotify'
 
 const isEE = __EE__
@@ -26,22 +33,30 @@ onMounted(() => fetchBrand())
 
 const email = ref('')
 const password = ref('')
+const tenantSlug = ref('')
 const rememberMe = ref(false)
 const loading = ref(false)
 const error = ref('')
+const tenantChoices = ref<Array<{ name: string, slug: string }>>([])
+
+watch([email, password], () => {
+  if (!tenantChoices.value.length) return
+  tenantChoices.value = []
+  tenantSlug.value = ''
+})
 
 async function readLoginErrorDetail(res: Response) {
   const contentType = res.headers.get('content-type') || ''
   if (!contentType.includes('application/json')) return ''
   try {
     const data = await res.json()
-    return typeof data?.detail === 'string' ? data.detail : ''
+    return data?.detail ?? ''
   } catch {
     return ''
   }
 }
 
-function getLoginErrorMessage(status: number, detail: string) {
+function getLoginErrorMessage(status: number, detail: unknown) {
   if (status === 401) {
     return detail === 'Account disabled'
       ? t('auth.accountDisabled')
@@ -58,13 +73,31 @@ async function handleLogin() {
   error.value = ''
   loading.value = true
   try {
+    const payload: Record<string, unknown> = {
+      email: email.value,
+      password: password.value,
+      rememberMe: rememberMe.value,
+    }
+    if (tenantSlug.value) payload.tenantSlug = tenantSlug.value
     const res = await fetch('/api/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: email.value, password: password.value, rememberMe: rememberMe.value }),
+      body: JSON.stringify(payload),
     })
     if (!res.ok) {
       const detail = await readLoginErrorDetail(res)
+      if (
+        res.status === 409 &&
+        typeof detail === 'object' &&
+        detail !== null &&
+        (detail as { code?: string }).code === 'multiple_tenants'
+      ) {
+        const tenants = (detail as { tenants?: Array<{ name: string, slug: string }> }).tenants || []
+        tenantChoices.value = tenants
+        tenantSlug.value = tenants[0]?.slug || ''
+        error.value = t('auth.multipleTenantsPrompt')
+        return
+      }
       if (isLoginServiceUnavailable(res.status)) {
         notify.error(t('auth.loginServiceUnavailable'))
         return
@@ -120,6 +153,21 @@ function toggleLocale() {
           />
         </div>
 
+        <div v-if="tenantChoices.length" class="space-y-2">
+          <Label for="tenantSlug">{{ t('auth.organization') }}</Label>
+          <Select v-model="tenantSlug">
+            <SelectTrigger id="tenantSlug">
+              <SelectValue :placeholder="t('auth.organizationPlaceholder')" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem v-for="tenant in tenantChoices" :key="tenant.slug" :value="tenant.slug">
+                {{ tenant.name }} · {{ tenant.slug }}
+              </SelectItem>
+            </SelectContent>
+          </Select>
+          <p class="text-xs text-muted-foreground">{{ t('auth.multipleTenantsHelp') }}</p>
+        </div>
+
         <label for="rememberMe" class="flex items-center gap-2 select-none cursor-pointer">
           <input
             id="rememberMe" v-model="rememberMe" type="checkbox"
@@ -137,6 +185,13 @@ function toggleLocale() {
       </form>
 
       <component v-if="isEE && brand.features.sso && SsoLoginButton" :is="SsoLoginButton" />
+
+      <div class="mt-4 text-center text-sm text-muted-foreground">
+        {{ t('auth.noAccount') }}
+        <RouterLink to="/register" class="font-medium text-foreground hover:underline">
+          {{ t('auth.createOrganization') }}
+        </RouterLink>
+      </div>
 
       <div class="mt-6 text-center">
         <button @click="toggleLocale" class="text-xs text-muted-foreground hover:text-foreground transition-colors">

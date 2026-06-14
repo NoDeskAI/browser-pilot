@@ -14,6 +14,10 @@ logger = logging.getLogger("routes.users")
 router = APIRouter(prefix="/api/users", tags=["users"])
 
 
+def _normalize_email(email: str) -> str:
+    return email.strip().lower()
+
+
 class InviteUserBody(BaseModel):
     email: str
     name: str
@@ -58,10 +62,11 @@ async def create_user(body: InviteUserBody, user: CurrentUser = Depends(require_
     if user.role == "admin" and body.role == "admin":
         raise HTTPException(status_code=403, detail="Only superadmin can create admin users")
 
+    email = _normalize_email(body.email)
     pool = get_pool()
     exists = await pool.fetchval(
-        "SELECT 1 FROM users WHERE tenant_id = $1 AND email = $2",
-        user.tenant_id, body.email.strip(),
+        "SELECT 1 FROM users WHERE tenant_id = $1 AND LOWER(email) = $2",
+        user.tenant_id, email,
     )
     if exists:
         raise HTTPException(status_code=409, detail="Email already exists in this tenant")
@@ -71,10 +76,10 @@ async def create_user(body: InviteUserBody, user: CurrentUser = Depends(require_
     await pool.execute(
         """INSERT INTO users (id, tenant_id, email, password_hash, name, role)
            VALUES ($1, $2, $3, $4, $5, $6)""",
-        user_id, user.tenant_id, body.email.strip(), pw_hash, body.name.strip(), body.role,
+        user_id, user.tenant_id, email, pw_hash, body.name.strip(), body.role,
     )
     logger.info("User created: %s (%s) by %s", user_id, body.email, user.id)
-    return {"id": user_id, "email": body.email.strip(), "name": body.name.strip(), "role": body.role}
+    return {"id": user_id, "email": email, "name": body.name.strip(), "role": body.role}
 
 
 @router.patch("/{user_id}")

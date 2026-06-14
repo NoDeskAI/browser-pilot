@@ -30,6 +30,7 @@ const router = createRouter({
       ],
     },
     { path: '/login', component: () => import('../views/LoginView.vue') },
+    { path: '/register', component: () => import('../views/RegisterView.vue') },
     { path: '/setup', component: () => import('../views/SetupView.vue') },
     ...(__EE__ ? eeRoutes : []),
     { path: '/:pathMatch(.*)*', redirect: '/' },
@@ -71,7 +72,7 @@ router.beforeEach(async (to) => {
     return '/login'
   }
 
-  if (to.path === '/login' && (!token.value ? await refreshAuth() : true)) {
+  if ((to.path === '/login' || to.path === '/register') && (!token.value ? await refreshAuth() : true)) {
     return '/'
   }
 })

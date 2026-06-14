@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 import secrets
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -29,6 +31,15 @@ class LoginBody(BaseModel):
     email: str
     password: str
     rememberMe: bool = False
+    tenantSlug: str | None = None
+
+
+class RegisterBody(BaseModel):
+    tenantName: str
+    email: str
+    password: str
+    name: str
+    rememberMe: bool = False
 
 
 class SetupBody(BaseModel):
@@ -43,8 +54,53 @@ class CreateTokenBody(BaseModel):
     sessionId: str | None = None
 
 
+REGISTER_RATE_WINDOW_SECONDS = 15 * 60
+REGISTER_RATE_LIMIT_BY_IP = 10
+REGISTER_RATE_LIMIT_BY_EMAIL = 5
+_register_rate_attempts: dict[str, list[float]] = {}
+
+
 def _hash_remember_token(raw_token: str) -> str:
     return hashlib.sha256(raw_token.encode()).hexdigest()
+
+
+def _normalize_email(email: str) -> str:
+    return email.strip().lower()
+
+
+def _slug_base(value: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", value.strip().lower()).strip("-")
+    return (slug[:48].strip("-") or "org")
+
+
+async def _unique_tenant_slug(pool, tenant_name: str) -> str:
+    base = _slug_base(tenant_name)
+    for index in range(20):
+        slug = base if index == 0 else f"{base}-{uuid.uuid4().hex[:6]}"
+        exists = await pool.fetchval("SELECT 1 FROM tenants WHERE slug = $1", slug)
+        if not exists:
+            return slug
+    return f"{base}-{uuid.uuid4().hex[:12]}"
+
+
+def _rate_key(kind: str, value: str) -> str:
+    return f"{kind}:{value}"
+
+
+def _record_register_attempt(key: str, now: float, limit: int) -> None:
+    cutoff = now - REGISTER_RATE_WINDOW_SECONDS
+    attempts = [ts for ts in _register_rate_attempts.get(key, []) if ts >= cutoff]
+    if len(attempts) >= limit:
+        raise HTTPException(status_code=429, detail="rate_limited")
+    attempts.append(now)
+    _register_rate_attempts[key] = attempts
+
+
+def _check_register_rate_limit(request: Request, email: str) -> None:
+    now = time.monotonic()
+    client_host = request.client.host if request.client else "unknown"
+    _record_register_attempt(_rate_key("ip", client_host), now, REGISTER_RATE_LIMIT_BY_IP)
+    _record_register_attempt(_rate_key("email", _normalize_email(email)), now, REGISTER_RATE_LIMIT_BY_EMAIL)
 
 
 def _set_remember_cookie(response: Response, raw_token: str, expires_at: datetime) -> None:
@@ -104,21 +160,81 @@ def _user_payload(row, email: str | None = None) -> dict:
     }
 
 
+def _tenant_choice_payload(row) -> dict:
+    return {
+        "name": row["tenant_name"],
+        "slug": row["tenant_slug"],
+    }
+
+
+def _invalid_credentials() -> HTTPException:
+    return HTTPException(status_code=401, detail="Invalid credentials")
+
+
 # --------------- Login ---------------
 
 @router.post("/login")
 async def login(body: LoginBody, response: Response):
     pool = get_pool()
-    row = await pool.fetchrow(
-        "SELECT id, tenant_id, password_hash, name, role, is_active FROM users WHERE email = $1",
-        body.email,
-    )
+    email = _normalize_email(body.email)
+    tenant_slug = body.tenantSlug.strip().lower() if body.tenantSlug else ""
+
+    if tenant_slug:
+        rows = [
+            await pool.fetchrow(
+                """
+                SELECT u.id, u.tenant_id, u.email, u.password_hash, u.name, u.role, u.is_active,
+                       t.name AS tenant_name, t.slug AS tenant_slug
+                FROM users u
+                JOIN tenants t ON t.id = u.tenant_id
+                WHERE LOWER(u.email) = $1 AND t.slug = $2
+                """,
+                email,
+                tenant_slug,
+            )
+        ]
+        rows = [row for row in rows if row]
+    else:
+        rows = await pool.fetch(
+            """
+            SELECT u.id, u.tenant_id, u.email, u.password_hash, u.name, u.role, u.is_active,
+                   t.name AS tenant_name, t.slug AS tenant_slug
+            FROM users u
+            JOIN tenants t ON t.id = u.tenant_id
+            WHERE LOWER(u.email) = $1
+            ORDER BY u.created_at ASC
+            """,
+            email,
+        )
+        if len(rows) > 1:
+            password_matches = [
+                row for row in rows
+                if row["is_active"] and row["password_hash"] and verify_password(body.password, row["password_hash"])
+            ]
+            disabled_password_matches = [
+                row for row in rows
+                if not row["is_active"] and row["password_hash"] and verify_password(body.password, row["password_hash"])
+            ]
+            if not password_matches:
+                if disabled_password_matches:
+                    raise HTTPException(status_code=401, detail="Account disabled")
+                raise _invalid_credentials()
+            active_rows = [row for row in rows if row["is_active"]]
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "multiple_tenants",
+                    "tenants": [_tenant_choice_payload(row) for row in active_rows],
+                },
+            )
+
+    row = rows[0] if rows else None
     if not row or not row["password_hash"]:
-        raise HTTPException(status_code=401, detail="Invalid credentials")
+        raise _invalid_credentials()
     if not row["is_active"]:
         raise HTTPException(status_code=401, detail="Account disabled")
     if not verify_password(body.password, row["password_hash"]):
-        raise HTTPException(status_code=401, detail="Invalid credentials")
+        raise _invalid_credentials()
 
     token = create_access_token(row["id"], row["tenant_id"], row["role"])
     if body.rememberMe:
@@ -126,6 +242,61 @@ async def login(body: LoginBody, response: Response):
     return {
         "access_token": token,
         "user": _user_payload(row, body.email),
+    }
+
+
+@router.post("/register")
+async def register(body: RegisterBody, request: Request, response: Response):
+    _check_register_rate_limit(request, body.email)
+    tenant_name = body.tenantName.strip()
+    name = body.name.strip()
+    email = _normalize_email(body.email)
+    if not tenant_name or not name or not email or len(body.password) < 6:
+        raise HTTPException(status_code=400, detail="validation_error")
+
+    pool = get_pool()
+    existing = await pool.fetchval(
+        "SELECT 1 FROM users WHERE LOWER(email) = $1 LIMIT 1",
+        email,
+    )
+    if existing:
+        raise HTTPException(status_code=409, detail="email_already_registered")
+
+    tenant_id = str(uuid.uuid4())
+    tenant_slug = await _unique_tenant_slug(pool, tenant_name)
+    await pool.execute(
+        "INSERT INTO tenants (id, name, slug) VALUES ($1, $2, $3)",
+        tenant_id,
+        tenant_name,
+        tenant_slug,
+    )
+
+    user_id = str(uuid.uuid4())
+    pw_hash = hash_password(body.password)
+    await pool.execute(
+        """INSERT INTO users (id, tenant_id, email, password_hash, name, role)
+           VALUES ($1, $2, $3, $4, $5, 'superadmin')""",
+        user_id,
+        tenant_id,
+        email,
+        pw_hash,
+        name,
+    )
+    await after_tenant_setup(tenant_id=tenant_id, user_id=user_id)
+
+    token = create_access_token(user_id, tenant_id, "superadmin")
+    if body.rememberMe:
+        await _create_remember_token(response, user_id, tenant_id)
+    logger.info("Self-service registration completed: tenant=%s user=%s", tenant_id, user_id)
+    return {
+        "access_token": token,
+        "user": {
+            "id": user_id,
+            "email": email,
+            "name": name,
+            "role": "superadmin",
+            "tenantId": tenant_id,
+        },
     }
 
 
@@ -205,6 +376,7 @@ async def setup(body: SetupBody):
     if count > 0:
         raise HTTPException(status_code=403, detail="Setup already completed")
 
+    email = _normalize_email(body.email)
     tenant_id = str(uuid.uuid4())
     slug = body.tenantName.strip().lower().replace(" ", "-")[:64] or "default"
     await pool.execute(
@@ -217,7 +389,7 @@ async def setup(body: SetupBody):
     await pool.execute(
         """INSERT INTO users (id, tenant_id, email, password_hash, name, role)
            VALUES ($1, $2, $3, $4, $5, 'superadmin')""",
-        user_id, tenant_id, body.email.strip(), pw_hash, body.name.strip(),
+        user_id, tenant_id, email, pw_hash, body.name.strip(),
     )
 
     # Backfill existing sessions that have no tenant/user
@@ -234,7 +406,7 @@ async def setup(body: SetupBody):
         "access_token": token,
         "user": {
             "id": user_id,
-            "email": body.email.strip(),
+            "email": email,
             "name": body.name.strip(),
             "role": "superadmin",
             "tenantId": tenant_id,
