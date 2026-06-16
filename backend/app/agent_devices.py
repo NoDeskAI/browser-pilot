@@ -1294,7 +1294,9 @@ def _visibility_sql(where_sql: str) -> str:
             SELECT *
             FROM agent_device_audit_events ae
             WHERE ae.device_instance_id = s.id
-            ORDER BY ae.created_at DESC
+            ORDER BY
+                CASE WHEN ae.action = 'session.files.heartbeat' THEN 1 ELSE 0 END,
+                ae.created_at DESC
             LIMIT 1
         ) a ON TRUE
         WHERE {where_sql}

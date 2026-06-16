@@ -6,7 +6,7 @@ import logging
 import random
 from dataclasses import dataclass, field
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 import httpx
 
@@ -90,6 +90,23 @@ class BrowserSession:
 
 
 _sessions: dict[str, BrowserSession] = {}
+
+_TRANSIENT_WEBDRIVER_ERROR_MARKERS = (
+    "interruptedexception",
+    "webdriver request failed",
+    "webdriver timeout",
+    "unable to execute request",
+    "invalid session id",
+    "no such window",
+    "target crashed",
+    "chrome not reachable",
+    "disconnected",
+    "connection reset",
+    "connection refused",
+    "http 502",
+    "http 503",
+    "http 504",
+)
 
 
 _START_PAGE_PREFIXES = (
@@ -280,6 +297,11 @@ def invalidate_session_cache(chat_session_id: str) -> None:
     bs = _sessions.pop(chat_session_id, None)
     if bs:
         logger.info("Invalidated session cache for %s", chat_session_id)
+
+
+def is_transient_webdriver_error(exc: BaseException) -> bool:
+    message = str(exc).lower()
+    return any(marker in message for marker in _TRANSIENT_WEBDRIVER_ERROR_MARKERS)
 
 
 async def _ensure_session_impl(bs: BrowserSession) -> str:
@@ -554,6 +576,11 @@ async def cleanup_session(chat_session_id: str) -> None:
         bs.wd_session_id = None
 
 
+async def reset_browser_session(chat_session_id: str) -> None:
+    await cleanup_session(chat_session_id)
+    invalidate_session_cache(chat_session_id)
+
+
 class _BrowserSessionCtx:
     """Context manager: create session on enter, destroy on exit.
 
@@ -579,6 +606,34 @@ class _BrowserSessionCtx:
 def browser_session(chat_session_id: str) -> _BrowserSessionCtx:
     """Usage: async with browser_session(id) as (sid, base): ..."""
     return _BrowserSessionCtx(chat_session_id)
+
+
+async def run_browser_session_operation(
+    chat_session_id: str,
+    operation: Callable[[str, str], Awaitable[Any]],
+    *,
+    operation_name: str,
+    attempts: int = 2,
+) -> Any:
+    last_error: Exception | None = None
+    for attempt in range(max(1, attempts)):
+        try:
+            async with browser_session(chat_session_id) as (sid, base):
+                return await operation(sid, base)
+        except Exception as exc:
+            last_error = exc
+            if attempt >= attempts - 1 or not is_transient_webdriver_error(exc):
+                raise
+            logger.warning(
+                "%s hit transient WebDriver error for %s; resetting session and retrying once: %s",
+                operation_name,
+                chat_session_id,
+                exc,
+            )
+            await reset_browser_session(chat_session_id)
+    if last_error:
+        raise last_error
+    raise RuntimeError(f"{operation_name} did not execute")
 
 
 KEY_MAP: dict[str, str] = {

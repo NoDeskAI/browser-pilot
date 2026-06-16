@@ -137,3 +137,45 @@ def test_quick_observe_falls_back_to_current_page_when_dom_collection_fails(monk
     assert calls[0][0] == "/session/wd-1/execute/sync"
     assert calls[1][0] == "/session/wd-1/url"
     assert calls[2][0] == "/session/wd-1/title"
+
+
+def test_browser_session_operation_retries_transient_webdriver_error(monkeypatch):
+    calls = []
+    resets = []
+
+    class FakeBrowserSession:
+        async def __aenter__(self):
+            return "wd-1", "http://selenium.local"
+
+        async def __aexit__(self, *_exc):
+            return None
+
+    def fake_browser_session(_session_id):
+        return FakeBrowserSession()
+
+    async def fake_reset(session_id):
+        resets.append(session_id)
+
+    async def operation(sid, base):
+        calls.append((sid, base))
+        if len(calls) == 1:
+            raise RuntimeError("WebDriver request failed: java.lang.InterruptedException")
+        return {"ok": True}
+
+    monkeypatch.setattr(browser_session, "browser_session", fake_browser_session)
+    monkeypatch.setattr(browser_session, "reset_browser_session", fake_reset)
+
+    result = asyncio.run(
+        browser_session.run_browser_session_operation(
+            "session-1",
+            operation,
+            operation_name="browser.current",
+        )
+    )
+
+    assert result == {"ok": True}
+    assert calls == [
+        ("wd-1", "http://selenium.local"),
+        ("wd-1", "http://selenium.local"),
+    ]
+    assert resets == ["session-1"]

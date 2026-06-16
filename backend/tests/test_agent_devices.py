@@ -518,6 +518,13 @@ def test_visibility_and_audit_protocol_aliases():
     assert audit["occurred_at"] == now.isoformat()
 
 
+def test_visibility_sql_prefers_user_actions_over_file_heartbeats():
+    sql = agent_devices._visibility_sql("s.id = $1")
+
+    assert "CASE WHEN ae.action = 'session.files.heartbeat' THEN 1 ELSE 0 END" in sql
+    assert "ae.created_at DESC" in sql
+
+
 def test_dead_container_maps_to_protocol_error_state():
     now = datetime.now(timezone.utc)
     visibility = agent_devices._visibility_from_row(

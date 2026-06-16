@@ -20,6 +20,7 @@ from app.tools.browser.session import (
     cdp_human_click,
     human_key_actions,
     quick_observe,
+    run_browser_session_operation,
     wd_fetch,
 )
 from app.tools.browser.ax import collect_ax_candidates
@@ -154,9 +155,16 @@ async def api_current(sessionId: str = Query(...), user: CurrentUser = Depends(g
     if rejected:
         return rejected
     try:
-        async with browser_session(sessionId) as (sid, base):
+        async def read_current(sid: str, base: str) -> tuple[str, str]:
             url = await wd_fetch(f"/session/{sid}/url", timeout=5, base_url=base)
             title = await wd_fetch(f"/session/{sid}/title", timeout=5, base_url=base)
+            return url, title
+
+        url, title = await run_browser_session_operation(
+            sessionId,
+            read_current,
+            operation_name="browser.current",
+        )
         await _update_session_page(sessionId, url, title)
         return await agent_devices.complete_compatible_action(
             ctx,
@@ -192,7 +200,7 @@ async def api_observe(body: SessionBody, user: CurrentUser = Depends(get_session
                 next_step="fix_request",
             )
 
-        async with browser_session(body.sessionId) as (sid, base):
+        async def observe_once(sid: str, base: str) -> dict[str, Any]:
             result = {}
             screenshot_base64 = None
             viewport_metrics = None
@@ -320,6 +328,13 @@ async def api_observe(body: SessionBody, user: CurrentUser = Depends(get_session
 
             if body.includeScreenshot and screenshot_base64 and isinstance(result, dict):
                 result["screenshot"] = screenshot_base64
+            return result
+
+        result = await run_browser_session_operation(
+            body.sessionId,
+            observe_once,
+            operation_name=f"browser.observe.{mode}",
+        )
         if isinstance(result, dict):
             asyncio.create_task(_update_session_page(body.sessionId, result.get("url"), result.get("title")))
         return await agent_devices.complete_compatible_action(
