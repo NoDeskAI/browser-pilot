@@ -164,6 +164,7 @@ async def api_current(sessionId: str = Query(...), user: CurrentUser = Depends(g
             sessionId,
             read_current,
             operation_name="browser.current",
+            recreate_runtime_on_repeated_transient=True,
         )
         await _update_session_page(sessionId, url, title)
         return await agent_devices.complete_compatible_action(
@@ -334,6 +335,7 @@ async def api_observe(body: SessionBody, user: CurrentUser = Depends(get_session
             body.sessionId,
             observe_once,
             operation_name=f"browser.observe.{mode}",
+            recreate_runtime_on_repeated_transient=True,
         )
         if isinstance(result, dict):
             asyncio.create_task(_update_session_page(body.sessionId, result.get("url"), result.get("title")))

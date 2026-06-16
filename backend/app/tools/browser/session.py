@@ -21,6 +21,7 @@ from app.runtime_provider import (
     BROWSER_RUNTIME_CLOAK,
     BROWSER_RUNTIME_STANDARD,
     ensure_container_running,
+    remove_container,
     resolve_selenium_base_url,
 )
 from app.db import get_pool
@@ -304,6 +305,13 @@ def is_transient_webdriver_error(exc: BaseException) -> bool:
     return any(marker in message for marker in _TRANSIENT_WEBDRIVER_ERROR_MARKERS)
 
 
+def _operation_error_message(exc: BaseException, operation_name: str) -> str:
+    message = str(exc).strip()
+    if message:
+        return message
+    return f"{operation_name} failed with {exc.__class__.__name__}"
+
+
 async def _ensure_session_impl(bs: BrowserSession) -> str:
     base = bs.selenium_base
 
@@ -581,6 +589,22 @@ async def reset_browser_session(chat_session_id: str) -> None:
     invalidate_session_cache(chat_session_id)
 
 
+async def recreate_browser_runtime(chat_session_id: str, *, operation_name: str) -> None:
+    await reset_browser_session(chat_session_id)
+    runtime_actor = await _session_runtime_actor(chat_session_id)
+    if runtime_actor.tenant_id:
+        await assert_tenant_runtime_allowed(runtime_actor.tenant_id, exclude_session_id=chat_session_id)
+    action = f"{operation_name}.runtime_recreate"
+    await before_session_runtime_start(runtime_actor, chat_session_id, action=action)
+    try:
+        await remove_container(chat_session_id, keep_volume=True)
+        await ensure_container_running(chat_session_id)
+    except Exception as exc:
+        await after_session_runtime_start_failed(runtime_actor, chat_session_id, action=action, error=exc)
+        raise
+    await after_session_runtime_started(runtime_actor, chat_session_id, action=action)
+
+
 class _BrowserSessionCtx:
     """Context manager: create session on enter, destroy on exit.
 
@@ -614,25 +638,53 @@ async def run_browser_session_operation(
     *,
     operation_name: str,
     attempts: int = 2,
+    recreate_runtime_on_repeated_transient: bool = False,
 ) -> Any:
     last_error: Exception | None = None
-    for attempt in range(max(1, attempts)):
+    attempt_count = max(1, attempts)
+    if recreate_runtime_on_repeated_transient:
+        attempt_count = max(attempt_count, 3)
+    runtime_recreated = False
+    for attempt in range(attempt_count):
         try:
             async with browser_session(chat_session_id) as (sid, base):
                 return await operation(sid, base)
         except Exception as exc:
             last_error = exc
-            if attempt >= attempts - 1 or not is_transient_webdriver_error(exc):
-                raise
+            if not is_transient_webdriver_error(exc):
+                if str(exc).strip():
+                    raise
+                raise RuntimeError(_operation_error_message(exc, operation_name)) from exc
+            if (
+                recreate_runtime_on_repeated_transient
+                and not runtime_recreated
+                and attempt >= 1
+                and attempt < attempt_count - 1
+            ):
+                logger.warning(
+                    "%s hit repeated transient WebDriver error for %s; recreating runtime before retry: %s",
+                    operation_name,
+                    chat_session_id,
+                    _operation_error_message(exc, operation_name),
+                )
+                await recreate_browser_runtime(chat_session_id, operation_name=operation_name)
+                runtime_recreated = True
+                continue
+            if attempt >= attempt_count - 1:
+                if str(exc).strip():
+                    raise
+                raise RuntimeError(_operation_error_message(exc, operation_name)) from exc
             logger.warning(
-                "%s hit transient WebDriver error for %s; resetting session and retrying once: %s",
+                "%s hit transient WebDriver error for %s; resetting session before retry: %s",
                 operation_name,
                 chat_session_id,
-                exc,
+                _operation_error_message(exc, operation_name),
             )
             await reset_browser_session(chat_session_id)
     if last_error:
-        raise last_error
+        if str(last_error).strip():
+            raise last_error
+        raise RuntimeError(_operation_error_message(last_error, operation_name)) from last_error
     raise RuntimeError(f"{operation_name} did not execute")
 
 

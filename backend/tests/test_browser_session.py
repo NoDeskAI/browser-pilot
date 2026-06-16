@@ -1,4 +1,5 @@
 import asyncio
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -179,3 +180,119 @@ def test_browser_session_operation_retries_transient_webdriver_error(monkeypatch
         ("wd-1", "http://selenium.local"),
     ]
     assert resets == ["session-1"]
+
+
+def test_browser_session_operation_recreates_runtime_after_repeated_transient_error(monkeypatch):
+    calls = []
+    resets = []
+    removes = []
+    ensures = []
+    lifecycle_actions = []
+
+    class FakeBrowserSession:
+        async def __aenter__(self):
+            return "wd-1", "http://selenium.local"
+
+        async def __aexit__(self, *_exc):
+            return None
+
+    def fake_browser_session(_session_id):
+        return FakeBrowserSession()
+
+    async def fake_reset(session_id):
+        resets.append(session_id)
+
+    async def fake_session_runtime_actor(session_id):
+        return SimpleNamespace(id="user-1", tenant_id="tenant-1")
+
+    async def fake_assert_tenant_runtime_allowed(tenant_id, *, exclude_session_id=None):
+        lifecycle_actions.append(("assert", tenant_id, exclude_session_id))
+
+    async def fake_before(_actor, session_id, *, action):
+        lifecycle_actions.append(("before", session_id, action))
+
+    async def fake_after_started(_actor, session_id, *, action):
+        lifecycle_actions.append(("started", session_id, action))
+
+    async def fake_after_failed(_actor, session_id, *, action, error):
+        lifecycle_actions.append(("failed", session_id, action, str(error)))
+
+    async def fake_remove_container(session_id, *, keep_volume=False):
+        removes.append((session_id, keep_volume))
+
+    async def fake_ensure_container_running(session_id):
+        ensures.append(session_id)
+        return {}
+
+    async def operation(sid, base):
+        calls.append((sid, base))
+        if len(calls) <= 2:
+            raise RuntimeError("WebDriver request failed: java.lang.InterruptedException")
+        return {"ok": True}
+
+    monkeypatch.setattr(browser_session, "browser_session", fake_browser_session)
+    monkeypatch.setattr(browser_session, "reset_browser_session", fake_reset)
+    monkeypatch.setattr(browser_session, "_session_runtime_actor", fake_session_runtime_actor)
+    monkeypatch.setattr(browser_session, "assert_tenant_runtime_allowed", fake_assert_tenant_runtime_allowed)
+    monkeypatch.setattr(browser_session, "before_session_runtime_start", fake_before)
+    monkeypatch.setattr(browser_session, "after_session_runtime_started", fake_after_started)
+    monkeypatch.setattr(browser_session, "after_session_runtime_start_failed", fake_after_failed)
+    monkeypatch.setattr(browser_session, "remove_container", fake_remove_container)
+    monkeypatch.setattr(browser_session, "ensure_container_running", fake_ensure_container_running)
+
+    result = asyncio.run(
+        browser_session.run_browser_session_operation(
+            "session-1",
+            operation,
+            operation_name="browser.current",
+            recreate_runtime_on_repeated_transient=True,
+        )
+    )
+
+    assert result == {"ok": True}
+    assert calls == [
+        ("wd-1", "http://selenium.local"),
+        ("wd-1", "http://selenium.local"),
+        ("wd-1", "http://selenium.local"),
+    ]
+    assert resets == ["session-1", "session-1"]
+    assert removes == [("session-1", True)]
+    assert ensures == ["session-1"]
+    assert lifecycle_actions == [
+        ("assert", "tenant-1", "session-1"),
+        ("before", "session-1", "browser.current.runtime_recreate"),
+        ("started", "session-1", "browser.current.runtime_recreate"),
+    ]
+
+
+def test_browser_session_operation_reports_empty_exception_message(monkeypatch):
+    class EmptyError(Exception):
+        def __str__(self):
+            return ""
+
+    class FakeBrowserSession:
+        async def __aenter__(self):
+            return "wd-1", "http://selenium.local"
+
+        async def __aexit__(self, *_exc):
+            return None
+
+    def fake_browser_session(_session_id):
+        return FakeBrowserSession()
+
+    async def operation(_sid, _base):
+        raise EmptyError()
+
+    monkeypatch.setattr(browser_session, "browser_session", fake_browser_session)
+
+    with pytest.raises(RuntimeError) as exc:
+        asyncio.run(
+            browser_session.run_browser_session_operation(
+                "session-1",
+                operation,
+                operation_name="browser.current",
+                attempts=1,
+            )
+        )
+
+    assert str(exc.value) == "browser.current failed with EmptyError"
