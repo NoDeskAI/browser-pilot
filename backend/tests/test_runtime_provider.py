@@ -45,6 +45,45 @@ def test_runtime_provider_proxies_docker_runtime(monkeypatch):
     assert captured == {"session_id": "session-1"}
 
 
+def test_paste_remote_clipboard_uses_base64_encoded_text(monkeypatch):
+    captured = {}
+
+    async def fake_exec(session_id: str, cmd: str, timeout: float = 10):
+        captured["session_id"] = session_id
+        captured["cmd"] = cmd
+        captured["timeout"] = timeout
+        return ""
+
+    monkeypatch.setattr(runtime_provider, "exec_in_container", fake_exec)
+
+    asyncio.run(runtime_provider.paste_remote_clipboard("session-1", 'hello "$(rm -rf /)" 中文'))
+
+    assert captured["session_id"] == "session-1"
+    assert captured["timeout"] == 10
+    assert "base64 -d > \"$tmp\"" in captured["cmd"]
+    assert "nohup xclip -selection clipboard" in captured["cmd"]
+    assert "xdotool key --clearmodifiers ctrl+v" in captured["cmd"]
+    assert 'hello "$(rm -rf /)" 中文' not in captured["cmd"]
+
+
+def test_get_remote_clipboard_reads_x11_clipboard(monkeypatch):
+    captured = {}
+
+    async def fake_exec(session_id: str, cmd: str, timeout: float = 10):
+        captured["session_id"] = session_id
+        captured["cmd"] = cmd
+        captured["timeout"] = timeout
+        return "remote text"
+
+    monkeypatch.setattr(runtime_provider, "exec_in_container", fake_exec)
+
+    result = asyncio.run(runtime_provider.get_remote_clipboard("session-1"))
+
+    assert result == "remote text"
+    assert captured["session_id"] == "session-1"
+    assert "xclip -selection clipboard -o" in captured["cmd"]
+
+
 def test_non_docker_provider_in_ce_fails_closed(monkeypatch):
     monkeypatch.setattr(runtime_provider, "BROWSER_RUNTIME_PROVIDER", "managed")
     monkeypatch.setattr(runtime_provider, "EDITION", "ce")

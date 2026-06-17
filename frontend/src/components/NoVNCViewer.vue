@@ -29,6 +29,10 @@ import { Toggle } from '@/components/ui/toggle'
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog'
+import {
+  AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
+  AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import TruncatedTooltipValue from '@/components/TruncatedTooltipValue.vue'
 
 const { t } = useI18n()
@@ -84,6 +88,10 @@ const preferredViewerMode = ref<'control' | 'view'>('control')
 const controlViewerError = ref('')
 const controlSwitchError = ref('')
 const switchingControl = ref(false)
+const pendingViewerSwitch = ref<'control' | 'view' | null>(null)
+const viewerSwitchOverlayActive = ref(false)
+const viewerSwitchSnapshot = ref('')
+const viewerSwitchMessage = ref('')
 const connectionError = ref('')
 const networkOpen = ref(false)
 const selectedNetworkEgressId = ref('__direct__')
@@ -115,6 +123,7 @@ const currentNetworkName = computed(() => currentSession.value?.networkEgressNam
 const currentNetworkStatus = computed(() => currentSession.value?.networkEgressStatus || 'healthy')
 const currentNetworkError = computed(() => currentSession.value?.networkEgressHealthError || '')
 const runtimeShellToolsEnabled = computed(() => brand.features.runtimeShellTools !== false)
+const remoteClipboardEnabled = computed(() => brand.features.remoteClipboard !== false)
 const fpProfile = computed(() => currentSession.value?.fingerprintProfile || null)
 const desktopPresets = computed(() => sessState.devicePresets.filter(p => p.category === 'desktop'))
 const mobilePresets = computed(() => sessState.devicePresets.filter(p => p.category === 'mobile'))
@@ -181,6 +190,21 @@ const viewOnlyToggleTooltip = computed(() => {
   }
   return viewOnly.value ? t('vnc.viewOnlyTitle') : t('vnc.interactiveTitle')
 })
+const viewerSwitchConfirmTitle = computed(() => (
+  pendingViewerSwitch.value === 'control'
+    ? t('vnc.controlSwitchConfirmTitle')
+    : t('vnc.viewSwitchConfirmTitle')
+))
+const viewerSwitchConfirmDescription = computed(() => (
+  pendingViewerSwitch.value === 'control'
+    ? t('vnc.controlSwitchConfirmDescription')
+    : t('vnc.viewSwitchConfirmDescription')
+))
+const viewerSwitchConfirmAction = computed(() => (
+  pendingViewerSwitch.value === 'control'
+    ? t('vnc.controlSwitchConfirmAction')
+    : t('vnc.viewSwitchConfirmAction')
+))
 
 const totalRecv = ref(0)
 const totalSent = ref(0)
@@ -208,6 +232,45 @@ function clearContainer() {
   const el = vncContainer.value
   if (!el) return
   while (el.firstChild) el.removeChild(el.firstChild)
+}
+
+function disconnectCurrentRFB() {
+  if (!rfb) return
+  try { rfb.disconnect() } catch { /* already disconnected */ }
+  rfb = null
+  connected.value = false
+}
+
+function captureViewerSnapshot(): string {
+  const canvas = vncContainer.value?.querySelector('canvas')
+  if (!(canvas instanceof HTMLCanvasElement)) return ''
+  try {
+    return canvas.toDataURL('image/png')
+  } catch {
+    return ''
+  }
+}
+
+function beginViewerSwitchOverlay(mode: 'control' | 'view') {
+  viewerSwitchSnapshot.value = captureViewerSnapshot()
+  viewerSwitchMessage.value = mode === 'control' ? t('vnc.switchingToInteractive') : t('vnc.switchingToViewOnly')
+  viewerSwitchOverlayActive.value = true
+}
+
+function clearViewerSwitchOverlay() {
+  viewerSwitchOverlayActive.value = false
+  viewerSwitchMessage.value = ''
+  viewerSwitchSnapshot.value = ''
+}
+
+function waitForViewerPaint(): Promise<void> {
+  return new Promise(resolve => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        setTimeout(resolve, 120)
+      })
+    })
+  })
 }
 
 function normalizeViewerUrl(raw: string): string {
@@ -241,6 +304,16 @@ async function readApiError(resp: Response, fallback: string): Promise<string> {
   } catch {
     return text || fallback
   }
+}
+
+function parsedApiError(data: any, fallback: string): string {
+  if (!data) return fallback
+  if (typeof data.detail === 'string') return data.detail
+  if (typeof data.detail?.error === 'string') return data.detail.error
+  if (typeof data.detail?.reason === 'string') return data.detail.reason
+  if (typeof data.error === 'string') return data.error
+  if (typeof data.message === 'string') return data.message
+  return fallback
 }
 
 async function fetchViewerUrl(mode: 'control' | 'view' = preferredViewerMode.value): Promise<string> {
@@ -280,7 +353,10 @@ function retryConnect() {
   }
 }
 
-async function connectRFB(mode: 'control' | 'view' = preferredViewerMode.value) {
+async function connectRFB(
+  mode: 'control' | 'view' = preferredViewerMode.value,
+  options: { waitForConnect?: boolean } = {},
+): Promise<boolean> {
   const serial = ++connectSerial
   if (rfb) {
     try { rfb.disconnect() } catch { /* already disconnected */ }
@@ -289,7 +365,7 @@ async function connectRFB(mode: 'control' | 'view' = preferredViewerMode.value) 
   clearContainer()
 
   const el = vncContainer.value
-  if (!el) return
+  if (!el) return false
 
   let wsUrl = ''
   try {
@@ -297,9 +373,9 @@ async function connectRFB(mode: 'control' | 'view' = preferredViewerMode.value) 
   } catch (err: any) {
     connectionError.value = err?.message || t('vnc.requestFailed', { status: 0 })
     if (serial === connectSerial) retryConnect()
-    return
+    return false
   }
-  if (serial !== connectSerial) return
+  if (serial !== connectSerial) return false
 
   const OrigWS = window.WebSocket
   const recvRef = totalRecv
@@ -331,7 +407,7 @@ async function connectRFB(mode: 'control' | 'view' = preferredViewerMode.value) 
     window.WebSocket = OrigWS
     connectionError.value = t('vnc.requestFailed', { status: 0 })
     retryConnect()
-    return
+    return false
   }
 
   window.WebSocket = OrigWS
@@ -343,15 +419,40 @@ async function connectRFB(mode: 'control' | 'view' = preferredViewerMode.value) 
   rfb.viewOnly = viewerMode.value === 'view' || viewOnly.value
   rfb.focusOnClick = true
 
+  const waitForConnect = options.waitForConnect === true
+  let settled = false
+  let connectedOnce = false
+  let connectTimeout: ReturnType<typeof setTimeout> | null = null
+  let resolveConnect: ((value: boolean) => void) | null = null
+  const connectResult = waitForConnect
+    ? new Promise<boolean>(resolve => {
+        resolveConnect = resolve
+        connectTimeout = setTimeout(() => {
+          if (settled) return
+          settled = true
+          resolve(false)
+        }, 15000)
+      })
+    : Promise.resolve(true)
+  const settleConnect = (value: boolean) => {
+    if (!resolveConnect || settled) return
+    settled = true
+    if (connectTimeout) clearTimeout(connectTimeout)
+    resolveConnect(value)
+  }
+
   rfb.addEventListener('connect', () => {
+    connectedOnce = true
     connected.value = true
     connectionError.value = ''
     reconnectAttempts = 0
     reconnectExhausted.value = false
+    settleConnect(true)
   })
 
   rfb.addEventListener('disconnect', (e: CustomEvent<{ clean: boolean }>) => {
     connected.value = false
+    if (!connectedOnce) settleConnect(false)
     if (!e.detail.clean && reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
       reconnectAttempts++
       scheduleReconnect()
@@ -367,6 +468,8 @@ async function connectRFB(mode: 'control' | 'view' = preferredViewerMode.value) 
   rfb.addEventListener('credentialsrequired', () => {
     if (rfb) rfb.sendCredentials({ password: '' })
   })
+
+  return await connectResult
 }
 
 function manualReconnect() {
@@ -405,40 +508,50 @@ async function navigate(url: string) {
 }
 
 async function sendInputText() {
-  if (!runtimeShellToolsEnabled.value) return
+  if (!remoteClipboardEnabled.value) return
   if (!inputText.value || inputSending.value) return
   inputSending.value = true
   try {
-    await api('/api/docker/clipboard', {
+    const resp = await api(`/api/sessions/${encodeURIComponent(props.sessionId)}/clipboard`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sessionId: props.sessionId, action: 'paste', text: inputText.value }),
+      body: JSON.stringify({ action: 'paste', text: inputText.value }),
     })
+    const data = await resp.json().catch(() => null)
+    if (!resp.ok || data?.ok === false) {
+      throw new Error(parsedApiError(data, t('vnc.clipboardError')))
+    }
     inputText.value = ''
     inputSent.value = true
     setTimeout(() => { inputSent.value = false }, 300)
-  } catch {
+  } catch (err: any) {
     inputError.value = true
     setTimeout(() => { inputError.value = false }, 1500)
     const { toast } = await import('vue-sonner')
-    toast.error(t('vnc.clipboardError'))
+    toast.error(err?.message || t('vnc.clipboardError'))
   }
   inputSending.value = false
 }
 
 async function getRemoteClipboard() {
-  if (!runtimeShellToolsEnabled.value) return
+  if (!remoteClipboardEnabled.value) return
   if (inputSending.value) return
   inputSending.value = true
   try {
-    const resp = await api('/api/docker/clipboard', {
+    const resp = await api(`/api/sessions/${encodeURIComponent(props.sessionId)}/clipboard`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sessionId: props.sessionId, action: 'get' }),
+      body: JSON.stringify({ action: 'get' }),
     })
-    const data = await resp.json()
+    const data = await resp.json().catch(() => null)
+    if (!resp.ok || data?.ok === false) {
+      throw new Error(parsedApiError(data, t('vnc.clipboardError')))
+    }
     if (data.ok && data.text != null) inputText.value = data.text
-  } catch { /* ignore */ }
+  } catch (err: any) {
+    const { toast } = await import('vue-sonner')
+    toast.error(err?.message || t('vnc.clipboardError'))
+  }
   inputSending.value = false
 }
 
@@ -465,6 +578,7 @@ async function switchToControl() {
   if (switchingControl.value) return
   switchingControl.value = true
   controlSwitchError.value = ''
+  beginViewerSwitchOverlay('control')
   try {
     preferredViewerMode.value = 'control'
     const resp = await api(`/api/agent-devices/${encodeURIComponent(props.sessionId)}/reclaim`, {
@@ -477,15 +591,20 @@ async function switchToControl() {
     }
     viewOnly.value = false
     await fetchSessions().catch(() => undefined)
-    await connectRFB('control')
-    if (viewerMode.value !== 'control') {
+    const connectedToViewer = await connectRFB('control', { waitForConnect: true })
+    if (!connectedToViewer || viewerMode.value !== 'control') {
       throw new Error(controlViewerError.value || t('vnc.controlSwitchStillReadOnly'))
     }
+    await waitForViewerPaint()
+    clearViewerSwitchOverlay()
+    const { toast } = await import('vue-sonner')
+    toast.success(t('vnc.controlSwitchSucceeded'))
   } catch (err: any) {
     preferredViewerMode.value = 'view'
     viewOnly.value = true
     if (rfb) rfb.viewOnly = true
     controlSwitchError.value = err?.message || t('vnc.controlSwitchFailed')
+    clearViewerSwitchOverlay()
     const { toast } = await import('vue-sonner')
     toast.error(t('vnc.controlSwitchFailedReason', { reason: controlSwitchError.value }))
   } finally {
@@ -495,33 +614,38 @@ async function switchToControl() {
 
 async function releaseControlToViewOnly() {
   if (switchingControl.value) return
-  const leaseId = activeSession.value?.activeLease?.leaseId || activeSession.value?.activeLease?.id
-  if (!leaseId) {
-    preferredViewerMode.value = 'view'
-    viewOnly.value = true
-    await connectRFB('view')
-    return
-  }
-
   switchingControl.value = true
   controlSwitchError.value = ''
+  const leaseId = activeSession.value?.activeLease?.leaseId || activeSession.value?.activeLease?.id
+  beginViewerSwitchOverlay('view')
+  disconnectCurrentRFB()
   try {
-    const resp = await api(`/api/agent-devices/${encodeURIComponent(props.sessionId)}/leases/${encodeURIComponent(leaseId)}/release`, {
-      method: 'POST',
-    })
-    if (!resp.ok) {
-      throw new Error(await readApiError(resp, t('vnc.controlReleaseFailed')))
+    if (leaseId) {
+      const resp = await api(`/api/agent-devices/${encodeURIComponent(props.sessionId)}/leases/${encodeURIComponent(leaseId)}/release`, {
+        method: 'POST',
+      })
+      if (!resp.ok) {
+        throw new Error(await readApiError(resp, t('vnc.controlReleaseFailed')))
+      }
     }
     preferredViewerMode.value = 'view'
     viewOnly.value = true
     inputBarOpen.value = false
     await fetchSessions().catch(() => undefined)
-    await connectRFB('view')
+    const connectedToViewer = await connectRFB('view', { waitForConnect: true })
+    if (!connectedToViewer || viewerMode.value !== 'view') {
+      throw new Error(t('vnc.controlReleaseFailed'))
+    }
+    await waitForViewerPaint()
+    clearViewerSwitchOverlay()
+    const { toast } = await import('vue-sonner')
+    toast.success(t('vnc.viewSwitchSucceeded'))
   } catch (err: any) {
     preferredViewerMode.value = 'control'
     viewOnly.value = false
     if (rfb) rfb.viewOnly = false
     controlSwitchError.value = err?.message || t('vnc.controlReleaseFailed')
+    clearViewerSwitchOverlay()
     const { toast } = await import('vue-sonner')
     toast.error(t('vnc.controlReleaseFailedReason', { reason: controlSwitchError.value }))
   } finally {
@@ -530,11 +654,27 @@ async function releaseControlToViewOnly() {
 }
 
 function toggleViewOnly() {
+  if (switchingControl.value) return
   if (viewerMode.value === 'view') {
-    void switchToControl()
+    pendingViewerSwitch.value = 'control'
     return
   }
-  void releaseControlToViewOnly()
+  pendingViewerSwitch.value = 'view'
+}
+
+function onViewerSwitchDialogOpenChange(open: boolean) {
+  if (!open && !switchingControl.value) pendingViewerSwitch.value = null
+}
+
+async function confirmViewerModeSwitch() {
+  const target = pendingViewerSwitch.value
+  if (!target || switchingControl.value) return
+  pendingViewerSwitch.value = null
+  if (target === 'control') {
+    await switchToControl()
+    return
+  }
+  await releaseControlToViewOnly()
 }
 
 function onControlTogglePointerUp(event: PointerEvent) {
@@ -911,7 +1051,7 @@ watch(inputBarOpen, (open) => {
   if (open) nextTick(() => inputRef.value?.focus())
 })
 
-watch(runtimeShellToolsEnabled, (enabled) => {
+watch(remoteClipboardEnabled, (enabled) => {
   if (!enabled) inputBarOpen.value = false
 })
 
@@ -1004,10 +1144,10 @@ watch(annotatedScreenshotOpen, (open) => {
           <TooltipContent>{{ t('vnc.observeTitle') }}</TooltipContent>
         </Tooltip>
 
-        <Separator v-if="runtimeShellToolsEnabled" orientation="vertical" class="h-3.5" />
+        <Separator v-if="remoteClipboardEnabled" orientation="vertical" class="h-3.5" />
 
         <!-- Input bar toggle -->
-        <Button v-if="runtimeShellToolsEnabled" variant="ghost" size="sm"
+        <Button v-if="remoteClipboardEnabled" variant="ghost" size="sm"
           class="h-6 px-2 text-xs gap-1.5 transition-all duration-200"
           :class="inputBarOpen 
             ? 'bg-[#FFCB00] text-black hover:bg-[#e5b600] hover:text-black dark:hover:bg-[#e5b600] dark:hover:text-black shadow-sm font-bold' 
@@ -1411,6 +1551,26 @@ watch(annotatedScreenshotOpen, (open) => {
     <div class="flex-1 relative overflow-hidden bg-black">
       <div ref="vncContainer" class="absolute inset-0" />
 
+      <div
+        v-if="viewerSwitchOverlayActive"
+        class="absolute inset-0 z-30 overflow-hidden bg-black/80"
+        aria-live="polite"
+      >
+        <img
+          v-if="viewerSwitchSnapshot"
+          :src="viewerSwitchSnapshot"
+          alt=""
+          class="absolute inset-0 h-full w-full scale-105 object-contain opacity-85 blur-md"
+        />
+        <div class="absolute inset-0 bg-black/30 backdrop-blur-sm" />
+        <div class="absolute inset-0 flex items-center justify-center">
+          <div class="inline-flex items-center gap-2 rounded-md border border-white/15 bg-black/70 px-3 py-2 text-sm text-white shadow-lg">
+            <Loader2 class="size-4 animate-spin" />
+            <span>{{ viewerSwitchMessage || t('vnc.switchingControl') }}</span>
+          </div>
+        </div>
+      </div>
+
       <aside
         v-if="observePanelOpen"
         class="absolute right-3 top-3 bottom-3 z-20 w-[min(420px,calc(100%-24px))] overflow-hidden rounded-lg border border-border bg-background/95 shadow-2xl backdrop-blur"
@@ -1688,7 +1848,7 @@ watch(annotatedScreenshotOpen, (open) => {
     </div>
 
     <!-- Bottom input bar -->
-    <TooltipProvider v-if="runtimeShellToolsEnabled && inputBarOpen && connected" :delay-duration="300">
+    <TooltipProvider v-if="remoteClipboardEnabled && inputBarOpen && connected" :delay-duration="300">
       <div class="flex items-center gap-1.5 px-2 h-9 border-t border-border bg-background shrink-0">
         <Keyboard class="size-3.5 text-muted-foreground shrink-0" />
         <input
@@ -1726,6 +1886,26 @@ watch(annotatedScreenshotOpen, (open) => {
         </Tooltip>
       </div>
     </TooltipProvider>
+
+    <AlertDialog :open="!!pendingViewerSwitch" @update:open="onViewerSwitchDialogOpenChange">
+      <AlertDialogContent class="sm:max-w-md">
+        <AlertDialogHeader>
+          <AlertDialogTitle>{{ viewerSwitchConfirmTitle }}</AlertDialogTitle>
+          <AlertDialogDescription>
+            {{ viewerSwitchConfirmDescription }}
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel :disabled="switchingControl">
+            {{ t('session.cancel') }}
+          </AlertDialogCancel>
+          <Button :disabled="switchingControl" @click="confirmViewerModeSwitch">
+            <Loader2 v-if="switchingControl" class="size-4 animate-spin" />
+            {{ viewerSwitchConfirmAction }}
+          </Button>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   </div>
 </template>
 
