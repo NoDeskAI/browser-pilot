@@ -58,8 +58,11 @@ async function deleteNetworkEgress(id: string): Promise<void> {
 async function checkNetworkEgress(id: string): Promise<void> {
   const res = await api(`/api/network-egress/${id}/check`, { method: 'POST' })
   const data = await res.json().catch(() => null)
-  if (!res.ok || data?.ok === false) throw new Error(data?.detail || data?.healthError || 'Health check failed')
   await fetchNetworkEgress()
+  const failedStatus = data?.status === 'unhealthy' || data?.status === 'unsupported' || data?.status === 'disabled'
+  if (!res.ok || data?.ok === false || failedStatus) {
+    throw new Error(data?.detail || data?.healthError || 'Health check failed')
+  }
 }
 
 export function useNetworkEgress() {

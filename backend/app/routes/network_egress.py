@@ -9,7 +9,9 @@ from app.auth.dependencies import CurrentUser, get_current_user, require_role
 from app.db import get_pool
 from app.network_egress import (
     EgressError,
+    UnsupportedEgressError,
     VALID_EGRESS_TYPES,
+    assert_managed_network_egress_supported,
     check_egress,
     fetch_egress_for_tenant,
     managed_proxy_url,
@@ -92,6 +94,10 @@ async def create_network_egress(
         raise HTTPException(422, "Unsupported egress type")
     if body.proxyUrl.strip():
         raise HTTPException(422, "Manual HTTP/SOCKS proxy is no longer supported. Use Clash or OpenVPN.")
+    try:
+        assert_managed_network_egress_supported(egress_type)
+    except UnsupportedEgressError as exc:
+        raise HTTPException(422, str(exc)) from exc
 
     proxy_url = ""
     config_ref = ""
@@ -141,6 +147,10 @@ async def update_network_egress(
         raise HTTPException(422, "Manual HTTP/SOCKS proxy is no longer supported. Use Clash or OpenVPN.")
 
     if egress_type in ("clash", "openvpn") and (body.configText is not None or body.configUrl is not None):
+        try:
+            assert_managed_network_egress_supported(egress_type)
+        except UnsupportedEgressError as exc:
+            raise HTTPException(422, str(exc)) from exc
         if body.configText is None and body.configUrl is None:
             raise HTTPException(422, "Config content is required")
         try:
@@ -149,6 +159,11 @@ async def update_network_egress(
         except EgressError as exc:
             raise HTTPException(422, str(exc)) from exc
         status = "unchecked"
+    if body.disabled is False:
+        try:
+            assert_managed_network_egress_supported(egress_type)
+        except UnsupportedEgressError as exc:
+            raise HTTPException(422, str(exc)) from exc
     if body.disabled is not None:
         status = "disabled" if body.disabled else "unchecked"
 
@@ -208,4 +223,4 @@ async def check_network_egress(
         result = await check_egress(row)
     except EgressError as exc:
         result = {"status": "unhealthy", "healthError": str(exc)}
-    return {"ok": True, **result}
+    return {"ok": result.get("status") == "healthy", **result}

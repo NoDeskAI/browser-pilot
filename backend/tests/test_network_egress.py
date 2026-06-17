@@ -43,6 +43,28 @@ def test_create_external_proxy_profile_is_unsupported():
     assert "Unsupported egress type" in exc.value.detail
 
 
+def test_create_managed_profile_rejects_unsupported_runtime(monkeypatch):
+    def reject(*_args):
+        raise network_egress.UnsupportedEgressError("managed egress disabled")
+
+    monkeypatch.setattr(network_egress_routes, "assert_managed_network_egress_supported", reject)
+
+    with pytest.raises(network_egress_routes.HTTPException) as exc:
+        asyncio.run(
+            network_egress_routes.create_network_egress(
+                network_egress_routes.EgressCreateBody(
+                    name="Clash",
+                    type="clash",
+                    configText="proxies: []",
+                ),
+                type("User", (), {"tenant_id": "tenant-1"})(),
+            )
+        )
+
+    assert exc.value.status_code == 422
+    assert exc.value.detail == "managed egress disabled"
+
+
 def test_managed_egress_uses_stable_network_alias():
     row = Row({
         "id": "1234567890abcdef",
@@ -57,6 +79,122 @@ def test_managed_egress_uses_stable_network_alias():
 
     assert effective.proxy_url == "http://bp-egress-1234567890ab:7890"
     assert network_egress.egress_container_name(row["id"]) == "bp-egress-1234567890ab"
+
+
+def test_kubernetes_clash_egress_uses_local_sidecar_proxy(monkeypatch):
+    monkeypatch.setattr(network_egress, "BROWSER_RUNTIME_PROVIDER", "kubernetes")
+    row = Row({
+        "id": "1234567890abcdef",
+        "name": "Office Clash",
+        "type": "clash",
+        "status": "unchecked",
+        "proxy_url": "",
+        "health_error": "",
+    })
+
+    effective = network_egress.effective_proxy_from_row(row, "")
+
+    assert effective.proxy_url == "http://127.0.0.1:7890"
+
+
+def test_kubernetes_clash_runtime_config_disables_tun(tmp_path):
+    source = tmp_path / "config.yaml"
+    source.write_text(
+        """
+mode: rule
+mixed-port: 7899
+tun:
+  enable: true
+proxies: []
+""",
+        encoding="utf-8",
+    )
+
+    generated = yaml.safe_load(network_egress.clash_proxy_runtime_config_text(str(source)))
+
+    assert generated["mode"] == "global"
+    assert generated["mixed-port"] == network_egress.NETWORK_EGRESS_CLASH_PROXY_PORT
+    assert generated["tun"]["enable"] is False
+
+
+def test_ensure_docker_network_rejects_when_managed_egress_is_unsupported(monkeypatch):
+    monkeypatch.setattr(network_egress, "managed_network_egress_supported", lambda *_args: False)
+
+    with pytest.raises(network_egress.UnsupportedEgressError) as exc:
+        asyncio.run(network_egress.ensure_docker_network())
+
+    assert "runtime shell commands are disabled" in str(exc.value)
+
+
+def test_ensure_docker_network_classifies_runtime_shell_disabled_error(monkeypatch):
+    calls = []
+
+    async def fake_run(cmd, timeout=10):
+        calls.append(cmd)
+        if "network inspect" in cmd:
+            return "", "not found", 1
+        return "", "runtime shell commands are disabled in this edition mode", 1
+
+    monkeypatch.setattr(network_egress, "managed_network_egress_supported", lambda *_args: True)
+    monkeypatch.setattr(network_egress, "_run", fake_run)
+
+    with pytest.raises(network_egress.UnsupportedEgressError) as exc:
+        asyncio.run(network_egress.ensure_docker_network())
+
+    assert "runtime shell commands are disabled" in str(exc.value)
+    assert any("docker network create" in cmd for cmd in calls)
+
+
+def test_check_network_egress_returns_ok_false_for_unsupported(monkeypatch):
+    async def fake_fetch(_tenant_id, _egress_id):
+        return Row({"id": "egress-1", "type": "clash", "status": "unchecked", "health_error": ""})
+
+    async def fake_check(_row):
+        return {"status": "unsupported", "healthError": "managed egress disabled", "lastCheckedAt": "now"}
+
+    monkeypatch.setattr(network_egress_routes, "fetch_egress_for_tenant", fake_fetch)
+    monkeypatch.setattr(network_egress_routes, "check_egress", fake_check)
+
+    result = asyncio.run(
+        network_egress_routes.check_network_egress(
+            "egress-1",
+            type("User", (), {"tenant_id": "tenant-1"})(),
+        )
+    )
+
+    assert result["ok"] is False
+    assert result["status"] == "unsupported"
+    assert result["healthError"] == "managed egress disabled"
+
+
+def test_kubernetes_clash_check_validates_config_without_docker(tmp_path, monkeypatch):
+    source = tmp_path / "config.yaml"
+    source.write_text("mode: rule\nproxies: []\n", encoding="utf-8")
+
+    async def fail_run(*_args, **_kwargs):
+        raise AssertionError("kubernetes clash health check must not call docker")
+
+    async def noop_update(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(network_egress, "BROWSER_RUNTIME_PROVIDER", "kubernetes")
+    monkeypatch.setattr(network_egress, "_run", fail_run)
+    monkeypatch.setattr(network_egress, "update_egress_status", noop_update)
+
+    result = asyncio.run(
+        network_egress.check_egress(
+            Row({
+                "id": "egress-1",
+                "type": "clash",
+                "status": "unchecked",
+                "health_error": "",
+                "config_ref": str(source),
+            })
+        )
+    )
+
+    assert result["status"] == "healthy"
+    assert result["healthError"] == ""
 
 
 class _FakeResponse:

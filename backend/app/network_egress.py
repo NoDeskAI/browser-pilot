@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 import yaml
 
 from app.config import (
+    BROWSER_RUNTIME_PROVIDER,
     CONTAINER_PREFIX,
     NETWORK_EGRESS_CLASH_IMAGE,
     NETWORK_EGRESS_CLASH_PROXY_PORT,
@@ -23,6 +24,7 @@ from app.config import (
     PROJECT_ROOT,
 )
 from app.db import get_pool
+from app.edition import runtime_shell_commands_enabled
 from app.runtime_control import run_runtime_command as _run
 
 VALID_EGRESS_TYPES = {"direct", "clash", "openvpn"}
@@ -30,6 +32,12 @@ MANAGED_EGRESS_TYPES = {"clash", "openvpn"}
 CONFIG_URL_SCHEMES = ("http", "https")
 MAX_CONFIG_URL_BYTES = 1024 * 1024
 FETCH_TIMEOUT_SECONDS = 8
+RUNTIME_SHELL_DISABLED_ERROR = "runtime shell commands are disabled in this edition mode"
+MANAGED_EGRESS_UNSUPPORTED_ERROR = "Managed {type} network egress is not available in this deployment."
+MANAGED_EGRESS_SHELL_UNSUPPORTED_ERROR = (
+    "Managed {type} network egress is not available in this deployment because runtime shell commands are disabled."
+)
+KUBERNETES_SUPPORTED_MANAGED_EGRESS_TYPES = {"clash"}
 
 
 def _format_bytes(size: int) -> str:
@@ -98,6 +106,39 @@ def managed_proxy_url(egress_id: str, egress_type: str) -> str:
     return f"http://{egress_network_alias(egress_id)}:{port}"
 
 
+def kubernetes_clash_proxy_url() -> str:
+    return f"http://127.0.0.1:{NETWORK_EGRESS_CLASH_PROXY_PORT}"
+
+
+def _unsupported_managed_egress_message(egress_type: str | None = None) -> str:
+    label = (egress_type or "Clash/OpenVPN").strip() or "Clash/OpenVPN"
+    if BROWSER_RUNTIME_PROVIDER == "kubernetes":
+        return MANAGED_EGRESS_UNSUPPORTED_ERROR.format(type=label)
+    return MANAGED_EGRESS_SHELL_UNSUPPORTED_ERROR.format(type=label)
+
+
+def managed_network_egress_supported(egress_type: str | None = None) -> bool:
+    if BROWSER_RUNTIME_PROVIDER == "kubernetes":
+        return (egress_type or "").strip().lower() in KUBERNETES_SUPPORTED_MANAGED_EGRESS_TYPES
+    return runtime_shell_commands_enabled()
+
+
+def assert_managed_network_egress_supported(egress_type: str | None = None) -> None:
+    if not managed_network_egress_supported(egress_type):
+        raise UnsupportedEgressError(_unsupported_managed_egress_message(egress_type))
+
+
+def _runtime_shell_disabled(message: str) -> bool:
+    return RUNTIME_SHELL_DISABLED_ERROR in str(message or "").lower()
+
+
+def _raise_docker_command_error(prefix: str, stdout: str, stderr: str, *, limit: int = 300) -> None:
+    message = (stderr or stdout or "unknown error")[:limit]
+    if _runtime_shell_disabled(message):
+        raise UnsupportedEgressError(_unsupported_managed_egress_message())
+    raise EgressError(f"{prefix}: {message}")
+
+
 def public_egress_summary(row: Any | None) -> dict:
     if not row:
         return {
@@ -131,13 +172,14 @@ def public_egress_summary(row: Any | None) -> dict:
 
 
 async def ensure_docker_network() -> None:
+    assert_managed_network_egress_supported()
     network = shlex.quote(NETWORK_EGRESS_DOCKER_NETWORK)
     _, _, rc = await _run(f"docker network inspect {network}", timeout=10)
     if rc == 0:
         return
     stdout, stderr, rc = await _run(f"docker network create {network}", timeout=20)
     if rc != 0:
-        raise EgressError(f"docker network create failed: {(stderr or stdout)[:300]}")
+        _raise_docker_command_error("docker network create failed", stdout, stderr)
 
 
 async def update_egress_status(
@@ -231,7 +273,11 @@ def effective_proxy_from_row(row: Any | None, fallback_proxy_url: str = "") -> E
         if egress_type not in MANAGED_EGRESS_TYPES:
             raise EgressError("Unsupported egress type. Use a Clash or OpenVPN network egress profile.")
         proxy_url = row["proxy_url"] or ""
-        proxy_url = managed_proxy_url(row["id"], egress_type)
+        proxy_url = (
+            kubernetes_clash_proxy_url()
+            if BROWSER_RUNTIME_PROVIDER == "kubernetes" and egress_type == "clash"
+            else managed_proxy_url(row["id"], egress_type)
+        )
         return EffectiveEgress(
             id=row["id"],
             name=row["name"],
@@ -394,7 +440,7 @@ def _load_yaml_mapping(path: Path) -> dict[str, Any]:
     return data
 
 
-def _write_clash_global_runtime_config(session_id: str, config_ref: str) -> Path:
+def _clash_runtime_config_data(config_ref: str, *, enable_tun: bool) -> dict[str, Any]:
     source = Path(config_ref)
     if not source.is_file():
         raise EgressError("Clash config is missing")
@@ -407,15 +453,18 @@ def _write_clash_global_runtime_config(session_id: str, config_ref: str) -> Path
     data["external-controller"] = "127.0.0.1:9090"
 
     tun = data.get("tun") if isinstance(data.get("tun"), dict) else {}
-    tun.update(
-        {
-            "enable": True,
-            "stack": tun.get("stack") or "system",
-            "auto-route": True,
-            "auto-detect-interface": True,
-            "strict-route": True,
-        }
-    )
+    if enable_tun:
+        tun.update(
+            {
+                "enable": True,
+                "stack": tun.get("stack") or "system",
+                "auto-route": True,
+                "auto-detect-interface": True,
+                "strict-route": True,
+            }
+        )
+    else:
+        tun["enable"] = False
     data["tun"] = tun
 
     dns = data.get("dns") if isinstance(data.get("dns"), dict) else {}
@@ -423,6 +472,19 @@ def _write_clash_global_runtime_config(session_id: str, config_ref: str) -> Path
     dns.setdefault("listen", "127.0.0.1:1053")
     dns.setdefault("enhanced-mode", "fake-ip")
     data["dns"] = dns
+    return data
+
+
+def clash_proxy_runtime_config_text(config_ref: str) -> str:
+    return yaml.safe_dump(
+        _clash_runtime_config_data(config_ref, enable_tun=False),
+        allow_unicode=False,
+        sort_keys=False,
+    )
+
+
+def _write_clash_global_runtime_config(session_id: str, config_ref: str) -> Path:
+    data = _clash_runtime_config_data(config_ref, enable_tun=True)
 
     runtime_dir = _session_egress_dir(session_id) / "clash"
     runtime_dir.mkdir(parents=True, exist_ok=True)
@@ -598,6 +660,8 @@ async def ensure_managed_egress(row: Any) -> None:
 
 
 async def remove_managed_egress(egress_id: str) -> None:
+    if BROWSER_RUNTIME_PROVIDER == "kubernetes":
+        return
     await _remove_egress_container(egress_id)
 
 
@@ -608,6 +672,17 @@ async def check_egress(row: Any) -> dict:
         return {"status": "disabled", "healthError": row["health_error"] or ""}
     if egress_type == "direct":
         status, error = "healthy", ""
+    elif BROWSER_RUNTIME_PROVIDER == "kubernetes" and egress_type == "clash":
+        try:
+            assert_managed_network_egress_supported(egress_type)
+            clash_proxy_runtime_config_text(str(row["config_ref"] or ""))
+            status, error = "healthy", ""
+        except UnsupportedEgressError as exc:
+            status, error = "unsupported", str(exc)
+        except Exception as exc:
+            status, error = "unhealthy", str(exc)
+    elif BROWSER_RUNTIME_PROVIDER == "kubernetes" and egress_type in MANAGED_EGRESS_TYPES:
+        status, error = "unsupported", _unsupported_managed_egress_message(egress_type)
     elif egress_type in MANAGED_EGRESS_TYPES:
         try:
             await ensure_managed_egress(row)
