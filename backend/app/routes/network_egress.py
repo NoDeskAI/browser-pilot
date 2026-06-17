@@ -69,7 +69,7 @@ async def list_network_egress(user: CurrentUser = Depends(get_current_user)):
     pool = get_pool()
     rows = await pool.fetch(
         """
-        SELECT id, tenant_id, name, type, status, proxy_url, config_ref, health_error,
+        SELECT id, tenant_id, name, type, status, proxy_url, config_ref, config_text, health_error,
                last_checked_at, created_at, updated_at
         FROM network_egress_profiles
         WHERE tenant_id = $1 AND type IN ('clash', 'openvpn')
@@ -115,8 +115,8 @@ async def create_network_egress(
     row = await pool.fetchrow(
         """
         INSERT INTO network_egress_profiles
-            (id, tenant_id, name, type, status, proxy_url, config_ref)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
+            (id, tenant_id, name, type, status, proxy_url, config_ref, config_text)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         RETURNING *
         """,
         egress_id,
@@ -126,6 +126,7 @@ async def create_network_egress(
         _status_for(body.disabled),
         proxy_url,
         config_ref,
+        config_text,
     )
     return {"profile": _response(row)}
 
@@ -141,6 +142,7 @@ async def update_network_egress(
     name = _clean_name(body.name) if body.name is not None else row["name"]
     proxy_url = row["proxy_url"] or ""
     config_ref = row["config_ref"] or ""
+    config_text = row["config_text"] or ""
     status = row["status"] or "unchecked"
 
     if body.proxyUrl is not None:
@@ -174,15 +176,16 @@ async def update_network_egress(
     updated = await pool.fetchrow(
         """
         UPDATE network_egress_profiles
-        SET name = $1, proxy_url = $2, config_ref = $3, status = $4,
-            health_error = CASE WHEN $4 = 'disabled' THEN health_error ELSE '' END,
+        SET name = $1, proxy_url = $2, config_ref = $3, config_text = $4, status = $5,
+            health_error = CASE WHEN $5 = 'disabled' THEN health_error ELSE '' END,
             updated_at = NOW()
-        WHERE id = $5 AND tenant_id = $6
+        WHERE id = $6 AND tenant_id = $7
         RETURNING *
         """,
         name,
         proxy_url,
         config_ref,
+        config_text,
         status,
         egress_id,
         user.tenant_id,

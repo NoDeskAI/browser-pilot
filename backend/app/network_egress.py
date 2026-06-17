@@ -84,6 +84,13 @@ def _egress_dir(tenant_id: str, egress_id: str) -> Path:
     return _config_root() / safe_tenant / egress_id
 
 
+def _row_get(row: Any, key: str, default: Any = None) -> Any:
+    try:
+        return row[key]
+    except (KeyError, IndexError, TypeError):
+        return default
+
+
 def egress_container_name(egress_id: str) -> str:
     return f"{CONTAINER_PREFIX}-egress-{egress_id[:12]}"
 
@@ -429,23 +436,33 @@ async def _ensure_openvpn_image() -> None:
         raise EgressError(f"OpenVPN egress image build failed: {(stderr or stdout)[:500]}")
 
 
-def _load_yaml_mapping(path: Path) -> dict[str, Any]:
-    try:
-        raw = path.read_text(encoding="utf-8")
-    except OSError as exc:
-        raise EgressError(f"Clash config is not readable: {exc}") from exc
+def _load_yaml_mapping_from_text(raw: str) -> dict[str, Any]:
+    if not raw.strip():
+        raise EgressError("Clash config is missing")
     data = yaml.safe_load(raw) or {}
     if not isinstance(data, dict):
         raise EgressError("Clash config must be a YAML mapping")
     return data
 
 
-def _clash_runtime_config_data(config_ref: str, *, enable_tun: bool) -> dict[str, Any]:
-    source = Path(config_ref)
-    if not source.is_file():
-        raise EgressError("Clash config is missing")
+def _load_yaml_mapping(path: Path) -> dict[str, Any]:
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise EgressError(f"Clash config is not readable: {exc}") from exc
+    return _load_yaml_mapping_from_text(raw)
 
-    data = _load_yaml_mapping(source)
+
+def _clash_runtime_config_data(config_ref: str = "", config_text: str = "", *, enable_tun: bool) -> dict[str, Any]:
+    if config_text.strip():
+        data = _load_yaml_mapping_from_text(config_text)
+    elif config_ref:
+        source = Path(config_ref)
+        if not source.is_file():
+            raise EgressError("Clash config is missing")
+        data = _load_yaml_mapping(source)
+    else:
+        raise EgressError("Clash config is missing")
     data["mode"] = "global"
     data["mixed-port"] = NETWORK_EGRESS_CLASH_PROXY_PORT
     data["allow-lan"] = True
@@ -475,16 +492,16 @@ def _clash_runtime_config_data(config_ref: str, *, enable_tun: bool) -> dict[str
     return data
 
 
-def clash_proxy_runtime_config_text(config_ref: str) -> str:
+def clash_proxy_runtime_config_text(config_ref: str = "", config_text: str = "") -> str:
     return yaml.safe_dump(
-        _clash_runtime_config_data(config_ref, enable_tun=False),
+        _clash_runtime_config_data(config_ref, config_text, enable_tun=False),
         allow_unicode=False,
         sort_keys=False,
     )
 
 
-def _write_clash_global_runtime_config(session_id: str, config_ref: str) -> Path:
-    data = _clash_runtime_config_data(config_ref, enable_tun=True)
+def _write_clash_global_runtime_config(session_id: str, config_ref: str = "", config_text: str = "") -> Path:
+    data = _clash_runtime_config_data(config_ref, config_text, enable_tun=True)
 
     runtime_dir = _session_egress_dir(session_id) / "clash"
     runtime_dir.mkdir(parents=True, exist_ok=True)
@@ -548,9 +565,10 @@ async def prepare_session_egress_gateway(
 
     if egress_type == "clash":
         config_ref = str(row["config_ref"] or "")
-        if not config_ref:
+        config_text = str(_row_get(row, "config_text", "") or "")
+        if not config_ref and not config_text.strip():
             raise EgressError("Clash config is missing")
-        runtime_config = _write_clash_global_runtime_config(session_id, config_ref)
+        runtime_config = _write_clash_global_runtime_config(session_id, config_ref, config_text)
         if not _clash_runtime_is_global(runtime_config):
             warnings.append("clash_global_mode_failed")
         cmd = (
@@ -621,10 +639,11 @@ async def ensure_managed_egress(row: Any) -> None:
 
     if egress_type == "clash":
         config_ref = str(row["config_ref"] or "")
-        if not config_ref:
+        config_text = str(_row_get(row, "config_text", "") or "")
+        if not config_ref and not config_text.strip():
             await update_egress_status(egress_id, "unhealthy", "Clash config is missing")
             raise EgressError("Clash config is missing")
-        runtime_config = _write_clash_global_runtime_config(f"egress-{egress_id}", config_ref)
+        runtime_config = _write_clash_global_runtime_config(f"egress-{egress_id}", config_ref, config_text)
         cmd = (
             f"docker run -d --name {shlex.quote(name)} "
             f"--label {shlex.quote(label)} "
@@ -675,7 +694,10 @@ async def check_egress(row: Any) -> dict:
     elif BROWSER_RUNTIME_PROVIDER == "kubernetes" and egress_type == "clash":
         try:
             assert_managed_network_egress_supported(egress_type)
-            clash_proxy_runtime_config_text(str(row["config_ref"] or ""))
+            clash_proxy_runtime_config_text(
+                str(row["config_ref"] or ""),
+                str(_row_get(row, "config_text", "") or ""),
+            )
             status, error = "healthy", ""
         except UnsupportedEgressError as exc:
             status, error = "unsupported", str(exc)

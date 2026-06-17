@@ -117,6 +117,21 @@ proxies: []
     assert generated["tun"]["enable"] is False
 
 
+def test_kubernetes_clash_runtime_config_accepts_persisted_text(tmp_path):
+    missing_source = tmp_path / "missing.yaml"
+
+    generated = yaml.safe_load(
+        network_egress.clash_proxy_runtime_config_text(
+            str(missing_source),
+            "mode: rule\nmixed-port: 7899\nproxies: []\n",
+        )
+    )
+
+    assert generated["mode"] == "global"
+    assert generated["mixed-port"] == network_egress.NETWORK_EGRESS_CLASH_PROXY_PORT
+    assert generated["tun"]["enable"] is False
+
+
 def test_ensure_docker_network_rejects_when_managed_egress_is_unsupported(monkeypatch):
     monkeypatch.setattr(network_egress, "managed_network_egress_supported", lambda *_args: False)
 
@@ -168,8 +183,7 @@ def test_check_network_egress_returns_ok_false_for_unsupported(monkeypatch):
 
 
 def test_kubernetes_clash_check_validates_config_without_docker(tmp_path, monkeypatch):
-    source = tmp_path / "config.yaml"
-    source.write_text("mode: rule\nproxies: []\n", encoding="utf-8")
+    source = tmp_path / "missing.yaml"
 
     async def fail_run(*_args, **_kwargs):
         raise AssertionError("kubernetes clash health check must not call docker")
@@ -189,6 +203,7 @@ def test_kubernetes_clash_check_validates_config_without_docker(tmp_path, monkey
                 "status": "unchecked",
                 "health_error": "",
                 "config_ref": str(source),
+                "config_text": "mode: rule\nproxies: []\n",
             })
         )
     )

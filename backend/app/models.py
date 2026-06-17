@@ -231,6 +231,7 @@ class NetworkEgressProfile(Base):
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default="unchecked")
     proxy_url: Mapped[str | None] = mapped_column(Text, server_default="")
     config_ref: Mapped[str | None] = mapped_column(Text, server_default="")
+    config_text: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
     health_error: Mapped[str | None] = mapped_column(Text, server_default="")
     last_checked_at: Mapped[datetime | None] = mapped_column()
     created_at: Mapped[datetime] = mapped_column(
