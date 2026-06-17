@@ -31,7 +31,9 @@ from app.runtime_provider import (
     exec_in_container,
     get_all_container_statuses,
     get_container_status,
+    get_remote_clipboard,
     pause_container,
+    paste_remote_clipboard,
     recreate_container,
     remove_container,
     resolve_vnc_websocket_url,
@@ -204,6 +206,11 @@ class FingerprintActionBody(BaseModel):
 
 class ViewerTicketBody(BaseModel):
     mode: Literal["control", "view"] = "control"
+
+
+class ClipboardBody(BaseModel):
+    action: Literal["paste", "get"]
+    text: str | None = None
 
 
 class AppStateBody(BaseModel):
@@ -968,6 +975,34 @@ async def create_viewer_ticket(
         next_step="connect_viewer",
         state_changed=False,
     )
+
+
+@router.post("/api/sessions/{session_id}/clipboard")
+async def session_clipboard(
+    session_id: str,
+    body: ClipboardBody,
+    user: CurrentUser = Depends(get_session_aware_user),
+):
+    await verify_session_access(session_id, user)
+    try:
+        if body.action == "paste":
+            if not body.text:
+                raise HTTPException(status_code=422, detail="missing_text_param")
+            await paste_remote_clipboard(session_id, body.text)
+            return {"ok": True}
+        text = await get_remote_clipboard(session_id)
+        return {"ok": True, "text": text}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning("clipboard [%s]: %s failed: %s", session_id, body.action, exc)
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "reason": "remote_clipboard_failed",
+                "error": str(exc)[:300],
+            },
+        ) from exc
 
 
 @router.websocket("/api/sessions/{session_id}/vnc")
@@ -1779,6 +1814,7 @@ async def get_site_info(request: Request):
             "multiTenantManagement": EDITION == "ee",
             "browserImages": True,
             "runtimeShellTools": True,
+            "remoteClipboard": True,
             **ee_features(),
         },
         "auth": {

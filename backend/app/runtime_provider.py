@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import base64
 import importlib
+import shlex
 from typing import Any, Protocol
 
 from app import container as docker_runtime
@@ -185,6 +187,25 @@ async def ensure_localhost_bridge_for_url(session_id: str, url: str) -> dict[str
 
 async def exec_in_container(session_id: str, cmd: str, timeout: float = 10) -> str:
     return await get_runtime_provider().exec_in_container(session_id, cmd, timeout=timeout)
+
+
+def _remote_shell_command(script: str) -> str:
+    return f"sh -lc {shlex.quote(script)}"
+
+
+async def paste_remote_clipboard(session_id: str, text: str) -> None:
+    encoded = base64.b64encode(text.encode("utf-8")).decode("ascii")
+    script = (
+        'export DISPLAY="${DISPLAY:-:99.0}"'
+        f" && printf %s {shlex.quote(encoded)} | base64 -d | xclip -selection clipboard"
+        " && xdotool key --clearmodifiers ctrl+v"
+    )
+    await exec_in_container(session_id, _remote_shell_command(script), timeout=10)
+
+
+async def get_remote_clipboard(session_id: str) -> str:
+    script = 'export DISPLAY="${DISPLAY:-:99.0}" && xclip -selection clipboard -o 2>/dev/null || true'
+    return await exec_in_container(session_id, _remote_shell_command(script), timeout=10)
 
 
 async def sync_fingerprint_profile_to_container(

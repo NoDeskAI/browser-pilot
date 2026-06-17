@@ -115,6 +115,7 @@ const currentNetworkName = computed(() => currentSession.value?.networkEgressNam
 const currentNetworkStatus = computed(() => currentSession.value?.networkEgressStatus || 'healthy')
 const currentNetworkError = computed(() => currentSession.value?.networkEgressHealthError || '')
 const runtimeShellToolsEnabled = computed(() => brand.features.runtimeShellTools !== false)
+const remoteClipboardEnabled = computed(() => brand.features.remoteClipboard !== false)
 const fpProfile = computed(() => currentSession.value?.fingerprintProfile || null)
 const desktopPresets = computed(() => sessState.devicePresets.filter(p => p.category === 'desktop'))
 const mobilePresets = computed(() => sessState.devicePresets.filter(p => p.category === 'mobile'))
@@ -241,6 +242,16 @@ async function readApiError(resp: Response, fallback: string): Promise<string> {
   } catch {
     return text || fallback
   }
+}
+
+function parsedApiError(data: any, fallback: string): string {
+  if (!data) return fallback
+  if (typeof data.detail === 'string') return data.detail
+  if (typeof data.detail?.error === 'string') return data.detail.error
+  if (typeof data.detail?.reason === 'string') return data.detail.reason
+  if (typeof data.error === 'string') return data.error
+  if (typeof data.message === 'string') return data.message
+  return fallback
 }
 
 async function fetchViewerUrl(mode: 'control' | 'view' = preferredViewerMode.value): Promise<string> {
@@ -405,40 +416,50 @@ async function navigate(url: string) {
 }
 
 async function sendInputText() {
-  if (!runtimeShellToolsEnabled.value) return
+  if (!remoteClipboardEnabled.value) return
   if (!inputText.value || inputSending.value) return
   inputSending.value = true
   try {
-    await api('/api/docker/clipboard', {
+    const resp = await api(`/api/sessions/${encodeURIComponent(props.sessionId)}/clipboard`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sessionId: props.sessionId, action: 'paste', text: inputText.value }),
+      body: JSON.stringify({ action: 'paste', text: inputText.value }),
     })
+    const data = await resp.json().catch(() => null)
+    if (!resp.ok || data?.ok === false) {
+      throw new Error(parsedApiError(data, t('vnc.clipboardError')))
+    }
     inputText.value = ''
     inputSent.value = true
     setTimeout(() => { inputSent.value = false }, 300)
-  } catch {
+  } catch (err: any) {
     inputError.value = true
     setTimeout(() => { inputError.value = false }, 1500)
     const { toast } = await import('vue-sonner')
-    toast.error(t('vnc.clipboardError'))
+    toast.error(err?.message || t('vnc.clipboardError'))
   }
   inputSending.value = false
 }
 
 async function getRemoteClipboard() {
-  if (!runtimeShellToolsEnabled.value) return
+  if (!remoteClipboardEnabled.value) return
   if (inputSending.value) return
   inputSending.value = true
   try {
-    const resp = await api('/api/docker/clipboard', {
+    const resp = await api(`/api/sessions/${encodeURIComponent(props.sessionId)}/clipboard`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sessionId: props.sessionId, action: 'get' }),
+      body: JSON.stringify({ action: 'get' }),
     })
-    const data = await resp.json()
+    const data = await resp.json().catch(() => null)
+    if (!resp.ok || data?.ok === false) {
+      throw new Error(parsedApiError(data, t('vnc.clipboardError')))
+    }
     if (data.ok && data.text != null) inputText.value = data.text
-  } catch { /* ignore */ }
+  } catch (err: any) {
+    const { toast } = await import('vue-sonner')
+    toast.error(err?.message || t('vnc.clipboardError'))
+  }
   inputSending.value = false
 }
 
@@ -911,7 +932,7 @@ watch(inputBarOpen, (open) => {
   if (open) nextTick(() => inputRef.value?.focus())
 })
 
-watch(runtimeShellToolsEnabled, (enabled) => {
+watch(remoteClipboardEnabled, (enabled) => {
   if (!enabled) inputBarOpen.value = false
 })
 
@@ -1004,10 +1025,10 @@ watch(annotatedScreenshotOpen, (open) => {
           <TooltipContent>{{ t('vnc.observeTitle') }}</TooltipContent>
         </Tooltip>
 
-        <Separator v-if="runtimeShellToolsEnabled" orientation="vertical" class="h-3.5" />
+        <Separator v-if="remoteClipboardEnabled" orientation="vertical" class="h-3.5" />
 
         <!-- Input bar toggle -->
-        <Button v-if="runtimeShellToolsEnabled" variant="ghost" size="sm"
+        <Button v-if="remoteClipboardEnabled" variant="ghost" size="sm"
           class="h-6 px-2 text-xs gap-1.5 transition-all duration-200"
           :class="inputBarOpen 
             ? 'bg-[#FFCB00] text-black hover:bg-[#e5b600] hover:text-black dark:hover:bg-[#e5b600] dark:hover:text-black shadow-sm font-bold' 
@@ -1688,7 +1709,7 @@ watch(annotatedScreenshotOpen, (open) => {
     </div>
 
     <!-- Bottom input bar -->
-    <TooltipProvider v-if="runtimeShellToolsEnabled && inputBarOpen && connected" :delay-duration="300">
+    <TooltipProvider v-if="remoteClipboardEnabled && inputBarOpen && connected" :delay-duration="300">
       <div class="flex items-center gap-1.5 px-2 h-9 border-t border-border bg-background shrink-0">
         <Keyboard class="size-3.5 text-muted-foreground shrink-0" />
         <input

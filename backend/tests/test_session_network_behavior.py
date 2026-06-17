@@ -1380,6 +1380,76 @@ def test_sync_observed_network_updates_profile_and_marks_dns_restart(monkeypatch
     assert any("dns_recreate_required" in w for w in saved["runtimeWarnings"])
 
 
+def test_session_clipboard_paste_uses_runtime_provider(monkeypatch):
+    calls = {}
+
+    async def fake_verify(session_id, user):
+        calls["verify"] = (session_id, user.id)
+
+    async def fake_paste(session_id, text):
+        calls["paste"] = (session_id, text)
+
+    monkeypatch.setattr(sessions, "verify_session_access", fake_verify)
+    monkeypatch.setattr(sessions, "paste_remote_clipboard", fake_paste)
+
+    result = asyncio.run(
+        sessions.session_clipboard(
+            "session-1",
+            sessions.ClipboardBody(action="paste", text="hello 中文"),
+            _user(),
+        )
+    )
+
+    assert result == {"ok": True}
+    assert calls["verify"] == ("session-1", "user-1")
+    assert calls["paste"] == ("session-1", "hello 中文")
+
+
+def test_session_clipboard_get_uses_runtime_provider(monkeypatch):
+    calls = {}
+
+    async def fake_verify(session_id, user):
+        calls["verify"] = (session_id, user.id)
+
+    async def fake_get(session_id):
+        calls["get"] = session_id
+        return "remote clipboard"
+
+    monkeypatch.setattr(sessions, "verify_session_access", fake_verify)
+    monkeypatch.setattr(sessions, "get_remote_clipboard", fake_get)
+
+    result = asyncio.run(
+        sessions.session_clipboard(
+            "session-1",
+            sessions.ClipboardBody(action="get"),
+            _user(),
+        )
+    )
+
+    assert result == {"ok": True, "text": "remote clipboard"}
+    assert calls["verify"] == ("session-1", "user-1")
+    assert calls["get"] == "session-1"
+
+
+def test_session_clipboard_paste_rejects_missing_text(monkeypatch):
+    async def fake_verify(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(sessions, "verify_session_access", fake_verify)
+
+    with pytest.raises(sessions.HTTPException) as exc:
+        asyncio.run(
+            sessions.session_clipboard(
+                "session-1",
+                sessions.ClipboardBody(action="paste", text=""),
+                _user(),
+            )
+        )
+
+    assert exc.value.status_code == 422
+    assert exc.value.detail == "missing_text_param"
+
+
 def test_manual_network_override_marks_warning_and_keeps_numeric_coordinates(monkeypatch):
     profile = _profile("zh-CN")
     profile["network"] = _network("Asia/Singapore", "SG")
