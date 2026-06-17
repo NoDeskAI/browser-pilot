@@ -197,7 +197,11 @@ async def paste_remote_clipboard(session_id: str, text: str) -> None:
     encoded = base64.b64encode(text.encode("utf-8")).decode("ascii")
     script = (
         'export DISPLAY="${DISPLAY:-:99.0}"'
-        f" && printf %s {shlex.quote(encoded)} | base64 -d | xclip -selection clipboard"
+        " && tmp=$(mktemp)"
+        ' && trap \'rm -f "$tmp"\' EXIT'
+        f" && printf %s {shlex.quote(encoded)} | base64 -d > \"$tmp\""
+        ' && (nohup xclip -selection clipboard < "$tmp" >/tmp/browser-pilot-clipboard-xclip.log 2>&1 &)'
+        " && sleep 0.2"
         " && xdotool key --clearmodifiers ctrl+v"
     )
     await exec_in_container(session_id, _remote_shell_command(script), timeout=10)

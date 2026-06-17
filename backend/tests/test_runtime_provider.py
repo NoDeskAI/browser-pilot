@@ -60,7 +60,8 @@ def test_paste_remote_clipboard_uses_base64_encoded_text(monkeypatch):
 
     assert captured["session_id"] == "session-1"
     assert captured["timeout"] == 10
-    assert "base64 -d | xclip -selection clipboard" in captured["cmd"]
+    assert "base64 -d > \"$tmp\"" in captured["cmd"]
+    assert "nohup xclip -selection clipboard" in captured["cmd"]
     assert "xdotool key --clearmodifiers ctrl+v" in captured["cmd"]
     assert 'hello "$(rm -rf /)" 中文' not in captured["cmd"]
 
