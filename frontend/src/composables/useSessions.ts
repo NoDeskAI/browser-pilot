@@ -1,5 +1,5 @@
 import { reactive, readonly } from 'vue'
-import type { Session, DevicePreset, DeleteSessionFileOptions, DeleteSessionResult } from '../types'
+import type { Session, DevicePreset, DeleteSessionFileOptions, DeleteSessionResult, BrowserLiteNode } from '../types'
 import i18n from '../i18n'
 import { toast } from 'vue-sonner'
 import { api } from '../lib/api'
@@ -155,6 +155,7 @@ async function fetchSessions(): Promise<void> {
         browserLang: s.browserLang || 'zh-CN',
         browserRuntime: s.browserRuntime || 'standard_chrome',
         browserImageId: s.browserImageId ?? null,
+        browserLiteNodeId: s.browserLiteNodeId ?? null,
         activeLease: s.activeLease || null,
       }
     })
@@ -188,12 +189,27 @@ async function fetchBrowserImageState(): Promise<{ images: any[]; runtimeImages:
   }
 }
 
+async function fetchBrowserLiteNodes(): Promise<BrowserLiteNode[]> {
+  const res = await api('/api/browser-lite/nodes')
+  if (!res.ok) return []
+  const data = await res.json()
+  return data.nodes || []
+}
+
+async function createBrowserLitePairingCode(): Promise<{ pairingCode: string; expiresAt: string }> {
+  const res = await api('/api/browser-lite/pairing-codes', { method: 'POST' })
+  const data = await res.json().catch(() => null)
+  if (!res.ok) throw new Error(data?.detail || i18n.global.t('browserRuntime.pairingCodeError'))
+  return data
+}
+
 async function createSession(
   name?: string,
   chromeVersion?: string,
   networkEgressId?: string | null,
-  browserRuntime: 'standard_chrome' | 'cloak_chromium' = 'standard_chrome',
+  browserRuntime: 'standard_chrome' | 'cloak_chromium' | 'browser_lite' = 'standard_chrome',
   browserImageId?: string | null,
+  browserLiteNodeId?: string | null,
 ): Promise<Session> {
   if (!name) name = i18n.global.t('session.defaultName')
   const browserLang = _LOCALE_TO_BROWSER_LANG[(i18n.global.locale as any).value] ?? 'en-US'
@@ -209,7 +225,8 @@ async function createSession(
   const body: Record<string, any> = { name, browserLang, browserRuntime }
   if (brand.features.browserImages !== false && browserRuntime === 'standard_chrome' && effectiveChromeVersion) body.chromeVersion = effectiveChromeVersion
   if (brand.features.browserImages !== false && browserRuntime === 'cloak_chromium' && browserImageId) body.browserImageId = browserImageId
-  if (networkEgressId) body.networkEgressId = networkEgressId
+  if (browserRuntime === 'browser_lite' && browserLiteNodeId) body.browserLiteNodeId = browserLiteNodeId
+  if (browserRuntime !== 'browser_lite' && networkEgressId) body.networkEgressId = networkEgressId
 
   const res = await api('/api/sessions', {
     method: 'POST',
@@ -239,6 +256,7 @@ async function createSession(
     browserLang: data.browserLang || browserLang,
     browserRuntime: data.browserRuntime || browserRuntime,
     browserImageId: data.browserImageId ?? browserImageId ?? null,
+    browserLiteNodeId: data.browserLiteNodeId ?? browserLiteNodeId ?? null,
     activeLease: data.agentDevice?.leaseId
       ? {
           id: data.agentDevice.leaseId,
@@ -562,5 +580,7 @@ export function useSessions() {
     overrideNetworkProfile,
     fetchBrowserImages,
     fetchBrowserImageState,
+    fetchBrowserLiteNodes,
+    createBrowserLitePairingCode,
   }
 }

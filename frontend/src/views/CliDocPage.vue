@@ -79,6 +79,8 @@ ${c} session list                    # List all sessions
 ${c} session create --name "Task"    # Create session
 ${c} session create --name "Task" --network-egress <egress-id|direct> # Create with network egress
 ${c} session create --name "Task" --runtime cloak_chromium # Create with Cloak Chromium runtime
+${c} browser-lite nodes --json          # List paired real Mac nodes
+${c} session create --name "Mac Task" --runtime browser_lite --browser-lite-node <node-id> # Create on a Mac node
 ${c} session use <session-id>        # Activate session
 ${c} session start <session-id>      # Start browser container
 ${c} session stop <session-id>       # Stop browser container
@@ -174,6 +176,8 @@ ${c} session list                    # 列出所有会话
 ${c} session create --name "任务"    # 创建会话
 ${c} session create --name "任务" --network-egress <egress-id|direct> # 创建时指定网络出口
 ${c} session create --name "任务" --runtime cloak_chromium # 使用 Cloak Chromium 运行时创建
+${c} browser-lite nodes --json          # 列出已配对的真实 Mac 节点
+${c} session create --name "Mac 任务" --runtime browser_lite --browser-lite-node <node-id> # 在 Mac 节点创建
 ${c} session use <session-id>        # 激活会话
 ${c} session start <session-id>      # 启动浏览器容器
 ${c} session stop <session-id>       # 停止浏览器容器
@@ -387,6 +391,8 @@ ${c} session list --json                         # List all sessions
 ${c} session create --name "Task" --json         # Create session and read returned id
 ${c} session create --name "Task" --network-egress <egress-id|direct> --json # Create with network egress
 ${c} session create --name "Task" --runtime cloak_chromium --json # Create with Cloak Chromium runtime
+${c} browser-lite nodes --json                      # List paired real Mac nodes
+${c} session create --name "Mac Task" --runtime browser_lite --browser-lite-node <node-id> --json # Create on a Mac node
 ${c} --session "<session-id>" session start      # Start browser container
 ${c} --session "<session-id>" session stop       # Stop browser container
 ${c} --session "<session-id>" session pause      # Hibernate browser container
@@ -478,6 +484,8 @@ ${c} session list --json                         # 列出所有会话
 ${c} session create --name "任务" --json         # 创建会话并读取返回的 id
 ${c} session create --name "任务" --network-egress <egress-id|direct> --json # 创建时指定网络出口
 ${c} session create --name "任务" --runtime cloak_chromium --json # 使用 Cloak Chromium 运行时创建
+${c} browser-lite nodes --json                      # 列出已配对的真实 Mac 节点
+${c} session create --name "Mac 任务" --runtime browser_lite --browser-lite-node <node-id> --json # 在 Mac 节点创建
 ${c} --session "<session-id>" session start      # 启动浏览器容器
 ${c} --session "<session-id>" session stop       # 停止浏览器容器
 ${c} --session "<session-id>" session pause      # 休眠浏览器容器

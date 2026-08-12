@@ -226,6 +226,23 @@ The browser image settings page reports the current build stage, elapsed time, a
 
 Cloak Chromium keeps the same Browser Pilot API surface and noVNC port shape (`4444` control, `7900` noVNC) through a lightweight WebDriver-compatible shim. It is intended for authorized automation, testing, and self-owned account workflows; it does not solve CAPTCHAs and does not guarantee bypassing every anti-bot system.
 
+Browser Lite is the third runtime and runs the bundled Chromium from a native
+macOS app on a paired real Mac node:
+
+```bash
+bpilot browser-lite nodes --json
+bpilot session create --name "Mac node test" --runtime browser_lite \
+  --browser-lite-node <node-id> --json
+```
+
+The node makes an outbound authenticated WebSocket connection, so no inbound
+Mac port needs to be exposed. Each Browser Pilot session gets an isolated,
+persistent Electron partition. Browser Lite intentionally uses the Mac's real
+network and browser environment: container network egress, synthetic
+fingerprint injection, remote shell, and Web VNC are unavailable. Browser
+navigation, input, screenshots, tabs, cookies, CDP, and lifecycle actions remain
+available through the normal Browser Pilot APIs and CLI.
+
 ### Network Egress
 
 Browser Pilot can route a session through a deployment-side egress profile from **Settings > Network Egress**:

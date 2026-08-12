@@ -10,6 +10,7 @@ from app.config import BROWSER_RUNTIME_PROVIDER, EDITION
 
 BROWSER_RUNTIME_STANDARD = docker_runtime.BROWSER_RUNTIME_STANDARD
 BROWSER_RUNTIME_CLOAK = docker_runtime.BROWSER_RUNTIME_CLOAK
+BROWSER_RUNTIME_LITE = "browser_lite"
 
 
 class RuntimeProviderError(RuntimeError):
@@ -134,6 +135,28 @@ class DockerRuntimeProvider:
 _provider: RuntimeProvider | None = None
 
 
+async def _session_uses_browser_lite(session_id: str) -> bool:
+    from app.browser_lite import session_is_browser_lite
+    try:
+        return await session_is_browser_lite(session_id)
+    except RuntimeError as exc:
+        if "Database pool not initialized" in str(exc):
+            return False
+        raise
+
+
+async def _browser_lite_command(
+    session_id: str,
+    action: str,
+    *,
+    timeout: float = 45,
+    **payload: Any,
+) -> Any:
+    from app.browser_lite import session_command
+
+    return await session_command(session_id, action, payload=payload or None, timeout=timeout)
+
+
 def _load_ee_provider(provider_name: str) -> RuntimeProvider:
     if EDITION != "ee":
         raise RuntimeProviderError(f"BROWSER_RUNTIME_PROVIDER={provider_name} requires EDITION=ee")
@@ -186,6 +209,8 @@ async def ensure_localhost_bridge_for_url(session_id: str, url: str) -> dict[str
 
 
 async def exec_in_container(session_id: str, cmd: str, timeout: float = 10) -> str:
+    if await _session_uses_browser_lite(session_id):
+        raise RuntimeProviderError("Browser Lite does not expose a remote shell")
     return await get_runtime_provider().exec_in_container(session_id, cmd, timeout=timeout)
 
 
@@ -218,6 +243,8 @@ async def sync_fingerprint_profile_to_container(
     *,
     restart_agent: bool = True,
 ) -> None:
+    if await _session_uses_browser_lite(session_id):
+        return
     await get_runtime_provider().sync_fingerprint_profile_to_container(
         session_id,
         fingerprint_profile,
@@ -226,38 +253,94 @@ async def sync_fingerprint_profile_to_container(
 
 
 async def get_container_status(session_id: str) -> str:
+    if await _session_uses_browser_lite(session_id):
+        try:
+            result = await _browser_lite_command(session_id, "status", timeout=3)
+            return str((result or {}).get("status") or "not_found")
+        except Exception:
+            return "not_found"
     return await get_runtime_provider().get_container_status(session_id)
 
 
 async def get_all_container_statuses() -> dict[str, str]:
-    return await get_runtime_provider().get_all_container_statuses()
+    statuses = await get_runtime_provider().get_all_container_statuses()
+    try:
+        import asyncio
+
+        from app.browser_lite import node_online
+        from app.db import get_pool
+
+        rows = await get_pool().fetch(
+            "SELECT id, browser_lite_node_id FROM sessions WHERE COALESCE(browser_runtime, 'standard_chrome') = 'browser_lite'"
+        )
+        async def browser_lite_status(row) -> tuple[str, str]:
+            session_id = row["id"]
+            if not await node_online(row["browser_lite_node_id"]):
+                return session_id[:12], "not_found"
+            try:
+                result = await _browser_lite_command(session_id, "status", timeout=3)
+                return session_id[:12], str((result or {}).get("status") or "not_found")
+            except Exception:
+                return session_id[:12], "not_found"
+
+        for session_id, status in await asyncio.gather(*(browser_lite_status(row) for row in rows)):
+            statuses[session_id] = status
+    except Exception:
+        pass
+    return statuses
 
 
 async def ensure_container_running(session_id: str) -> dict[str, int]:
+    if await _session_uses_browser_lite(session_id):
+        result = await _browser_lite_command(session_id, "ensure")
+        runtime = (result or {}).get("runtime") or {}
+        return {"selenium_port": int(runtime.get("port") or 0), "vnc_port": 0}
     return await get_runtime_provider().ensure_container_running(session_id)
 
 
 async def stop_container(session_id: str) -> None:
+    if await _session_uses_browser_lite(session_id):
+        await _browser_lite_command(session_id, "stop")
+        return
     await get_runtime_provider().stop_container(session_id)
 
 
 async def pause_container(session_id: str) -> None:
+    if await _session_uses_browser_lite(session_id):
+        await _browser_lite_command(session_id, "pause")
+        return
     await get_runtime_provider().pause_container(session_id)
 
 
 async def remove_container(session_id: str, *, keep_volume: bool = False) -> None:
+    if await _session_uses_browser_lite(session_id):
+        await _browser_lite_command(session_id, "stop" if keep_volume else "remove")
+        return
     await get_runtime_provider().remove_container(session_id, keep_volume=keep_volume)
 
 
 async def recreate_container(session_id: str, *args: Any, **kwargs: Any) -> None:
+    if await _session_uses_browser_lite(session_id):
+        await _browser_lite_command(session_id, "stop")
+        options = {
+            key: kwargs[key]
+            for key in ("width", "height")
+            if kwargs.get(key) is not None
+        }
+        await _browser_lite_command(session_id, "ensure", options=options)
+        return
     await get_runtime_provider().recreate_container(session_id, *args, **kwargs)
 
 
 async def resolve_selenium_base_url(session_id: str) -> str:
+    if await _session_uses_browser_lite(session_id):
+        return f"browser_lite://{session_id}"
     return await get_runtime_provider().resolve_selenium_base_url(session_id)
 
 
 async def resolve_vnc_websocket_url(session_id: str) -> str:
+    if await _session_uses_browser_lite(session_id):
+        raise RuntimeProviderError("Browser Lite remote viewer is not enabled; open the app on the Mac node")
     return await get_runtime_provider().resolve_vnc_websocket_url(session_id)
 
 

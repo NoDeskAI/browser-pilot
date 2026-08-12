@@ -86,8 +86,28 @@ class Session(Base):
         Text, nullable=False, server_default="standard_chrome"
     )
     browser_image_id: Mapped[str | None] = mapped_column(Text)
+    browser_lite_node_id: Mapped[str | None] = mapped_column(Text)
     tenant_id: Mapped[str | None] = mapped_column(Text)
     user_id: Mapped[str | None] = mapped_column(Text)
+
+
+class BrowserLiteNode(Base):
+    __tablename__ = "browser_lite_nodes"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(Text, ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
+    display_name: Mapped[str] = mapped_column(Text, nullable=False)
+    token_hash: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
+    platform: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    architecture: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    app_version: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    chromium_version: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    capabilities: Mapped[list] = mapped_column(JSON, nullable=False, server_default="[]")
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="offline")
+    last_seen_at: Mapped[datetime | None] = mapped_column()
+    created_by: Mapped[str | None] = mapped_column(Text, ForeignKey("users.id", ondelete="SET NULL"))
+    created_at: Mapped[datetime] = mapped_column(nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(nullable=False, server_default=func.now())
 
 
 class AppState(Base):

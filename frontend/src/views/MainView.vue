@@ -28,7 +28,14 @@ const notify = useNotify()
 const { state: sessions, switchSession, startContainer, pauseContainer, deleteSession, renameSession, fetchSessions } = useSessions()
 
 const activeSession = computed(() => sessions.sessions.find(s => s.id === sessions.activeId))
-const viewerVisible = computed(() => activeSession.value?.containerStatus === 'running')
+const browserLiteRunning = computed(() => (
+  activeSession.value?.browserRuntime === 'browser_lite'
+  && activeSession.value?.containerStatus === 'running'
+))
+const viewerVisible = computed(() => (
+  activeSession.value?.browserRuntime !== 'browser_lite'
+  && activeSession.value?.containerStatus === 'running'
+))
 
 const editing = ref(false)
 const editName = ref('')
@@ -345,6 +352,17 @@ async function onPauseContainer() {
 
     <div class="flex-1 relative overflow-hidden min-h-0 bg-muted/10">
       <NoVNCViewer v-if="viewerVisible && sessions.activeId" :key="sessions.activeId" :session-id="sessions.activeId" />
+
+      <div v-else-if="browserLiteRunning" class="absolute inset-0 flex flex-col items-center justify-center px-6 text-center text-muted-foreground">
+        <div class="mb-4 rounded-2xl border border-primary/20 bg-primary/10 p-4 text-primary">
+          <Monitor class="size-9" :stroke-width="1.5" />
+        </div>
+        <p class="text-base font-medium text-foreground">{{ t('browserRuntime.remoteNodeRunning') }}</p>
+        <p class="mt-2 max-w-md text-sm">{{ t('browserRuntime.remoteNodeRunningHint') }}</p>
+        <Badge variant="outline" class="mt-4 font-mono">
+          {{ activeSession?.browserLiteNodeId || t('browserRuntime.browser_lite') }}
+        </Badge>
+      </div>
       
       <div v-else-if="sessions.activeId && !viewerVisible && !sessions.containerLoading" class="absolute inset-0 flex flex-col items-center justify-center text-muted-foreground">
         <Monitor class="size-10 mb-3 opacity-20" :stroke-width="1.5" />

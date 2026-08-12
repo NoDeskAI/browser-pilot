@@ -38,6 +38,7 @@ export class ElectronBrowserLiteState {
     this.startPromise = null;
     this.onChanged = onChanged;
     this.paused = false;
+    this.stopped = false;
     this.partition = `persist:browser-lite-${safeInstanceId(config.instanceId)}`;
   }
 
@@ -52,6 +53,7 @@ export class ElectronBrowserLiteState {
   }
 
   async startInner() {
+    this.stopped = false;
     await mkdir(this.config.profileDir, { recursive: true, mode: 0o700 });
     if (this.windows.size === 0) await this.createWindow("about:blank");
     this.startedAt ||= new Date().toISOString();
@@ -413,6 +415,7 @@ export class ElectronBrowserLiteState {
 
   async resume() {
     this.paused = false;
+    this.stopped = false;
     await this.start();
     for (const [, window] of this.liveWindows()) window.show();
     this.notifyChanged();
@@ -423,6 +426,7 @@ export class ElectronBrowserLiteState {
     this.windows.clear();
     this.activeTargetId = null;
     this.startPromise = null;
+    this.stopped = true;
     this.notifyChanged();
   }
 
@@ -434,9 +438,9 @@ export class ElectronBrowserLiteState {
   }
 
   async runtimeStatus() {
-    const targets = await this.targets();
+    const targets = this.stopped ? [] : await this.targets();
     return {
-      ready: true,
+      ready: !this.stopped,
       runtime: "browser_lite",
       version: app.getVersion(),
       instanceId: this.config.instanceId,
@@ -452,6 +456,7 @@ export class ElectronBrowserLiteState {
       activeTargetId: this.activeTargetId,
       tabCount: targets.length,
       paused: this.paused,
+      stopped: this.stopped,
     };
   }
 
@@ -492,6 +497,8 @@ export class BrowserLiteManager {
       this.instances.set(id, entry);
       this.onChanged?.();
     } else {
+      if (Number(options.width) >= 320) entry.state.config.width = Number(options.width);
+      if (Number(options.height) >= 240) entry.state.config.height = Number(options.height);
       await entry.state.resume();
     }
     return entry;
@@ -538,7 +545,7 @@ export class BrowserLiteManager {
     const entry = this.instances.get(safeInstanceId(instanceId));
     if (!entry) return { status: "not_found" };
     const runtime = await entry.state.runtimeStatus();
-    return { status: runtime.paused ? "paused" : "running", runtime };
+    return { status: runtime.stopped ? "exited" : runtime.paused ? "paused" : "running", runtime };
   }
 
   async list() {

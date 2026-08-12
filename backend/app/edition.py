@@ -39,6 +39,17 @@ async def _call_ee_hook(name: str, *args: Any, **kwargs: Any) -> Any:
     return result
 
 
+async def _is_browser_lite_session(session_id: str | None) -> bool:
+    if not session_id:
+        return False
+    try:
+        from app.browser_lite import session_is_browser_lite
+
+        return await session_is_browser_lite(session_id)
+    except Exception:
+        return False
+
+
 def register_ee(app: FastAPI) -> None:
     if EDITION != "ee":
         return
@@ -125,6 +136,8 @@ def reject_session_runtime_selection(body: Any) -> None:
 
 
 async def assert_tenant_runtime_allowed(tenant_id: str, *, exclude_session_id: str | None = None) -> None:
+    if await _is_browser_lite_session(exclude_session_id):
+        return
     await _call_ee_hook("assert_tenant_runtime_allowed", tenant_id, exclude_session_id=exclude_session_id)
 
 
@@ -141,18 +154,26 @@ async def after_tenant_setup(*, tenant_id: str, user_id: str) -> None:
 
 
 async def before_session_runtime_start(user: Any, session_id: str, *, action: str) -> None:
+    if await _is_browser_lite_session(session_id):
+        return
     await _call_ee_hook("before_session_runtime_start", user, session_id, action=action)
 
 
 async def after_session_runtime_started(user: Any, session_id: str, *, action: str) -> None:
+    if await _is_browser_lite_session(session_id):
+        return
     await _call_ee_hook("after_session_runtime_started", user, session_id, action=action)
 
 
 async def after_session_runtime_start_failed(user: Any, session_id: str, *, action: str, error: Any) -> None:
+    if await _is_browser_lite_session(session_id):
+        return
     await _call_ee_hook("after_session_runtime_start_failed", user, session_id, action=action, error=error)
 
 
 async def after_session_runtime_stopped(user: Any, session_id: str, *, action: str) -> None:
+    if await _is_browser_lite_session(session_id):
+        return
     await _call_ee_hook("after_session_runtime_stopped", user, session_id, action=action)
 
 

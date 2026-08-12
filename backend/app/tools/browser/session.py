@@ -140,6 +140,22 @@ async def wd_fetch(
 ) -> Any:
     if not base_url:
         raise RuntimeError("wd_fetch requires base_url (no global SELENIUM_BASE)")
+    if base_url.startswith("browser_lite://"):
+        from app.browser_lite import webdriver_request
+
+        chat_session_id = base_url.removeprefix("browser_lite://")
+        response = await webdriver_request(
+            chat_session_id,
+            url_path,
+            method,
+            body,
+            timeout=timeout,
+        )
+        data = response["data"]
+        _raise_for_webdriver_error(data)
+        if response["status"] >= 400:
+            raise RuntimeError(f"WebDriver HTTP {response['status']} for {url_path}: {_response_preview(json.dumps(data))}")
+        return data.get("value", data)
     client = _get_client()
     url = f"{base_url}{url_path}"
     kwargs: dict[str, Any] = {"headers": {"Content-Type": "application/json"}}
@@ -163,6 +179,9 @@ async def wd_fetch(
 
 async def _cleanup_stale_session(base: str, sid: str) -> None:
     try:
+        if base.startswith("browser_lite://"):
+            await wd_fetch(f"/session/{sid}", "DELETE", timeout=5, base_url=base)
+            return
         client = _get_client()
         await client.delete(f"{base}/session/{sid}", timeout=5)
         logger.info("Cleaned up stale session: %s", sid)
@@ -172,6 +191,14 @@ async def _cleanup_stale_session(base: str, sid: str) -> None:
 
 async def _find_existing_session(base: str) -> str | None:
     try:
+        if base.startswith("browser_lite://"):
+            status = await wd_fetch("/status", timeout=5, base_url=base)
+            for node in status.get("nodes", []):
+                for slot in node.get("slots", []):
+                    sid = (slot.get("session") or {}).get("sessionId")
+                    if sid:
+                        return sid
+            return None
         client = _get_client()
         resp = await client.get(f"{base}/status", timeout=5)
         status = _decode_json_response(resp, url_path="/status")
@@ -335,6 +362,18 @@ async def _ensure_session_impl(bs: BrowserSession) -> str:
             bs.wd_session_id = None
 
     logger.info("Creating WebDriver session (attach to existing Chrome) on %s...", base)
+    if base.startswith("browser_lite://"):
+        value = await wd_fetch(
+            "/session",
+            "POST",
+            {"capabilities": {"alwaysMatch": {"browserName": "chrome"}}},
+            timeout=15,
+            base_url=base,
+        )
+        if not isinstance(value, dict) or not value.get("sessionId"):
+            raise RuntimeError("Browser Lite session creation returned an unexpected response")
+        bs.wd_session_id = value["sessionId"]
+        return bs.wd_session_id
     client = _get_client()
     resp = await client.post(
         f"{base}/session",
@@ -401,7 +440,7 @@ async def ensure_session(chat_session_id: str) -> tuple[str, str]:
             chat_session_id,
         )
         browser_runtime = (row["browser_runtime"] if row else None) or BROWSER_RUNTIME_STANDARD
-        if browser_runtime == BROWSER_RUNTIME_CLOAK:
+        if browser_runtime in {BROWSER_RUNTIME_CLOAK, "browser_lite"}:
             return sid, bs.selenium_base
         preset_id = (row["device_preset"] if row else None) or DEFAULT_PRESET
         preset_data = get_preset(preset_id)
@@ -576,6 +615,10 @@ async def cleanup_session(chat_session_id: str) -> None:
     base = bs.selenium_base
     if sid and base:
         try:
+            if base.startswith("browser_lite://"):
+                await wd_fetch(f"/session/{sid}", "DELETE", timeout=5, base_url=base)
+                bs.wd_session_id = None
+                return
             client = _get_client()
             await client.delete(f"{base}/session/{sid}", timeout=5)
             logger.info("Cleaned up WebDriver session %s for %s", sid, chat_session_id)

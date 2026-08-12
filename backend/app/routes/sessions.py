@@ -26,6 +26,7 @@ from app import viewer_tickets
 from app.auth.dependencies import CurrentUser, get_current_user, get_session_aware_user, require_role, verify_session_access
 from app.runtime_provider import (
     BROWSER_RUNTIME_CLOAK,
+    BROWSER_RUNTIME_LITE,
     BROWSER_RUNTIME_STANDARD,
     ensure_container_running,
     exec_in_container,
@@ -175,8 +176,9 @@ class CreateSessionBody(BaseModel):
     networkEgressId: str | None = None
     browserLang: str = "zh-CN"
     chromeVersion: str | None = None
-    browserRuntime: Literal["standard_chrome", "cloak_chromium"] = "standard_chrome"
+    browserRuntime: Literal["standard_chrome", "cloak_chromium", "browser_lite"] = "standard_chrome"
     browserImageId: str | None = None
+    browserLiteNodeId: str | None = None
 
 
 class UpdateSessionBody(BaseModel):
@@ -621,11 +623,12 @@ async def _with_runtime_health(
             "SELECT COALESCE(browser_runtime, 'standard_chrome') AS browser_runtime FROM sessions WHERE id = $1",
             session_id,
         )
-        if _row_get(row, "browser_runtime", BROWSER_RUNTIME_STANDARD) == BROWSER_RUNTIME_CLOAK:
+        browser_runtime = _row_get(row, "browser_runtime", BROWSER_RUNTIME_STANDARD)
+        if browser_runtime in {BROWSER_RUNTIME_CLOAK, BROWSER_RUNTIME_LITE}:
             profile["runtimeHealth"] = {
-                "agent": "cloak_chromium",
+                "agent": browser_runtime,
                 "ok": True,
-                "status": "managed_by_cloak_runtime",
+                "status": "managed_by_remote_node" if browser_runtime == BROWSER_RUNTIME_LITE else "managed_by_cloak_runtime",
                 "warnings": [],
             }
             return profile
@@ -676,7 +679,7 @@ async def list_sessions(user: CurrentUser = Depends(get_current_user)):
             SELECT s.id, s.name, s.created_at, s.updated_at, s.current_url, s.current_title,
                    s.device_preset, s.proxy_url, s.network_egress_id, s.user_id,
                    COALESCE(s.browser_runtime, 'standard_chrome') AS browser_runtime,
-                   s.browser_image_id,
+                   s.browser_image_id, s.browser_lite_node_id,
                    s.fingerprint_profile, s.browser_lang,
                    e.name AS network_egress_name,
                    e.type AS network_egress_type,
@@ -708,7 +711,7 @@ async def list_sessions(user: CurrentUser = Depends(get_current_user)):
             SELECT s.id, s.name, s.created_at, s.updated_at, s.current_url, s.current_title,
                    s.device_preset, s.proxy_url, s.network_egress_id, s.user_id,
                    COALESCE(s.browser_runtime, 'standard_chrome') AS browser_runtime,
-                   s.browser_image_id,
+                   s.browser_image_id, s.browser_lite_node_id,
                    s.fingerprint_profile, s.browser_lang,
                    e.name AS network_egress_name,
                    e.type AS network_egress_type,
@@ -777,6 +780,7 @@ async def list_sessions(user: CurrentUser = Depends(get_current_user)):
             "browserLang": r["browser_lang"] or "zh-CN",
             "browserRuntime": _row_get(r, "browser_runtime", BROWSER_RUNTIME_STANDARD) or BROWSER_RUNTIME_STANDARD,
             "browserImageId": _row_get(r, "browser_image_id"),
+            "browserLiteNodeId": _row_get(r, "browser_lite_node_id"),
             "activeLease": _active_lease_payload_from_row(r),
             "fileCapture": await _file_capture_payload(sid, container_status=container_status),
             **egress_payload,
@@ -797,7 +801,25 @@ async def create_session(body: CreateSessionBody, user: CurrentUser = Depends(ge
     preset_id = body.devicePreset if body.devicePreset in DEVICE_PRESETS else DEFAULT_PRESET
     safe_lang = re.sub(r"[^a-zA-Z0-9_-]", "", body.browserLang or "zh-CN") or "zh-CN"
 
-    if not browser_images_enabled():
+    browser_lite_node_id = None
+    if body.browserRuntime == BROWSER_RUNTIME_LITE:
+        if body.networkEgressId:
+            raise HTTPException(422, "Browser Lite uses the Mac node network and cannot attach a container egress profile")
+        if not body.browserLiteNodeId:
+            raise HTTPException(422, "Select an online Browser Lite node")
+        node = await pool.fetchrow(
+            "SELECT id FROM browser_lite_nodes WHERE id = $1 AND tenant_id = $2",
+            body.browserLiteNodeId,
+            user.tenant_id,
+        )
+        from app.browser_lite import node_online
+        if not node or not await node_online(body.browserLiteNodeId):
+            raise HTTPException(422, "Browser Lite node is offline or unavailable")
+        browser_lite_node_id = body.browserLiteNodeId
+        resolved_chrome_version = None
+        resolved_image_tag = None
+        resolved_browser_image_id = None
+    elif not browser_images_enabled():
         resolved_chrome_version = None
         resolved_image_tag = None
         resolved_browser_image_id = None
@@ -815,28 +837,42 @@ async def create_session(body: CreateSessionBody, user: CurrentUser = Depends(ge
     try:
         effective_egress = await resolve_egress(
             user.tenant_id,
-            body.networkEgressId,
+            None if body.browserRuntime == BROWSER_RUNTIME_LITE else body.networkEgressId,
             "",
             ensure=False,
         )
     except EgressError as exc:
         raise HTTPException(422, str(exc)) from exc
-    network_profile = await _resolve_session_network(effective_egress.proxy_url or None, resolved_image_tag)
-
-    try:
-        fp_profile = await generate_profile(
-            user.tenant_id,
-            browser_lang=safe_lang,
-            chrome_version=resolved_chrome_version,
-        )
-    except PoolEmptyError as exc:
-        raise HTTPException(422, f"Fingerprint pool group '{exc.group}' has no enabled entries") from exc
-    attach_network_profile(fp_profile, network_profile)
-    _apply_egress_runtime_warnings(fp_profile, effective_egress)
-
     preset_data = get_preset(preset_id)
-    fp_profile["screen"]["width"] = preset_data["width"]
-    fp_profile["screen"]["height"] = preset_data["height"]
+    if body.browserRuntime == BROWSER_RUNTIME_LITE:
+        fp_profile = {
+            "source": "real_mac_node",
+            "runtime": BROWSER_RUNTIME_LITE,
+            "screen": {"width": preset_data["width"], "height": preset_data["height"]},
+            "fingerprintReady": True,
+            "readiness": {
+                "ready": True,
+                "status": "real_browser_node",
+                "reason": "",
+                "egressType": "direct",
+                "egressName": "Mac node network",
+                "warnings": [],
+            },
+        }
+    else:
+        network_profile = await _resolve_session_network(effective_egress.proxy_url or None, resolved_image_tag)
+        try:
+            fp_profile = await generate_profile(
+                user.tenant_id,
+                browser_lang=safe_lang,
+                chrome_version=resolved_chrome_version,
+            )
+        except PoolEmptyError as exc:
+            raise HTTPException(422, f"Fingerprint pool group '{exc.group}' has no enabled entries") from exc
+        attach_network_profile(fp_profile, network_profile)
+        _apply_egress_runtime_warnings(fp_profile, effective_egress)
+        fp_profile["screen"]["width"] = preset_data["width"]
+        fp_profile["screen"]["height"] = preset_data["height"]
 
     session_id = ""
     last_collision: Exception | None = None
@@ -847,8 +883,9 @@ async def create_session(body: CreateSessionBody, user: CurrentUser = Depends(ge
                 """
                 INSERT INTO sessions
                     (id, name, device_preset, proxy_url, network_egress_id, tenant_id, user_id,
-                     fingerprint_profile, browser_lang, chrome_version, browser_runtime, browser_image_id)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11, $12)
+                     fingerprint_profile, browser_lang, chrome_version, browser_runtime, browser_image_id,
+                     browser_lite_node_id)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11, $12, $13)
                 """,
                 session_id,
                 body.name,
@@ -862,6 +899,7 @@ async def create_session(body: CreateSessionBody, user: CurrentUser = Depends(ge
                 resolved_chrome_version,
                 body.browserRuntime,
                 resolved_browser_image_id,
+                browser_lite_node_id,
             )
             break
         except asyncpg.exceptions.UniqueViolationError as exc:
@@ -887,6 +925,7 @@ async def create_session(body: CreateSessionBody, user: CurrentUser = Depends(ge
             "chromeVersion": resolved_chrome_version,
             "browserRuntime": body.browserRuntime,
             "browserImageId": resolved_browser_image_id,
+            "browserLiteNodeId": browser_lite_node_id,
             **_egress_payload(effective_egress),
         },
         device_id=session_id,
@@ -908,6 +947,9 @@ async def create_viewer_ticket(
     user: CurrentUser = Depends(get_session_aware_user),
 ):
     await verify_session_access(session_id, user)
+    from app.browser_lite import session_is_browser_lite
+    if await session_is_browser_lite(session_id):
+        raise HTTPException(status_code=409, detail="Browser Lite viewer is available on the Mac node")
     mode = (body or ViewerTicketBody()).mode
     await before_viewer_ticket_issue(user, session_id, mode=mode)
     if mode == viewer_tickets.VIEWER_MODE_CONTROL:
@@ -1108,6 +1150,7 @@ async def get_session(session_id: str, user: CurrentUser = Depends(get_session_a
         SELECT s.id, s.name, s.created_at, s.updated_at, s.current_url, s.current_title,
                s.device_preset, s.proxy_url, s.network_egress_id, s.fingerprint_profile, s.browser_lang,
                COALESCE(s.browser_runtime, 'standard_chrome') AS browser_runtime,
+               s.browser_lite_node_id,
                e.name AS network_egress_name,
                e.type AS network_egress_type,
                e.status AS network_egress_status,
@@ -1150,6 +1193,7 @@ async def get_session(session_id: str, user: CurrentUser = Depends(get_session_a
         "fingerprintProfile": fp_response,
         "browserLang": row["browser_lang"] or "zh-CN",
         "browserRuntime": _row_get(row, "browser_runtime", BROWSER_RUNTIME_STANDARD) or BROWSER_RUNTIME_STANDARD,
+        "browserLiteNodeId": _row_get(row, "browser_lite_node_id"),
         "fileCapture": await _file_capture_payload(session_id, container_status=container_status),
         **egress_payload,
     }
@@ -1392,7 +1436,9 @@ async def change_device_preset(session_id: str, body: DevicePresetBody, user: Cu
         return {"ok": False, "error": f"Unknown preset: {body.preset}"}
     pool = get_pool()
     row = await pool.fetchrow(
-        "SELECT proxy_url, network_egress_id, fingerprint_profile, browser_lang, tenant_id FROM sessions WHERE id = $1",
+        "SELECT proxy_url, network_egress_id, fingerprint_profile, browser_lang, tenant_id, "
+        "COALESCE(browser_runtime, 'standard_chrome') AS browser_runtime "
+        "FROM sessions WHERE id = $1",
         session_id,
     )
     if not row:
@@ -1402,6 +1448,19 @@ async def change_device_preset(session_id: str, body: DevicePresetBody, user: Cu
         body.preset, session_id,
     )
     preset_data = get_preset(body.preset)
+    if _row_get(row, "browser_runtime", BROWSER_RUNTIME_STANDARD) == BROWSER_RUNTIME_LITE:
+        fp_profile = dict(row["fingerprint_profile"] or {})
+        fp_profile["screen"] = {"width": preset_data["width"], "height": preset_data["height"]}
+        await pool.execute(
+            "UPDATE sessions SET fingerprint_profile = $1::jsonb, updated_at = NOW() WHERE id = $2",
+            fp_profile,
+            session_id,
+        )
+        from app.tools.browser.session import invalidate_session_cache
+        invalidate_session_cache(session_id)
+        await recreate_container(session_id, width=preset_data["width"], height=preset_data["height"])
+        fp_response = await _with_runtime_health(session_id, fp_profile)
+        return {"ok": True, "devicePreset": body.preset, "fingerprintProfile": fp_response}
     try:
         effective_egress = await resolve_egress(
             _row_get(row, "tenant_id") or user.tenant_id,
@@ -1457,11 +1516,15 @@ async def change_network_egress(
     await _verify_session_tenant(session_id, user)
     pool = get_pool()
     row = await pool.fetchrow(
-        "SELECT device_preset, fingerprint_profile, browser_lang, tenant_id FROM sessions WHERE id = $1",
+        "SELECT device_preset, fingerprint_profile, browser_lang, tenant_id, "
+        "COALESCE(browser_runtime, 'standard_chrome') AS browser_runtime "
+        "FROM sessions WHERE id = $1",
         session_id,
     )
     if not row:
         return {"ok": False, "error": "Session not found"}
+    if _row_get(row, "browser_runtime", BROWSER_RUNTIME_STANDARD) == BROWSER_RUNTIME_LITE:
+        raise HTTPException(status_code=409, detail="Browser Lite uses the Mac node network")
     try:
         effective_egress = await resolve_egress(
             _row_get(row, "tenant_id") or user.tenant_id,
@@ -1532,6 +1595,8 @@ async def regenerate_fingerprint(session_id: str, body: FingerprintActionBody, u
     )
     if not row:
         return {"ok": False, "error": "Session not found"}
+    if _row_get(row, "browser_runtime", BROWSER_RUNTIME_STANDARD) == BROWSER_RUNTIME_LITE:
+        raise HTTPException(status_code=409, detail="Browser Lite preserves the real Mac browser fingerprint")
     try:
         effective_egress = await resolve_egress(
             _row_get(row, "tenant_id") or user.tenant_id,
@@ -1603,6 +1668,24 @@ async def regenerate_fingerprint(session_id: str, body: FingerprintActionBody, u
 @router.post("/api/sessions/{session_id}/network-profile/refresh")
 async def refresh_network_profile(session_id: str, user: CurrentUser = Depends(get_session_aware_user)):
     await verify_session_access(session_id, user)
+    pool = get_pool()
+    row = await pool.fetchrow(
+        """
+        SELECT s.fingerprint_profile, s.network_egress_id,
+               COALESCE(s.browser_runtime, 'standard_chrome') AS browser_runtime,
+               e.name AS network_egress_name,
+               e.type AS network_egress_type
+        FROM sessions s
+        LEFT JOIN network_egress_profiles e ON e.id = s.network_egress_id
+        WHERE s.id = $1
+        """,
+        session_id,
+    )
+    if not row or not isinstance(row["fingerprint_profile"], dict):
+        raise HTTPException(status_code=404, detail="Session not found")
+    if _row_get(row, "browser_runtime", BROWSER_RUNTIME_STANDARD) == BROWSER_RUNTIME_LITE:
+        raise HTTPException(status_code=409, detail="Browser Lite network profiling is not enabled")
+
     await assert_tenant_runtime_allowed(user.tenant_id, exclude_session_id=session_id)
     await before_session_runtime_start(user, session_id, action="session.network_profile.refresh")
     try:
@@ -1615,21 +1698,6 @@ async def refresh_network_profile(session_id: str, user: CurrentUser = Depends(g
     observed = await resolve_network_via_browser(runtime_ports, session_id=session_id, mode="deep")
     observed_payload = _stable_network_payload(observed)
     observed_payload["observedAt"] = datetime.now(timezone.utc).isoformat()
-
-    pool = get_pool()
-    row = await pool.fetchrow(
-        """
-        SELECT s.fingerprint_profile, s.network_egress_id,
-               e.name AS network_egress_name,
-               e.type AS network_egress_type
-        FROM sessions s
-        LEFT JOIN network_egress_profiles e ON e.id = s.network_egress_id
-        WHERE s.id = $1
-        """,
-        session_id,
-    )
-    if not row or not isinstance(row["fingerprint_profile"], dict):
-        raise HTTPException(status_code=404, detail="Session not found")
 
     fp_profile = row["fingerprint_profile"]
     network = fp_profile.get("network") if isinstance(fp_profile.get("network"), dict) else {}
@@ -1659,6 +1727,7 @@ async def sync_observed_network_profile(session_id: str, user: CurrentUser = Dep
     row = await pool.fetchrow(
         """
         SELECT s.fingerprint_profile, s.network_egress_id,
+               COALESCE(s.browser_runtime, 'standard_chrome') AS browser_runtime,
                e.name AS network_egress_name,
                e.type AS network_egress_type
         FROM sessions s
@@ -1669,6 +1738,8 @@ async def sync_observed_network_profile(session_id: str, user: CurrentUser = Dep
     )
     if not row or not isinstance(row["fingerprint_profile"], dict):
         raise HTTPException(status_code=404, detail="Session not found")
+    if _row_get(row, "browser_runtime", BROWSER_RUNTIME_STANDARD) == BROWSER_RUNTIME_LITE:
+        raise HTTPException(status_code=409, detail="Browser Lite network profiling is not enabled")
 
     fp_profile = row["fingerprint_profile"]
     current_network = fp_profile.get("network") if isinstance(fp_profile.get("network"), dict) else {}
@@ -1712,6 +1783,7 @@ async def override_network_profile(
     row = await pool.fetchrow(
         """
         SELECT s.fingerprint_profile, s.network_egress_id,
+               COALESCE(s.browser_runtime, 'standard_chrome') AS browser_runtime,
                e.name AS network_egress_name,
                e.type AS network_egress_type
         FROM sessions s
@@ -1722,6 +1794,8 @@ async def override_network_profile(
     )
     if not row or not isinstance(row["fingerprint_profile"], dict):
         raise HTTPException(status_code=404, detail="Session not found")
+    if _row_get(row, "browser_runtime", BROWSER_RUNTIME_STANDARD) == BROWSER_RUNTIME_LITE:
+        raise HTTPException(status_code=409, detail="Browser Lite network profiling is not enabled")
 
     fp_profile = row["fingerprint_profile"]
     current_network = fp_profile.get("network") if isinstance(fp_profile.get("network"), dict) else {}

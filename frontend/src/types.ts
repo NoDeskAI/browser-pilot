@@ -16,9 +16,23 @@ export interface Session {
   networkEgressHealthError?: string
   fingerprintProfile?: Record<string, any> | null
   browserLang?: string
-  browserRuntime?: 'standard_chrome' | 'cloak_chromium'
+  browserRuntime?: 'standard_chrome' | 'cloak_chromium' | 'browser_lite'
   browserImageId?: string | null
+  browserLiteNodeId?: string | null
   activeLease?: ActiveSessionLease | null
+}
+
+export interface BrowserLiteNode {
+  id: string
+  displayName: string
+  platform: string
+  architecture: string
+  appVersion: string
+  chromiumVersion: string
+  capabilities: string[]
+  status: 'online' | 'offline'
+  lastSeenAt?: string | null
+  createdAt: string
 }
 
 export interface ActiveSessionLease {

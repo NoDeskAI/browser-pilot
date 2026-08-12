@@ -23,6 +23,25 @@ function emitState() {
   }
 }
 
+function pairingOptions(argv = []) {
+  const option = (name) => {
+    const index = argv.indexOf(name);
+    return index >= 0 ? argv[index + 1] || "" : "";
+  };
+  return {
+    serverUrl: option("--pair-server"),
+    pairingCode: option("--pairing-code"),
+  };
+}
+
+async function pairFromArguments(argv = []) {
+  const options = pairingOptions(argv);
+  if (!options.serverUrl || !/^\d{10}$/.test(options.pairingCode)) return false;
+  await nodeAgent.pair(options.serverUrl, options.pairingCode);
+  emitState();
+  return true;
+}
+
 async function getPublicState() {
   return {
     app: {
@@ -120,7 +139,10 @@ function registerIpc() {
   });
 }
 
-app.on("second-instance", () => createDashboardWindow());
+app.on("second-instance", (_event, argv) => {
+  void pairFromArguments(argv).catch((error) => console.error("Browser Lite pairing failed", error));
+  createDashboardWindow();
+});
 app.on("window-all-closed", () => {});
 app.on("before-quit", () => { app.isQuitting = true; });
 app.on("will-quit", () => {
@@ -129,13 +151,15 @@ app.on("will-quit", () => {
 });
 
 async function bootstrap() {
+  if (app.isPackaged) app.setLoginItemSettings({ openAtLogin: true, openAsHidden: true });
   manager = new BrowserLiteManager({ onChanged: emitState });
   nodeAgent = new BrowserLiteNodeAgent(manager, { onChanged: emitState });
   registerIpc();
   createTray();
-  createDashboardWindow();
   await nodeAgent.load();
+  await pairFromArguments(process.argv);
   await manager.ensure("browser_lite", { port: 4444 });
+  if (!app.isPackaged || !app.getLoginItemSettings().wasOpenedAtLogin) createDashboardWindow();
   emitState();
 }
 

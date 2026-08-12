@@ -45,3 +45,23 @@ mistaken for a public release.
 
 Stopping an instance keeps its partition. Removing an instance clears its
 cookies, storage, and cache.
+
+## Browser Pilot pairing
+
+Generate a 10-digit one-time code in Browser Pilot, then enter it in the app.
+For managed Mac nodes, pairing can also be initiated without typing into the UI:
+
+```bash
+"/Applications/Browser Lite.app/Contents/MacOS/Browser Lite" \
+  --pair-server https://bpilot.nodeskai.com \
+  --pairing-code 0123456789
+```
+
+The code expires after 10 minutes and can be used once. The long-lived node
+token is returned only to the app, encrypted with macOS Keychain-backed
+`safeStorage`, and is never accepted as a command-line argument.
+
+Browser Lite deliberately does not expose a remote shell, container egress
+profiles, synthetic fingerprint injection, or a Browser Pilot Web VNC viewer.
+Browser automation, screenshots, CDP, persistent profiles, and lifecycle
+controls run against the real Chromium window on the Mac node.

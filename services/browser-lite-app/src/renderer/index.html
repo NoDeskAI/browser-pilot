@@ -35,7 +35,7 @@
             </label>
             <label>
               <span>配对码</span>
-              <input id="pairing-code" type="text" inputmode="numeric" autocomplete="one-time-code" placeholder="6 位一次性配对码" required />
+              <input id="pairing-code" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{10}" minlength="10" maxlength="10" placeholder="10 位一次性配对码" required />
             </label>
             <button id="pair-button" type="submit">配对节点</button>
           </form>

@@ -5,7 +5,7 @@ import { useI18n } from 'vue-i18n'
 import { useSessions } from '../composables/useSessions'
 import { useNetworkEgress } from '../composables/useNetworkEgress'
 import { useNotify } from '../composables/useNotify'
-import type { ActiveSessionLease, DeleteSessionFileOptions, Session } from '../types'
+import type { ActiveSessionLease, BrowserLiteNode, DeleteSessionFileOptions, Session } from '../types'
 import { Plus, Play, Pause, Trash2, Monitor, Globe, Hash, Clock, RefreshCw, Loader2, Network, ArrowUpRight, UserCog, Copy, Check } from 'lucide-vue-next'
 import { formatSessionLeaseOperator, getSessionLeaseOperatorKind } from '../lib/sessionLease'
 import { Button } from '@/components/ui/button'
@@ -32,6 +32,7 @@ const {
   createSession, deleteSession, renameSession,
   startContainer, pauseContainer, fetchSessions,
   fetchBrowserImageState,
+  fetchBrowserLiteNodes, createBrowserLitePairingCode,
 } = useSessions()
 const { state: egressState, fetchNetworkEgress } = useNetworkEgress()
 
@@ -44,14 +45,16 @@ const createName = ref('')
 const createVersion = ref('')
 const createBrowserImageId = ref('')
 const createNetworkEgressId = ref('__direct__')
-const createRuntime = ref<'standard_chrome' | 'cloak_chromium'>('standard_chrome')
+const createRuntime = ref<'standard_chrome' | 'cloak_chromium' | 'browser_lite'>('standard_chrome')
+const browserLiteNodes = ref<BrowserLiteNode[]>([])
+const createBrowserLiteNodeId = ref('')
+const pairingCode = ref('')
+const pairingCodeExpiresAt = ref('')
+const creatingPairingCode = ref(false)
+const onlineBrowserLiteNodes = computed(() => browserLiteNodes.value.filter(node => node.status === 'online'))
 const DIRECT_EGRESS_VALUE = '__direct__'
 const browserImagesEnabled = computed(() => brand.features.browserImages !== false)
-const canCreateSession = computed(() => {
-  if (!browserImagesEnabled.value) return true
-  if (createRuntime.value === 'cloak_chromium') return hasReadyCloakImages.value
-  return hasReadyImages.value
-})
+const canCreateSession = computed(() => true)
 
 const isMac = navigator.platform.includes('Mac')
 const shortcutLabel = isMac ? '⌘N' : 'Ctrl+N'
@@ -59,6 +62,7 @@ const browserImagesSettingsPath = '/settings/browser-images'
 
 const autoRefresh = ref(localStorage.getItem('bp_auto_refresh') === 'true')
 let refreshTimer: ReturnType<typeof setInterval> | null = null
+let pairingRefreshTimer: ReturnType<typeof setInterval> | null = null
 let autoRefreshFetchInFlight = false
 
 function setAutoRefresh(on: boolean) {
@@ -84,6 +88,19 @@ function startTimer() {
 }
 function stopTimer() {
   if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null }
+}
+
+function stopPairingRefresh() {
+  if (pairingRefreshTimer) { clearInterval(pairingRefreshTimer); pairingRefreshTimer = null }
+}
+
+async function refreshBrowserLiteNodes(preferredNewNodeIds?: Set<string>) {
+  const nodes = await fetchBrowserLiteNodes()
+  browserLiteNodes.value = nodes
+  const preferred = nodes.find(node => node.status === 'online' && preferredNewNodeIds && !preferredNewNodeIds.has(node.id))
+  const selectedIsOnline = nodes.some(node => node.id === createBrowserLiteNodeId.value && node.status === 'online')
+  if (preferred || !selectedIsOnline) createBrowserLiteNodeId.value = preferred?.id || onlineBrowserLiteNodes.value[0]?.id || ''
+  return preferred
 }
 
 function refreshWhenVisible() {
@@ -209,6 +226,9 @@ watch(createRuntime, (runtime) => {
   if (runtime === 'standard_chrome' && !createVersion.value && readyImages.value.length > 0) {
     createVersion.value = readyImages.value[0].chromeVersion || String(readyImages.value[0].chromeMajor)
   }
+  if (runtime === 'browser_lite' && !createBrowserLiteNodeId.value) {
+    createBrowserLiteNodeId.value = onlineBrowserLiteNodes.value[0]?.id || ''
+  }
 })
 
 watch(() => sessions.sessions, async () => {
@@ -225,7 +245,8 @@ onMounted(async () => {
     fetchSessions()
   }
   try {
-    const [imageState] = await Promise.all([fetchBrowserImageState(), fetchNetworkEgress()])
+    const [imageState, nodes] = await Promise.all([fetchBrowserImageState(), fetchBrowserLiteNodes(), fetchNetworkEgress()])
+    browserLiteNodes.value = nodes
     const imgs = (imageState.images || []).filter((img: any) => (img.runtime || 'standard_chrome') === 'standard_chrome' && img.status === 'ready')
     const cloakImgs = (imageState.runtimeImages || []).filter((img: any) => img.runtime === 'cloak_chromium' && img.status === 'ready')
     readyImages.value = imgs
@@ -242,13 +263,17 @@ onMounted(async () => {
     }
     if (browserImagesEnabled.value && imgs.length === 0 && cloakImgs.length > 0) {
       createRuntime.value = 'cloak_chromium'
+    } else if (browserImagesEnabled.value && imgs.length === 0 && cloakImgs.length === 0) {
+      createRuntime.value = 'browser_lite'
     }
+    createBrowserLiteNodeId.value = onlineBrowserLiteNodes.value[0]?.id || ''
   } catch {
-    createRuntime.value = 'cloak_chromium'
+    browserLiteNodes.value = []
   }
 })
 onUnmounted(() => {
   stopTimer()
+  stopPairingRefresh()
   document.removeEventListener('visibilitychange', refreshWhenVisible)
   window.removeEventListener('focus', refreshWhenFocused)
   valueResizeObservers.forEach(observer => observer.disconnect())
@@ -350,6 +375,8 @@ function openCreateDialog() {
     createRuntime.value = 'standard_chrome'
   } else if (!hasReadyImages.value && hasReadyCloakImages.value) {
     createRuntime.value = 'cloak_chromium'
+  } else if (!hasReadyImages.value && !hasReadyCloakImages.value) {
+    createRuntime.value = 'browser_lite'
   }
   if (!createVersion.value && readyImages.value.length > 0) {
     createVersion.value = readyImages.value[0].chromeVersion || String(readyImages.value[0].chromeMajor)
@@ -360,20 +387,46 @@ function openCreateDialog() {
   createDialogOpen.value = true
 }
 
-async function handleCreateSession(name?: string, chromeVersion?: string, networkEgressId?: string, runtime = createRuntime.value, browserImageId = createBrowserImageId.value) {
+async function generateBrowserLitePairingCode() {
+  creatingPairingCode.value = true
+  try {
+    const result = await createBrowserLitePairingCode()
+    pairingCode.value = result.pairingCode
+    pairingCodeExpiresAt.value = result.expiresAt
+    const existingNodeIds = new Set(browserLiteNodes.value.map(node => node.id))
+    stopPairingRefresh()
+    pairingRefreshTimer = setInterval(() => {
+      if (!createDialogOpen.value || Date.now() >= Date.parse(pairingCodeExpiresAt.value)) {
+        stopPairingRefresh()
+        return
+      }
+      void refreshBrowserLiteNodes(existingNodeIds).then((newNode) => {
+        if (newNode) stopPairingRefresh()
+      })
+    }, 2000)
+  } catch (error: any) {
+    notify.error(error?.message || t('browserRuntime.pairingCodeError'))
+  } finally {
+    creatingPairingCode.value = false
+  }
+}
+
+async function handleCreateSession(name?: string, chromeVersion?: string, networkEgressId?: string, runtime = createRuntime.value, browserImageId = createBrowserImageId.value, browserLiteNodeId = createBrowserLiteNodeId.value) {
   if (creating.value) return
   creating.value = true
   try {
-    const selectedEgress = networkEgressId && networkEgressId !== DIRECT_EGRESS_VALUE ? networkEgressId : null
+    const selectedEgress = runtime !== 'browser_lite' && networkEgressId && networkEgressId !== DIRECT_EGRESS_VALUE ? networkEgressId : null
     const selectedVersion = runtime === 'standard_chrome' ? (chromeVersion || undefined) : undefined
     const selectedImageId = runtime === 'cloak_chromium' ? (browserImageId || undefined) : undefined
-    const session = await createSession(name?.trim() || undefined, selectedVersion, selectedEgress, runtime, selectedImageId)
+    const session = await createSession(name?.trim() || undefined, selectedVersion, selectedEgress, runtime, selectedImageId, browserLiteNodeId || undefined)
     if (session) {
       notify.success(t('app.sessionCreated'))
       createDialogOpen.value = false
       createName.value = ''
       createNetworkEgressId.value = DIRECT_EGRESS_VALUE
-      createRuntime.value = !browserImagesEnabled.value || hasReadyImages.value ? 'standard_chrome' : 'cloak_chromium'
+      createRuntime.value = !browserImagesEnabled.value || hasReadyImages.value
+        ? 'standard_chrome'
+        : hasReadyCloakImages.value ? 'cloak_chromium' : 'browser_lite'
       router.push(`/s/${session.id}`)
     }
   } catch (e: any) {
@@ -799,7 +852,7 @@ async function onPauseContainer(id: string) {
         <DialogHeader>
           <DialogTitle>{{ t('dashboard.create') }}</DialogTitle>
         </DialogHeader>
-        <form class="space-y-4" @submit.prevent="handleCreateSession(createName, createVersion, createNetworkEgressId, createRuntime, createBrowserImageId)">
+        <form class="space-y-4" @submit.prevent="handleCreateSession(createName, createVersion, createNetworkEgressId, createRuntime, createBrowserImageId, createBrowserLiteNodeId)">
           <div class="space-y-2">
             <Label for="create-session-name">{{ t('session.name') }}</Label>
             <Input
@@ -825,8 +878,39 @@ async function onPauseContainer(id: string) {
                   {{ t('browserRuntime.cloak_chromium') }}
                   <span class="text-xs text-muted-foreground">({{ t('browserRuntime.cloakHint') }})</span>
                 </SelectItem>
+                <SelectItem value="browser_lite">
+                  {{ t('browserRuntime.browser_lite') }}
+                  <span class="text-xs text-muted-foreground">({{ t('browserRuntime.browserLiteHint') }})</span>
+                </SelectItem>
               </SelectContent>
             </Select>
+          </div>
+          <div v-if="createRuntime === 'browser_lite'" class="space-y-2">
+            <Label for="create-session-browser-lite-node">{{ t('browserRuntime.browserLiteNode') }}</Label>
+            <Select v-model="createBrowserLiteNodeId" :disabled="creating || onlineBrowserLiteNodes.length === 0">
+              <SelectTrigger id="create-session-browser-lite-node">
+                <SelectValue :placeholder="t('browserRuntime.selectBrowserLiteNode')" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem v-for="node in browserLiteNodes" :key="node.id" :value="node.id" :disabled="node.status !== 'online'">
+                  {{ node.displayName }}
+                  <span class="text-xs text-muted-foreground">({{ node.status === 'online' ? t('browserRuntime.nodeOnline') : t('browserRuntime.nodeOffline') }})</span>
+                </SelectItem>
+              </SelectContent>
+            </Select>
+            <div class="rounded-lg border border-border bg-muted/40 p-3 text-sm">
+              <div class="flex items-center justify-between gap-3">
+                <span class="text-muted-foreground">{{ t('browserRuntime.pairNewNode') }}</span>
+                <Button type="button" size="sm" variant="outline" :disabled="creatingPairingCode" @click="generateBrowserLitePairingCode">
+                  <Loader2 v-if="creatingPairingCode" class="size-3.5 animate-spin" />
+                  {{ t('browserRuntime.generatePairingCode') }}
+                </Button>
+              </div>
+              <div v-if="pairingCode" class="mt-3 flex items-baseline gap-3">
+                <code class="font-mono text-2xl font-semibold tracking-[0.25em] text-foreground">{{ pairingCode }}</code>
+                <span class="text-xs text-muted-foreground">{{ t('browserRuntime.pairingCodeExpiry') }}</span>
+              </div>
+            </div>
           </div>
           <div v-if="browserImagesEnabled && createRuntime === 'cloak_chromium'" class="space-y-2">
             <Label for="create-session-cloak-image">{{ t('browserImages.cloakImage') }}</Label>
@@ -867,7 +951,7 @@ async function onPauseContainer(id: string) {
               </SelectContent>
             </Select>
           </div>
-          <div class="space-y-2">
+          <div v-if="createRuntime !== 'browser_lite'" class="space-y-2">
             <Label for="create-session-network">{{ t('networkEgress.sessionNetwork') }}</Label>
             <Select v-model="createNetworkEgressId" :disabled="creating">
               <SelectTrigger id="create-session-network">
@@ -890,7 +974,7 @@ async function onPauseContainer(id: string) {
             <Button type="button" variant="outline" :disabled="creating" @click="createDialogOpen = false">
               {{ t('session.cancel') }}
             </Button>
-            <Button type="submit" :disabled="creating || (createRuntime === 'standard_chrome' && !createVersion) || (createRuntime === 'cloak_chromium' && browserImagesEnabled && !createBrowserImageId)">
+            <Button type="submit" :disabled="creating || (createRuntime === 'standard_chrome' && !createVersion) || (createRuntime === 'cloak_chromium' && browserImagesEnabled && !createBrowserImageId) || (createRuntime === 'browser_lite' && !createBrowserLiteNodeId)">
               <Loader2 v-if="creating" class="size-4 animate-spin" />
               {{ creating ? t('session.creating') : t('dashboard.create') }}
             </Button>

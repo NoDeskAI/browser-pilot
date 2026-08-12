@@ -31,9 +31,23 @@ test("remote node token is encrypted with Electron safeStorage when available", 
   const source = await readFile(join(ROOT, "src", "node-agent.mjs"), "utf8");
   assert.match(source, /safeStorage\.encryptString/);
   assert.match(source, /safeStorage\.decryptString/);
+  assert.match(source, /type: "auth", token: config\.token/);
+  assert.doesNotMatch(source, /searchParams\.set\("token"/);
 });
 
 test("DMG staging preserves Electron framework relative symlinks", async () => {
   const source = await readFile(join(ROOT, "scripts", "build-dmg.mjs"), "utf8");
   assert.match(source, /verbatimSymlinks:\s*true/);
+});
+
+test("packaged app registers as a persistent login item", async () => {
+  const source = await readFile(join(ROOT, "src", "main.mjs"), "utf8");
+  assert.match(source, /setLoginItemSettings\(\{ openAtLogin: true, openAsHidden: true \}\)/);
+});
+
+test("packaged app supports one-time command-line pairing without accepting a node token", async () => {
+  const source = await readFile(join(ROOT, "src", "main.mjs"), "utf8");
+  assert.match(source, /--pair-server/);
+  assert.match(source, /--pairing-code/);
+  assert.doesNotMatch(source, /--node-token/);
 });

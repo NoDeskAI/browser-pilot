@@ -253,29 +253,44 @@ cmd_session_list() {
 }
 
 cmd_session_create() {
-  local name="新会话" network_egress_set=false network_egress_id="" runtime="standard_chrome"
+  local name="新会话" network_egress_set=false network_egress_id="" runtime="standard_chrome" browser_lite_node_id=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --name|-n)
-        [[ -n "${2:-}" ]] || { echo "Usage: $CLI_NAME session create [--name <n>] [--network-egress <egress-id|direct>] [--runtime <standard_chrome|cloak_chromium>]"; exit 1; }
+        [[ -n "${2:-}" ]] || { echo "Usage: $CLI_NAME session create [--name <n>] [--network-egress <egress-id|direct>] [--runtime <standard_chrome|cloak_chromium|browser_lite>] [--browser-lite-node <id>]"; exit 1; }
         name="$2"; shift 2 ;;
       --network-egress)
-        [[ -n "${2:-}" ]] || { echo "Usage: $CLI_NAME session create [--name <n>] [--network-egress <egress-id|direct>] [--runtime <standard_chrome|cloak_chromium>]"; exit 1; }
+        [[ -n "${2:-}" ]] || { echo "Usage: $CLI_NAME session create [--name <n>] [--network-egress <egress-id|direct>] [--runtime <standard_chrome|cloak_chromium|browser_lite>] [--browser-lite-node <id>]"; exit 1; }
         network_egress_set=true
         network_egress_id="$2"
         shift 2 ;;
       --runtime)
-        [[ -n "${2:-}" ]] || { echo "Usage: $CLI_NAME session create [--name <n>] [--network-egress <egress-id|direct>] [--runtime <standard_chrome|cloak_chromium>]"; exit 1; }
+        [[ -n "${2:-}" ]] || { echo "Usage: $CLI_NAME session create [--name <n>] [--network-egress <egress-id|direct>] [--runtime <standard_chrome|cloak_chromium|browser_lite>] [--browser-lite-node <id>]"; exit 1; }
         case "$2" in
-          standard_chrome|cloak_chromium) runtime="$2" ;;
-          *) echo "Invalid runtime: $2 (expected standard_chrome or cloak_chromium)"; exit 1 ;;
+          standard_chrome|cloak_chromium|browser_lite) runtime="$2" ;;
+          *) echo "Invalid runtime: $2 (expected standard_chrome, cloak_chromium, or browser_lite)"; exit 1 ;;
         esac
+        shift 2 ;;
+      --browser-lite-node)
+        [[ -n "${2:-}" ]] || { echo "Usage: --browser-lite-node <node-id>"; exit 1; }
+        browser_lite_node_id="$2"
         shift 2 ;;
       *) echo "Unknown session create option: $1"; exit 1 ;;
     esac
   done
+  if [[ "$runtime" == "browser_lite" && -z "$browser_lite_node_id" ]]; then
+    echo "Browser Lite sessions require --browser-lite-node <node-id>. Run: $CLI_NAME browser-lite nodes --json" >&2
+    exit 1
+  fi
+  if [[ "$runtime" == "browser_lite" && "$network_egress_set" == true ]]; then
+    echo "Browser Lite uses the Mac node network; --network-egress is not supported." >&2
+    exit 1
+  fi
   local body resp
   body="{\"name\":\"$(_esc "$name")\",\"browserRuntime\":\"$runtime\""
+  if [[ -n "$browser_lite_node_id" ]]; then
+    body="$body,\"browserLiteNodeId\":\"$(_esc "$browser_lite_node_id")\""
+  fi
   if $network_egress_set; then
     body="$body,\"networkEgressId\":$(_egress_json_value "$network_egress_id")"
   fi
@@ -291,6 +306,16 @@ cmd_session_create() {
     _dim "Copy the full id exactly. New sessions usually use 12-character ids; existing sessions may be UUIDs."
     _dim "Run: $CLI_NAME session use $sid"
   fi
+}
+
+cmd_browser_lite_nodes() {
+  [[ $# -eq 0 ]] || { echo "Usage: $CLI_NAME browser-lite nodes"; exit 1; }
+  _api_get "/api/browser-lite/nodes" | _out
+}
+
+cmd_browser_lite_pairing_code() {
+  [[ $# -eq 0 ]] || { echo "Usage: $CLI_NAME browser-lite pairing-code"; exit 1; }
+  _api_post "/api/browser-lite/pairing-codes" '{}' | _out
 }
 
 cmd_session_set_network() {
@@ -807,6 +832,14 @@ case "${1:-}" in
       *)        echo "Usage: $CLI_NAME network-egress {list|create|update|delete|check}" ;;
     esac
     ;;
+  browser-lite)
+    shift
+    case "${1:-}" in
+      nodes)        shift; cmd_browser_lite_nodes "$@" ;;
+      pairing-code) shift; cmd_browser_lite_pairing_code "$@" ;;
+      *)            echo "Usage: $CLI_NAME browser-lite {nodes|pairing-code}" ;;
+    esac
+    ;;
   devices)
     shift; cmd_devices "$@" ;;
   device)
@@ -867,7 +900,7 @@ Environment:
 
 Sessions:
   session list                 List all sessions
-  session create [--name <n>] [--network-egress <id|direct>] [--runtime <standard_chrome|cloak_chromium>]
+  session create [--name <n>] [--network-egress <id|direct>] [--runtime <standard_chrome|cloak_chromium|browser_lite>] [--browser-lite-node <id>]
                                Create a new session
   session use <id>             Set active session
   session start <id>           Start browser container
@@ -895,6 +928,12 @@ Network egress:
                                Update a managed network egress profile
   network-egress delete <id>   Delete a managed network egress profile
   network-egress check <id>    Check a managed network egress profile
+
+Browser Lite:
+  browser-lite nodes           List paired Mac nodes and online status
+  browser-lite pairing-code    Create a one-time 10-digit pairing code
+  session create --runtime browser_lite --browser-lite-node <node-id>
+                               Create a session on a paired real Mac node
 
 Browser (require active session):
   navigate <url>               Go to URL

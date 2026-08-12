@@ -11,14 +11,16 @@ function delay(milliseconds) {
 function normalizeServerUrl(value) {
   const url = new URL(String(value || ""));
   if (!["https:", "http:"].includes(url.protocol)) throw new Error("Browser Pilot URL must use HTTPS or HTTP");
+  if (url.protocol === "http:" && !["localhost", "127.0.0.1", "::1"].includes(url.hostname)) {
+    throw new Error("Remote Browser Pilot nodes require HTTPS");
+  }
   return url.origin;
 }
 
-function websocketUrl(serverUrl, nodeId, token) {
+function websocketUrl(serverUrl, nodeId) {
   const url = new URL("/api/browser-lite/nodes/connect", serverUrl);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   url.searchParams.set("nodeId", nodeId);
-  url.searchParams.set("token", token);
   return url.toString();
 }
 
@@ -39,9 +41,14 @@ export class BrowserLiteNodeAgent {
   async load() {
     try {
       const parsed = JSON.parse(await readFile(this.configPath, "utf8"));
-      const token = parsed.tokenEncrypted && safeStorage.isEncryptionAvailable()
-        ? safeStorage.decryptString(Buffer.from(parsed.tokenEncrypted, "base64"))
-        : parsed.token;
+      let token = "";
+      if (parsed.tokenEncrypted) {
+        if (!safeStorage.isEncryptionAvailable()) throw new Error("macOS Keychain encryption is unavailable");
+        token = safeStorage.decryptString(Buffer.from(parsed.tokenEncrypted, "base64"));
+      } else if (parsed.token && safeStorage.isEncryptionAvailable()) {
+        token = parsed.token;
+        await this.saveConfig({ ...parsed, token });
+      }
       if (parsed.serverUrl && parsed.nodeId && token) this.config = { ...parsed, token };
     } catch {
       this.config = null;
@@ -56,10 +63,9 @@ export class BrowserLiteNodeAgent {
 
   async saveConfig(config) {
     const serialized = { ...config };
-    if (safeStorage.isEncryptionAvailable()) {
-      serialized.tokenEncrypted = safeStorage.encryptString(config.token).toString("base64");
-      delete serialized.token;
-    }
+    if (!safeStorage.isEncryptionAvailable()) throw new Error("macOS Keychain encryption is unavailable");
+    serialized.tokenEncrypted = safeStorage.encryptString(config.token).toString("base64");
+    delete serialized.token;
     await writeFile(this.configPath, `${JSON.stringify(serialized, null, 2)}\n`, { mode: 0o600 });
   }
 
@@ -136,7 +142,7 @@ export class BrowserLiteNodeAgent {
 
   async connectOnce() {
     const config = this.config;
-    const socket = new WebSocket(websocketUrl(config.serverUrl, config.nodeId, config.token));
+    const socket = new WebSocket(websocketUrl(config.serverUrl, config.nodeId));
     this.socket = socket;
     await new Promise((resolveOpen, rejectOpen) => {
       const timer = setTimeout(() => rejectOpen(new Error("Browser Pilot node connection timed out")), 15_000);
@@ -147,6 +153,27 @@ export class BrowserLiteNodeAgent {
       socket.addEventListener("error", () => {
         clearTimeout(timer);
         rejectOpen(new Error("Browser Pilot node connection failed"));
+      }, { once: true });
+    });
+    socket.send(JSON.stringify({ type: "auth", token: config.token }));
+    await new Promise((resolveAuth, rejectAuth) => {
+      const timer = setTimeout(() => rejectAuth(new Error("Browser Pilot node authentication timed out")), 10_000);
+      const listener = (event) => {
+        let message;
+        try {
+          message = JSON.parse(typeof event.data === "string" ? event.data : Buffer.from(event.data).toString("utf8"));
+        } catch {
+          return;
+        }
+        if (message.type !== "auth_ok") return;
+        clearTimeout(timer);
+        socket.removeEventListener("message", listener);
+        resolveAuth();
+      };
+      socket.addEventListener("message", listener);
+      socket.addEventListener("close", () => {
+        clearTimeout(timer);
+        rejectAuth(new Error("Browser Pilot rejected node authentication"));
       }, { once: true });
     });
     this.connected = true;
