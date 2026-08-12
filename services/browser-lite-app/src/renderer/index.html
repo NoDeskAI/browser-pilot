@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'" />
+    <title>Browser Lite</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <header class="hero">
+        <div class="brand-mark" aria-hidden="true"><span></span></div>
+        <div>
+          <p class="eyebrow">BROWSER PILOT NODE</p>
+          <h1>Browser Lite</h1>
+          <p class="subtitle">Mac 上的真实 Chromium 运行节点</p>
+        </div>
+        <div id="connection-pill" class="pill offline">未配对</div>
+      </header>
+
+      <main>
+        <section class="card node-card">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">NODE CONNECTION</p>
+              <h2>连接 Browser Pilot</h2>
+            </div>
+            <span id="node-id" class="mono subtle"></span>
+          </div>
+          <form id="pair-form" class="pair-form">
+            <label>
+              <span>Browser Pilot 地址</span>
+              <input id="server-url" type="url" placeholder="https://bpilot.nodeskai.com" value="https://bpilot.nodeskai.com" required />
+            </label>
+            <label>
+              <span>配对码</span>
+              <input id="pairing-code" type="text" inputmode="numeric" autocomplete="one-time-code" placeholder="6 位一次性配对码" required />
+            </label>
+            <button id="pair-button" type="submit">配对节点</button>
+          </form>
+          <div id="paired-state" class="paired-state hidden">
+            <div>
+              <strong id="node-name">Mac node</strong>
+              <p id="node-server" class="subtle"></p>
+              <p id="node-error" class="error"></p>
+            </div>
+            <button id="unpair-button" class="secondary" type="button">解除配对</button>
+          </div>
+        </section>
+
+        <section class="card">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">RUNTIME INSTANCES</p>
+              <h2>运行实例</h2>
+            </div>
+            <button id="open-default" class="secondary" type="button">打开本地实例</button>
+          </div>
+          <div id="instances" class="instance-list">
+            <div class="empty">正在读取实例…</div>
+          </div>
+        </section>
+
+        <section class="environment-grid">
+          <article class="metric">
+            <span>App</span><strong id="app-version">—</strong>
+          </article>
+          <article class="metric">
+            <span>Chromium</span><strong id="chromium-version">—</strong>
+          </article>
+          <article class="metric">
+            <span>Isolation</span><strong>Persistent partition</strong>
+          </article>
+          <article class="metric">
+            <span>Control</span><strong>WebDriver + CDP</strong>
+          </article>
+        </section>
+      </main>
+    </div>
+    <script type="module" src="renderer.mjs"></script>
+  </body>
+</html>

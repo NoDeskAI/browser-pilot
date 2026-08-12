@@ -1,0 +1,557 @@
+import { app, BrowserWindow, session } from "electron";
+import { createServer } from "node:http";
+import { mkdir } from "node:fs/promises";
+import { join } from "node:path";
+
+let runtimeModulePromise;
+
+async function runtimeModule() {
+  if (!runtimeModulePromise) {
+    const modulePath = app.isPackaged
+      ? join(process.resourcesPath, "browser-lite-runtime", "browser-lite.mjs")
+      : join(app.getAppPath(), "..", "browser-lite-runtime", "browser-lite.mjs");
+    runtimeModulePromise = import(modulePath);
+  }
+  return runtimeModulePromise;
+}
+
+function safeInstanceId(value) {
+  const normalized = String(value ?? "browser_lite").replace(/[^A-Za-z0-9._-]/g, "-");
+  if (!/^[A-Za-z0-9]/.test(normalized)) return `instance-${normalized}`;
+  return normalized.slice(0, 64);
+}
+
+function targetIdFor(window) {
+  return `electron-${window.webContents.id}`;
+}
+
+export class ElectronBrowserLiteState {
+  constructor(config, { onChanged } = {}) {
+    this.config = config;
+    this.sessionId = `browser-lite-${config.instanceId}`;
+    this.browserVersion = `Chromium/${process.versions.chrome}`;
+    this.startedAt = null;
+    this.activeTargetId = null;
+    this.windows = new Map();
+    this.pointer = { x: 0, y: 0 };
+    this.timeouts = { script: 30_000, pageLoad: 60_000, implicit: 0 };
+    this.startPromise = null;
+    this.onChanged = onChanged;
+    this.paused = false;
+    this.partition = `persist:browser-lite-${safeInstanceId(config.instanceId)}`;
+  }
+
+  async start() {
+    if (!this.startPromise) {
+      this.startPromise = this.startInner().catch((error) => {
+        this.startPromise = null;
+        throw error;
+      });
+    }
+    return this.startPromise;
+  }
+
+  async startInner() {
+    await mkdir(this.config.profileDir, { recursive: true, mode: 0o700 });
+    if (this.windows.size === 0) await this.createWindow("about:blank");
+    this.startedAt ||= new Date().toISOString();
+    this.notifyChanged();
+  }
+
+  notifyChanged() {
+    this.onChanged?.();
+  }
+
+  async createWindow(url = "about:blank") {
+    const window = new BrowserWindow({
+      title: `Browser Lite — ${this.config.instanceId}`,
+      width: this.config.width,
+      height: this.config.height,
+      minWidth: 480,
+      minHeight: 320,
+      show: !this.paused,
+      backgroundColor: "#f7f8fb",
+      webPreferences: {
+        partition: this.partition,
+        nodeIntegration: false,
+        contextIsolation: true,
+        sandbox: true,
+        webSecurity: true,
+        spellcheck: true,
+      },
+    });
+    const targetId = targetIdFor(window);
+    window.webContents.setUserAgent(
+      `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) `
+      + `AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${process.versions.chrome} Safari/537.36`,
+    );
+    this.windows.set(targetId, window);
+    this.activeTargetId = targetId;
+    window.on("closed", () => {
+      this.windows.delete(targetId);
+      if (this.activeTargetId === targetId) this.activeTargetId = [...this.windows.keys()].at(-1) ?? null;
+      this.notifyChanged();
+    });
+    window.webContents.on("did-finish-load", () => this.notifyChanged());
+    window.webContents.on("page-title-updated", () => this.notifyChanged());
+    window.webContents.setWindowOpenHandler(({ url: nextUrl }) => {
+      void this.createWindow(nextUrl);
+      return { action: "deny" };
+    });
+    if (!window.webContents.debugger.isAttached()) window.webContents.debugger.attach("1.3");
+    await window.loadURL(url);
+    this.notifyChanged();
+    return { targetId, window };
+  }
+
+  liveWindows() {
+    for (const [targetId, window] of this.windows) {
+      if (window.isDestroyed() || window.webContents.isDestroyed()) this.windows.delete(targetId);
+    }
+    return [...this.windows.entries()];
+  }
+
+  windowForTarget(targetId = undefined) {
+    const selected = targetId ?? this.activeTargetId;
+    const window = selected ? this.windows.get(selected) : null;
+    if (!window || window.isDestroyed()) return null;
+    return window;
+  }
+
+  async ensureConnected() {
+    await this.start();
+  }
+
+  async targets() {
+    await this.start();
+    return this.liveWindows().map(([targetId, window]) => ({
+      targetId,
+      type: "page",
+      title: window.webContents.getTitle(),
+      url: window.webContents.getURL(),
+      attached: window.webContents.debugger.isAttached(),
+    }));
+  }
+
+  async ensurePage() {
+    await this.start();
+    const active = this.windowForTarget();
+    if (active) return this.activeTargetId;
+    const existing = this.liveWindows().at(-1);
+    if (existing) {
+      this.activeTargetId = existing[0];
+      return existing[0];
+    }
+    return (await this.createWindow()).targetId;
+  }
+
+  async attach(targetId) {
+    const window = this.windowForTarget(targetId);
+    if (!window) throw new Error(`Unknown Browser Lite target: ${targetId}`);
+    if (!window.webContents.debugger.isAttached()) window.webContents.debugger.attach("1.3");
+    return targetId;
+  }
+
+  async sendPage(method, params = {}, targetId = undefined) {
+    await this.ensureConnected();
+
+    if (method === "Target.createTarget") {
+      const created = await this.createWindow(params.url || "about:blank");
+      return { targetId: created.targetId };
+    }
+    if (method === "Target.getTargets") return { targetInfos: await this.targets() };
+    if (method === "Target.activateTarget") {
+      await this.activate(params.targetId);
+      return {};
+    }
+    if (method === "Target.closeTarget") {
+      const window = this.windowForTarget(params.targetId);
+      if (window) window.close();
+      return { success: Boolean(window) };
+    }
+
+    const selectedTarget = targetId ?? await this.ensurePage();
+    const window = this.windowForTarget(selectedTarget);
+    if (!window) throw new Error(`Unknown Browser Lite target: ${selectedTarget}`);
+
+    if (method === "Browser.getWindowForTarget") {
+      const [x, y] = window.getPosition();
+      const [width, height] = window.getSize();
+      return { windowId: window.id, bounds: { left: x, top: y, width, height, windowState: "normal" } };
+    }
+    if (method === "Browser.setWindowBounds") {
+      const bounds = params.bounds ?? {};
+      if (Number.isFinite(bounds.left) && Number.isFinite(bounds.top)) window.setPosition(bounds.left, bounds.top);
+      if (Number.isFinite(bounds.width) && Number.isFinite(bounds.height)) window.setSize(bounds.width, bounds.height);
+      return {};
+    }
+    if (method === "Browser.setDownloadBehavior") {
+      const downloadPath = params.downloadPath || join(app.getPath("downloads"), "Browser Lite", this.config.instanceId);
+      await mkdir(downloadPath, { recursive: true, mode: 0o700 });
+      session.fromPartition(this.partition).setDownloadPath(downloadPath);
+      return {};
+    }
+
+    await this.attach(selectedTarget);
+    return window.webContents.debugger.sendCommand(method, params);
+  }
+
+  async activate(targetId = undefined) {
+    const selectedTarget = targetId ?? await this.ensurePage();
+    const window = this.windowForTarget(selectedTarget);
+    if (!window) throw new Error(`Unknown Browser Lite target: ${selectedTarget}`);
+    this.activeTargetId = selectedTarget;
+    if (!this.paused) {
+      window.show();
+      window.focus();
+    }
+    return selectedTarget;
+  }
+
+  async setActiveTarget(targetId) {
+    await this.activate(targetId);
+  }
+
+  async evaluateExpression(expression, { awaitPromise = true } = {}) {
+    const result = await this.sendPage("Runtime.evaluate", {
+      expression,
+      awaitPromise,
+      returnByValue: true,
+      userGesture: true,
+    });
+    if (result.exceptionDetails) {
+      const message = result.exceptionDetails.exception?.description || result.exceptionDetails.text || "JavaScript execution failed";
+      throw new Error(message);
+    }
+    return Object.prototype.hasOwnProperty.call(result.result ?? {}, "value") ? result.result.value : null;
+  }
+
+  async execute(script, args) {
+    const expression = `(() => {
+      const __args = ${JSON.stringify(args ?? [])};
+      const __fn = new Function(...__args.map((_, index) => "arg" + index), ${JSON.stringify(script ?? "")});
+      return __fn(...__args);
+    })()`;
+    return this.evaluateExpression(expression);
+  }
+
+  async waitForDocumentReady() {
+    const deadline = Date.now() + this.timeouts.pageLoad;
+    while (Date.now() < deadline) {
+      try {
+        const readyState = await this.evaluateExpression("document.readyState");
+        if (readyState === "interactive" || readyState === "complete") return;
+      } catch {
+        // The execution context changes during navigation.
+      }
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, 100));
+    }
+    throw new Error(`Page did not become ready within ${this.timeouts.pageLoad}ms`);
+  }
+
+  async navigate(url) {
+    if (typeof url !== "string" || !url.trim()) throw new Error("url must be a non-empty string");
+    await this.activate();
+    const result = await this.sendPage("Page.navigate", { url: url.trim() });
+    if (result.errorText) throw new Error(result.errorText);
+    await this.waitForDocumentReady();
+  }
+
+  async currentUrl() {
+    return this.evaluateExpression("location.href");
+  }
+
+  async title() {
+    return this.evaluateExpression("document.title");
+  }
+
+  async source() {
+    return this.evaluateExpression("document.documentElement ? document.documentElement.outerHTML : ''");
+  }
+
+  async screenshot() {
+    const result = await this.sendPage("Page.captureScreenshot", { format: "png", fromSurface: true });
+    return result.data;
+  }
+
+  async closeActiveTarget() {
+    const targetId = await this.ensurePage();
+    const window = this.windowForTarget(targetId);
+    if (window) window.close();
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 100));
+    this.activeTargetId = null;
+    if (this.liveWindows().length === 0) await this.createWindow();
+    return (await this.targets()).map((target) => target.targetId);
+  }
+
+  async windowRect() {
+    const window = this.windowForTarget(await this.ensurePage());
+    const [x, y] = window.getPosition();
+    const [width, height] = window.getSize();
+    return { x, y, width, height };
+  }
+
+  async setWindowRect(body) {
+    const window = this.windowForTarget(await this.ensurePage());
+    const current = await this.windowRect();
+    const x = Number.isFinite(Number(body.x)) ? Number(body.x) : current.x;
+    const y = Number.isFinite(Number(body.y)) ? Number(body.y) : current.y;
+    const width = Math.max(320, Number(body.width) || current.width);
+    const height = Math.max(240, Number(body.height) || current.height);
+    window.setBounds({ x, y, width, height });
+    return this.windowRect();
+  }
+
+  async performActions(sources) {
+    for (const source of sources ?? []) {
+      for (const action of source.actions ?? []) {
+        if (action.type === "pause") {
+          await new Promise((resolveDelay) => setTimeout(resolveDelay, Number(action.duration ?? 0)));
+        } else if (source.type === "key") {
+          await this.performKeyAction(action);
+        } else if (source.type === "wheel" && action.type === "scroll") {
+          this.pointer = { x: Number(action.x ?? 0), y: Number(action.y ?? 0) };
+          await this.sendPage("Input.dispatchMouseEvent", {
+            type: "mouseWheel",
+            x: this.pointer.x,
+            y: this.pointer.y,
+            deltaX: Number(action.deltaX ?? 0),
+            deltaY: Number(action.deltaY ?? 0),
+          });
+        } else if (source.type === "pointer") {
+          await this.performPointerAction(action);
+        }
+      }
+    }
+  }
+
+  async performKeyAction(action) {
+    const special = {
+      "\ue003": ["Backspace", "Backspace", 8],
+      "\ue004": ["Tab", "Tab", 9],
+      "\ue006": ["Enter", "Enter", 13],
+      "\ue007": ["Enter", "Enter", 13],
+      "\ue00c": ["Escape", "Escape", 27],
+      "\ue012": ["ArrowLeft", "ArrowLeft", 37],
+      "\ue013": ["ArrowUp", "ArrowUp", 38],
+      "\ue014": ["ArrowRight", "ArrowRight", 39],
+      "\ue015": ["ArrowDown", "ArrowDown", 40],
+      "\ue017": ["ArrowDown", "ArrowDown", 40],
+    }[String(action.value ?? "")];
+    if (action.type === "keyDown" && !special) {
+      const text = String(action.value ?? "");
+      if (text) await this.sendPage("Input.insertText", { text });
+      return;
+    }
+    if (!special || !["keyDown", "keyUp"].includes(action.type)) return;
+    await this.sendPage("Input.dispatchKeyEvent", {
+      type: action.type === "keyDown" ? "rawKeyDown" : "keyUp",
+      key: special[0],
+      code: special[1],
+      windowsVirtualKeyCode: special[2],
+      nativeVirtualKeyCode: special[2],
+    });
+  }
+
+  async performPointerAction(action) {
+    if (action.type === "pointerMove") {
+      this.pointer = { x: Number(action.x ?? 0), y: Number(action.y ?? 0) };
+      await this.sendPage("Input.dispatchMouseEvent", {
+        type: "mouseMoved", x: this.pointer.x, y: this.pointer.y, button: "none",
+      });
+    } else if (action.type === "pointerDown" || action.type === "pointerUp") {
+      await this.sendPage("Input.dispatchMouseEvent", {
+        type: action.type === "pointerDown" ? "mousePressed" : "mouseReleased",
+        x: this.pointer.x,
+        y: this.pointer.y,
+        button: "left",
+        buttons: action.type === "pointerDown" ? 1 : 0,
+        clickCount: 1,
+      });
+    }
+  }
+
+  async cookies() {
+    const result = await this.sendPage("Network.getAllCookies");
+    return (result.cookies ?? []).map((cookie) => ({
+      name: cookie.name,
+      value: cookie.value,
+      path: cookie.path,
+      domain: cookie.domain,
+      secure: cookie.secure,
+      httpOnly: cookie.httpOnly,
+      sameSite: cookie.sameSite,
+      ...(cookie.expires > 0 ? { expiry: Math.trunc(cookie.expires) } : {}),
+    }));
+  }
+
+  async addCookie(cookie) {
+    const params = { name: cookie.name, value: cookie.value, url: await this.currentUrl() };
+    for (const key of ["domain", "path", "secure", "httpOnly", "sameSite"]) {
+      if (cookie[key] !== undefined) params[key] = cookie[key];
+    }
+    if (cookie.expiry !== undefined) params.expires = Number(cookie.expiry);
+    await this.sendPage("Network.setCookie", params);
+  }
+
+  async deleteCookie(name = undefined) {
+    const cookies = await this.cookies();
+    const currentUrl = await this.currentUrl();
+    for (const cookie of cookies) {
+      if (name !== undefined && cookie.name !== name) continue;
+      await this.sendPage("Network.deleteCookies", {
+        name: cookie.name, url: currentUrl, domain: cookie.domain, path: cookie.path,
+      });
+    }
+  }
+
+  async pause() {
+    this.paused = true;
+    for (const [, window] of this.liveWindows()) window.hide();
+    this.notifyChanged();
+  }
+
+  async resume() {
+    this.paused = false;
+    await this.start();
+    for (const [, window] of this.liveWindows()) window.show();
+    this.notifyChanged();
+  }
+
+  async stop() {
+    for (const [, window] of this.liveWindows()) window.close();
+    this.windows.clear();
+    this.activeTargetId = null;
+    this.startPromise = null;
+    this.notifyChanged();
+  }
+
+  async remove() {
+    await this.stop();
+    const partitionSession = session.fromPartition(this.partition);
+    await partitionSession.clearCache();
+    await partitionSession.clearStorageData();
+  }
+
+  async runtimeStatus() {
+    const targets = await this.targets();
+    return {
+      ready: true,
+      runtime: "browser_lite",
+      version: app.getVersion(),
+      instanceId: this.config.instanceId,
+      sessionId: this.sessionId,
+      host: this.config.host,
+      port: this.config.port,
+      profileDir: this.config.profileDir,
+      browserVersion: this.browserVersion,
+      chromiumVersion: process.versions.chrome,
+      electronVersion: process.versions.electron,
+      bundledChromium: true,
+      startedAt: this.startedAt,
+      activeTargetId: this.activeTargetId,
+      tabCount: targets.length,
+      paused: this.paused,
+    };
+  }
+
+  closeControlConnection() {}
+}
+
+export class BrowserLiteManager {
+  constructor({ onChanged } = {}) {
+    this.instances = new Map();
+    this.onChanged = onChanged;
+  }
+
+  async ensure(instanceId, options = {}) {
+    const id = safeInstanceId(instanceId);
+    let entry = this.instances.get(id);
+    if (!entry) {
+      const { createBrowserLiteServer } = await runtimeModule();
+      const profileDir = join(app.getPath("userData"), "Instances", id);
+      const config = {
+        host: "127.0.0.1",
+        port: Number(options.port ?? 0),
+        instanceId: id,
+        profileDir,
+        dataRoot: app.getPath("userData"),
+        width: Math.max(320, Number(options.width) || 1280),
+        height: Math.max(240, Number(options.height) || 800),
+      };
+      const state = new ElectronBrowserLiteState(config, { onChanged: () => this.onChanged?.() });
+      await state.start();
+      const server = createBrowserLiteServer(state);
+      await new Promise((resolveListen, rejectListen) => {
+        server.once("error", rejectListen);
+        server.listen(config.port, config.host, resolveListen);
+      });
+      const address = server.address();
+      config.port = typeof address === "object" && address ? address.port : config.port;
+      entry = { id, state, server, baseUrl: `http://${config.host}:${config.port}` };
+      this.instances.set(id, entry);
+      this.onChanged?.();
+    } else {
+      await entry.state.resume();
+    }
+    return entry;
+  }
+
+  async request(instanceId, request) {
+    const entry = await this.ensure(instanceId);
+    const url = `${entry.baseUrl}${request.path}`;
+    const response = await fetch(url, {
+      method: request.method || "GET",
+      headers: { "content-type": "application/json" },
+      body: request.body === undefined || request.body === null
+        ? undefined
+        : typeof request.body === "string" ? request.body : JSON.stringify(request.body),
+    });
+    return {
+      status: response.status,
+      headers: { "content-type": response.headers.get("content-type") || "application/json" },
+      body: await response.text(),
+    };
+  }
+
+  async pause(instanceId) {
+    const entry = this.instances.get(safeInstanceId(instanceId));
+    if (entry) await entry.state.pause();
+  }
+
+  async stop(instanceId) {
+    const entry = this.instances.get(safeInstanceId(instanceId));
+    if (entry) await entry.state.stop();
+  }
+
+  async remove(instanceId) {
+    const id = safeInstanceId(instanceId);
+    const entry = this.instances.get(id);
+    if (!entry) return;
+    await entry.state.remove();
+    await new Promise((resolveClose) => entry.server.close(resolveClose));
+    this.instances.delete(id);
+    this.onChanged?.();
+  }
+
+  async status(instanceId) {
+    const entry = this.instances.get(safeInstanceId(instanceId));
+    if (!entry) return { status: "not_found" };
+    const runtime = await entry.state.runtimeStatus();
+    return { status: runtime.paused ? "paused" : "running", runtime };
+  }
+
+  async list() {
+    const result = [];
+    for (const [id, entry] of this.instances) {
+      result.push({ id, baseUrl: entry.baseUrl, ...(await entry.state.runtimeStatus()) });
+    }
+    return result;
+  }
+
+  async shutdown() {
+    for (const entry of this.instances.values()) {
+      await new Promise((resolveClose) => entry.server.close(resolveClose));
+    }
+  }
+}
