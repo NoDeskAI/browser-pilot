@@ -39,7 +39,8 @@ mistaken for a public release.
 
 - App configuration: `~/Library/Application Support/Browser Lite`
 - Each Browser Pilot session: a separate persistent Electron partition
-- Node token: encrypted using macOS Keychain-backed Electron `safeStorage`
+- Node token: AES-256-GCM encrypted with a per-installation 32-byte key
+- Installation key: local `node-key.bin`, created once with owner-only mode `0600`
 - Remote connection: outbound WebSocket to Browser Pilot
 - Local WebDriver/CDP: loopback only
 
@@ -58,8 +59,10 @@ For managed Mac nodes, pairing can also be initiated without typing into the UI:
 ```
 
 The code expires after 10 minutes and can be used once. The long-lived node
-token is returned only to the app, encrypted with macOS Keychain-backed
-`safeStorage`, and is never accepted as a command-line argument.
+token is returned only to the app, encrypted with the local installation key,
+and is never accepted as a command-line argument. The test build deliberately
+does not use interactive Keychain access, so unattended upgrades and restarts
+do not trigger a macOS password prompt.
 
 Browser Lite deliberately does not expose a remote shell, container egress
 profiles, synthetic fingerprint injection, or a Browser Pilot Web VNC viewer.

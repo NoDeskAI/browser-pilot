@@ -27,10 +27,13 @@ test("sandboxed preload uses the Electron-supported CommonJS format", async () =
   assert.match(preload, /contextBridge\.exposeInMainWorld/);
 });
 
-test("remote node token is encrypted with Electron safeStorage when available", async () => {
+test("remote node token is encrypted without interactive Keychain access", async () => {
   const source = await readFile(join(ROOT, "src", "node-agent.mjs"), "utf8");
-  assert.match(source, /safeStorage\.encryptString/);
-  assert.match(source, /safeStorage\.decryptString/);
+  assert.match(source, /createCipheriv\("aes-256-gcm"/);
+  assert.match(source, /createDecipheriv\("aes-256-gcm"/);
+  assert.match(source, /node-key\.bin/);
+  assert.match(source, /mode: 0o600, flag: "wx"/);
+  assert.doesNotMatch(source, /safeStorage|Keychain/);
   assert.match(source, /type: "auth", token: config\.token/);
   assert.doesNotMatch(source, /searchParams\.set\("token"/);
 });
@@ -38,6 +41,7 @@ test("remote node token is encrypted with Electron safeStorage when available", 
 test("DMG staging preserves Electron framework relative symlinks", async () => {
   const source = await readFile(join(ROOT, "scripts", "build-dmg.mjs"), "utf8");
   assert.match(source, /verbatimSymlinks:\s*true/);
+  assert.match(source, /BROWSER_LITE_TEST_BUILD: "1"/);
 });
 
 test("packaged app registers as a persistent login item", async () => {
@@ -49,5 +53,12 @@ test("packaged app supports one-time command-line pairing without accepting a no
   const source = await readFile(join(ROOT, "src", "main.mjs"), "utf8");
   assert.match(source, /--pair-server/);
   assert.match(source, /--pairing-code/);
+  assert.match(source, /requestSingleInstanceLock\(initialPairingOptions\)/);
+  assert.match(source, /second-instance[\s\S]*additionalData/);
+  assert.match(source, /writeFileSync\(PAIRING_REQUEST_PATH[\s\S]*mode: 0o600/);
+  assert.match(source, /consumeStagedPairingRequest/);
+  assert.match(source, /unlinkSync\(PAIRING_REQUEST_PATH\)/);
+  assert.match(source, /if \(hasSingleInstanceLock\) \{[\s\S]*app\.whenReady\(\)\.then\(bootstrap\)/);
+  assert.match(source, /BROWSER_LITE_TEST_BUILD[\s\S]*use-mock-keychain/);
   assert.doesNotMatch(source, /--node-token/);
 });

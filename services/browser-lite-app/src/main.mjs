@@ -1,4 +1,5 @@
 import { app, BrowserWindow, ipcMain, Menu, nativeImage, Tray } from "electron";
+import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -11,10 +12,17 @@ let tray = null;
 let manager;
 let nodeAgent;
 
+// Ad-hoc signed test builds must stay unattended across upgrades. Chromium's
+// own cookie encryption otherwise asks macOS Keychain to trust each new ad-hoc
+// code identity. Developer ID release builds do not set this environment flag.
+if (process.env.BROWSER_LITE_TEST_BUILD === "1") app.commandLine.appendSwitch("use-mock-keychain");
 app.setName("Browser Lite");
 app.setPath("userData", join(app.getPath("appData"), "Browser Lite"));
 
-const hasSingleInstanceLock = app.requestSingleInstanceLock();
+const PAIRING_REQUEST_PATH = join(app.getPath("userData"), "pairing-request.json");
+const initialPairingOptions = pairingOptions(process.argv);
+stagePairingRequest(initialPairingOptions);
+const hasSingleInstanceLock = app.requestSingleInstanceLock(initialPairingOptions);
 if (!hasSingleInstanceLock) app.quit();
 
 function emitState() {
@@ -23,20 +31,44 @@ function emitState() {
   }
 }
 
-function pairingOptions(argv = []) {
+function pairingOptions(argv = [], additionalData = {}) {
   const option = (name) => {
     const index = argv.indexOf(name);
     return index >= 0 ? argv[index + 1] || "" : "";
   };
+  const data = additionalData && typeof additionalData === "object" ? additionalData : {};
   return {
-    serverUrl: option("--pair-server"),
-    pairingCode: option("--pairing-code"),
+    serverUrl: String(data.serverUrl || option("--pair-server") || ""),
+    pairingCode: String(data.pairingCode || option("--pairing-code") || ""),
   };
 }
 
-async function pairFromArguments(argv = []) {
-  const options = pairingOptions(argv);
-  if (!options.serverUrl || !/^\d{10}$/.test(options.pairingCode)) return false;
+function validPairingOptions(options = {}) {
+  return Boolean(options.serverUrl && /^\d{10}$/.test(options.pairingCode));
+}
+
+function stagePairingRequest(options) {
+  if (!validPairingOptions(options)) return;
+  mkdirSync(app.getPath("userData"), { recursive: true, mode: 0o700 });
+  writeFileSync(PAIRING_REQUEST_PATH, `${JSON.stringify(options)}\n`, { mode: 0o600 });
+}
+
+function consumeStagedPairingRequest() {
+  try {
+    const options = JSON.parse(readFileSync(PAIRING_REQUEST_PATH, "utf8"));
+    return validPairingOptions(options) ? options : {};
+  } catch {
+    return {};
+  } finally {
+    try { unlinkSync(PAIRING_REQUEST_PATH); } catch {}
+  }
+}
+
+async function pairFromArguments(argv = [], additionalData = {}) {
+  const supplied = pairingOptions(argv, additionalData);
+  const options = validPairingOptions(supplied) ? supplied : consumeStagedPairingRequest();
+  if (!validPairingOptions(options)) return false;
+  try { unlinkSync(PAIRING_REQUEST_PATH); } catch {}
   await nodeAgent.pair(options.serverUrl, options.pairingCode);
   emitState();
   return true;
@@ -139,8 +171,8 @@ function registerIpc() {
   });
 }
 
-app.on("second-instance", (_event, argv) => {
-  void pairFromArguments(argv).catch((error) => console.error("Browser Lite pairing failed", error));
+app.on("second-instance", (_event, argv, _workingDirectory, additionalData) => {
+  void pairFromArguments(argv, additionalData).catch((error) => console.error("Browser Lite pairing failed", error));
   createDashboardWindow();
 });
 app.on("window-all-closed", () => {});
@@ -163,7 +195,9 @@ async function bootstrap() {
   emitState();
 }
 
-app.whenReady().then(bootstrap).catch((error) => {
-  console.error("Browser Lite failed to start", error);
-  app.exit(1);
-});
+if (hasSingleInstanceLock) {
+  app.whenReady().then(bootstrap).catch((error) => {
+    console.error("Browser Lite failed to start", error);
+    app.exit(1);
+  });
+}

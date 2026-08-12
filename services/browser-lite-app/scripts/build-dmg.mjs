@@ -99,6 +99,7 @@ async function main() {
       CFBundleName: APP_NAME,
       LSApplicationCategoryType: "public.app-category.productivity",
       NSHumanReadableCopyright: "Copyright © 2026 Xy718",
+      ...(identity ? {} : { LSEnvironment: { BROWSER_LITE_TEST_BUILD: "1" } }),
     },
   });
 

@@ -1,5 +1,5 @@
-import { app, safeStorage } from "electron";
-import { randomUUID } from "node:crypto";
+import { app } from "electron";
+import { createCipheriv, createDecipheriv, randomBytes, randomUUID } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { hostname, platform, arch } from "node:os";
@@ -7,6 +7,8 @@ import { hostname, platform, arch } from "node:os";
 function delay(milliseconds) {
   return new Promise((resolveDelay) => setTimeout(resolveDelay, milliseconds));
 }
+
+const TOKEN_ENCRYPTION = "local-aes-256-gcm-v1";
 
 function normalizeServerUrl(value) {
   const url = new URL(String(value || ""));
@@ -29,6 +31,7 @@ export class BrowserLiteNodeAgent {
     this.manager = manager;
     this.onChanged = onChanged;
     this.configPath = join(app.getPath("userData"), "node-config.json");
+    this.keyPath = join(app.getPath("userData"), "node-key.bin");
     this.config = null;
     this.socket = null;
     this.connected = false;
@@ -41,14 +44,7 @@ export class BrowserLiteNodeAgent {
   async load() {
     try {
       const parsed = JSON.parse(await readFile(this.configPath, "utf8"));
-      let token = "";
-      if (parsed.tokenEncrypted) {
-        if (!safeStorage.isEncryptionAvailable()) throw new Error("macOS Keychain encryption is unavailable");
-        token = safeStorage.decryptString(Buffer.from(parsed.tokenEncrypted, "base64"));
-      } else if (parsed.token && safeStorage.isEncryptionAvailable()) {
-        token = parsed.token;
-        await this.saveConfig({ ...parsed, token });
-      }
+      const token = await this.decryptToken(parsed);
       if (parsed.serverUrl && parsed.nodeId && token) this.config = { ...parsed, token };
     } catch {
       this.config = null;
@@ -63,10 +59,48 @@ export class BrowserLiteNodeAgent {
 
   async saveConfig(config) {
     const serialized = { ...config };
-    if (!safeStorage.isEncryptionAvailable()) throw new Error("macOS Keychain encryption is unavailable");
-    serialized.tokenEncrypted = safeStorage.encryptString(config.token).toString("base64");
+    const key = await this.installationKey();
+    const iv = randomBytes(12);
+    const cipher = createCipheriv("aes-256-gcm", key, iv);
+    const ciphertext = Buffer.concat([cipher.update(config.token, "utf8"), cipher.final()]);
+    serialized.tokenEncryption = TOKEN_ENCRYPTION;
+    serialized.tokenCiphertext = ciphertext.toString("base64");
+    serialized.tokenIv = iv.toString("base64");
+    serialized.tokenAuthTag = cipher.getAuthTag().toString("base64");
     delete serialized.token;
+    delete serialized.tokenEncrypted;
     await writeFile(this.configPath, `${JSON.stringify(serialized, null, 2)}\n`, { mode: 0o600 });
+  }
+
+  async installationKey() {
+    try {
+      const key = await readFile(this.keyPath);
+      if (key.length !== 32) throw new Error("Browser Lite installation key is invalid");
+      return key;
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+      const key = randomBytes(32);
+      try {
+        await writeFile(this.keyPath, key, { mode: 0o600, flag: "wx" });
+        return key;
+      } catch (writeError) {
+        if (writeError.code !== "EEXIST") throw writeError;
+        const existing = await readFile(this.keyPath);
+        if (existing.length !== 32) throw new Error("Browser Lite installation key is invalid");
+        return existing;
+      }
+    }
+  }
+
+  async decryptToken(config) {
+    if (config.tokenEncryption !== TOKEN_ENCRYPTION) return "";
+    const key = await this.installationKey();
+    const decipher = createDecipheriv("aes-256-gcm", key, Buffer.from(config.tokenIv, "base64"));
+    decipher.setAuthTag(Buffer.from(config.tokenAuthTag, "base64"));
+    return Buffer.concat([
+      decipher.update(Buffer.from(config.tokenCiphertext, "base64")),
+      decipher.final(),
+    ]).toString("utf8");
   }
 
   async pair(serverUrl, pairingCode, displayName = undefined) {
