@@ -59,7 +59,7 @@ export class ElectronBrowserLiteState {
   async startInner() {
     this.stopped = false;
     await mkdir(this.config.profileDir, { recursive: true, mode: 0o700 });
-    if (this.windows.size === 0) await this.createWindow("about:blank");
+    if (this.windows.size === 0) await this.createWindow(this.config.startUrl || "about:blank");
     this.startedAt ||= new Date().toISOString();
     this.notifyChanged();
   }
@@ -492,10 +492,11 @@ export class ElectronBrowserLiteState {
 }
 
 export class BrowserLiteManager {
-  constructor({ hostWindow, onChanged } = {}) {
+  constructor({ hostWindow, installation, onChanged } = {}) {
     if (!hostWindow) throw new Error("Browser Lite requires a host window");
     this.instances = new Map();
     this.hostWindow = hostWindow;
+    this.installation = installation;
     this.onChanged = onChanged;
     this.viewMode = "settings";
     this.activeInstanceId = null;
@@ -526,7 +527,7 @@ export class BrowserLiteManager {
   showSettings() {
     for (const entry of this.instances.values()) entry.state.setVisible(false);
     this.viewMode = "settings";
-    this.hostWindow.setTitle("Browser Lite — 设置");
+    this.hostWindow.setTitle(this.installation?.isComplete() ? "Browser Lite — 设置" : "Browser Lite — 安装");
     this.hostWindow.setContentSize(this.settingsContentSize[0], this.settingsContentSize[1]);
     this.hostWindow.show();
     this.hostWindow.focus();
@@ -553,6 +554,7 @@ export class BrowserLiteManager {
     const id = safeInstanceId(instanceId);
     let entry = this.instances.get(id);
     if (!entry) {
+      await this.installation?.prepareInstance(id);
       const { createBrowserLiteServer } = await runtimeModule();
       const profileDir = join(app.getPath("userData"), "Instances", id);
       const config = {
@@ -564,6 +566,7 @@ export class BrowserLiteManager {
         hostWindow: this.hostWindow,
         browserBounds: () => this.browserBounds(),
         onActivate: (activeId) => this.showInstance(activeId),
+        startUrl: await this.installation?.startUrl(),
         width: Math.max(320, Number(options.width) || 1280),
         height: Math.max(240, Number(options.height) || 800),
       };
@@ -652,5 +655,13 @@ export class BrowserLiteManager {
       await entry.state.stop();
       await new Promise((resolveClose) => entry.server.close(resolveClose));
     }
+    this.instances.clear();
+    this.activeInstanceId = null;
+    this.viewMode = "settings";
+  }
+
+  async resetForReinstall() {
+    await this.shutdown();
+    this.onChanged?.();
   }
 }

@@ -7,7 +7,32 @@
     <title>Browser Lite</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
-  <body>
+  <body class="booting">
+    <section id="installer" class="installer hidden" aria-labelledby="installer-title">
+      <div class="installer-card">
+        <div class="installer-brand"><span aria-hidden="true"></span>Browser Lite</div>
+        <p class="eyebrow">WELCOME</p>
+        <h1 id="installer-title">把你的浏览器带过来</h1>
+        <p class="installer-copy">选择本机 Chrome Profile。Browser Lite 会复制登录状态、书签和历史记录，不会修改 Chrome 中的任何数据。</p>
+        <div id="chrome-running" class="installer-warning hidden">
+          <strong>导入时需要暂时退出 Chrome</strong>
+          <span>点击导入后 Browser Lite 会正常退出 Chrome，完成后你可以重新打开。</span>
+        </div>
+        <div id="profile-list" class="profile-list"></div>
+        <div class="import-options">
+          <label class="check-row"><input id="import-login-state" type="checkbox" checked /><span><strong>登录状态</strong><small>Cookie、Local Storage、IndexedDB；macOS 可能询问一次 Chrome Safe Storage</small></span></label>
+          <label class="check-row"><input id="import-bookmarks" type="checkbox" checked /><span><strong>书签</strong><small>导入到 Browser Lite 起始页</small></span></label>
+          <label class="check-row"><input id="import-history" type="checkbox" checked /><span><strong>最近历史</strong><small>最近 500 条记录</small></span></label>
+          <div class="check-row unsupported"><span class="fake-check">—</span><span><strong>密码与扩展</strong><small>当前版本暂不支持，不会显示假成功</small></span></div>
+        </div>
+        <p id="installer-error" class="error installer-error"></p>
+        <div class="installer-actions">
+          <button id="install-fresh" class="secondary" type="button">全新开始</button>
+          <button id="install-import" type="button">导入并开始使用</button>
+        </div>
+        <p class="privacy-note">所有导入都在这台 Mac 本地完成，不上传浏览器数据。</p>
+      </div>
+    </section>
     <div class="shell">
       <header class="hero">
         <div class="brand-mark" aria-hidden="true"><span></span></div>
@@ -62,6 +87,22 @@
           </div>
         </section>
 
+        <section class="card import-summary-card">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">BROWSER DATA</p>
+              <h2>浏览器数据</h2>
+            </div>
+            <button id="reimport-browser-data" class="secondary" type="button">重新导入</button>
+          </div>
+          <p id="import-source" class="import-source"></p>
+          <div class="import-stats">
+            <span><strong id="imported-cookies">0</strong> Cookie</span>
+            <span><strong id="imported-bookmarks">0</strong> 书签</span>
+            <span><strong id="imported-history">0</strong> 历史</span>
+          </div>
+        </section>
+
         <section class="environment-grid">
           <article class="metric">
             <span>App</span><strong id="app-version">—</strong>
@@ -75,6 +116,20 @@
           <article class="metric">
             <span>Control</span><strong>WebDriver + CDP</strong>
           </article>
+        </section>
+
+        <section class="card danger-card">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">MAINTENANCE</p>
+              <h2>测试与卸载</h2>
+            </div>
+          </div>
+          <p class="maintenance-copy">重置会保留 Browser Pilot 配对，只清空 Browser Lite 浏览数据并重新进入安装向导。彻底卸载会取消配对和开机启动，并把 App 与本地数据移到废纸篓。</p>
+          <div class="maintenance-actions">
+            <button id="reset-installation" class="secondary" type="button">重置安装流程</button>
+            <button id="uninstall-app" class="danger" type="button">彻底卸载</button>
+          </div>
         </section>
       </main>
     </div>

@@ -2,6 +2,10 @@ const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("browserLite", Object.freeze({
   getState: () => ipcRenderer.invoke("browser-lite:get-state"),
+  installImport: (payload) => ipcRenderer.invoke("browser-lite:install-import", payload),
+  installFresh: () => ipcRenderer.invoke("browser-lite:install-fresh"),
+  resetInstallation: () => ipcRenderer.invoke("browser-lite:reset-installation"),
+  uninstall: () => ipcRenderer.invoke("browser-lite:uninstall"),
   pair: (payload) => ipcRenderer.invoke("browser-lite:pair", payload),
   unpair: () => ipcRenderer.invoke("browser-lite:unpair"),
   openInstance: (instanceId) => ipcRenderer.invoke("browser-lite:open-instance", instanceId),

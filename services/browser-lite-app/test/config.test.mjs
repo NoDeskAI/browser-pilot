@@ -38,6 +38,36 @@ test("settings and browser share one native BrowserWindow", async () => {
   assert.match(html, /id="show-settings"/);
 });
 
+test("first launch requires an installation decision before browser startup", async () => {
+  const main = await readFile(join(ROOT, "src", "main.mjs"), "utf8");
+  const installation = await readFile(join(ROOT, "src", "installation.mjs"), "utf8");
+  const html = await readFile(join(ROOT, "src", "renderer", "index.html"), "utf8");
+  assert.match(main, /if \(installation\.isComplete\(\)\) \{[\s\S]*await manager\.ensure/);
+  assert.match(main, /async function startNodeAgent/);
+  assert.match(main, /browser-lite:install-import/);
+  assert.match(main, /browser-lite:install-fresh/);
+  assert.match(installation, /Chrome Safe Storage/);
+  assert.match(installation, /CHROME_STORAGE_ITEMS/);
+  assert.match(installation, /Imported Profile Seed/);
+  assert.match(html, /id="installer"/);
+  assert.match(html, /导入并开始使用/);
+  assert.match(html, /密码与扩展/);
+});
+
+test("settings expose recoverable reset and uninstall flows", async () => {
+  const main = await readFile(join(ROOT, "src", "main.mjs"), "utf8");
+  const installation = await readFile(join(ROOT, "src", "installation.mjs"), "utf8");
+  const html = await readFile(join(ROOT, "src", "renderer", "index.html"), "utf8");
+  assert.match(main, /browser-lite:reset-installation/);
+  assert.match(main, /browser-lite:uninstall/);
+  assert.match(main, /setLoginItemSettings\(\{ openAtLogin: false/);
+  assert.doesNotMatch(main, /installation\.purgeData/);
+  assert.match(installation, /\.Trash/);
+  assert.match(installation, /preservePairing/);
+  assert.match(html, /id="reset-installation"/);
+  assert.match(html, /id="uninstall-app"/);
+});
+
 test("remote node token is encrypted without interactive Keychain access", async () => {
   const source = await readFile(join(ROOT, "src", "node-agent.mjs"), "utf8");
   assert.match(source, /createCipheriv\("aes-256-gcm"/);

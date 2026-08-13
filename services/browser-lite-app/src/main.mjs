@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { BrowserLiteManager } from "./electron-runtime.mjs";
+import { BrowserLiteInstallation } from "./installation.mjs";
 import { BrowserLiteNodeAgent } from "./node-agent.mjs";
 
 const SOURCE_DIR = fileURLToPath(new URL(".", import.meta.url));
@@ -11,6 +12,8 @@ let dashboardWindow = null;
 let tray = null;
 let manager;
 let nodeAgent;
+let installation;
+let nodeAgentLoaded = false;
 
 // Ad-hoc signed test builds must stay unattended across upgrades. Chromium's
 // own cookie encryption otherwise asks macOS Keychain to trust each new ad-hoc
@@ -74,6 +77,13 @@ async function pairFromArguments(argv = [], additionalData = {}) {
   return true;
 }
 
+async function startNodeAgent() {
+  if (nodeAgentLoaded) return;
+  await nodeAgent.load();
+  nodeAgentLoaded = true;
+  if (!await pairFromArguments(process.argv)) await pairFromArguments([]);
+}
+
 async function getPublicState() {
   return {
     app: {
@@ -86,6 +96,7 @@ async function getPublicState() {
     node: nodeAgent?.publicState() ?? null,
     instances: manager ? await manager.list() : [],
     workspace: manager?.workspaceState() ?? { mode: "settings", activeInstanceId: null, browserAvailable: false },
+    installation: installation ? await installation.publicState() : { complete: false, required: true, profiles: [] },
   };
 }
 
@@ -141,6 +152,40 @@ function createTray() {
 
 function registerIpc() {
   ipcMain.handle("browser-lite:get-state", () => getPublicState());
+  ipcMain.handle("browser-lite:install-import", async (_event, payload) => {
+    const result = await installation.importProfile(payload);
+    await startNodeAgent();
+    await manager.ensure("browser_lite", { port: 4444 });
+    manager.showSettings();
+    emitState();
+    return { result, state: await getPublicState() };
+  });
+  ipcMain.handle("browser-lite:install-fresh", async () => {
+    await installation.freshStart();
+    await startNodeAgent();
+    await manager.ensure("browser_lite", { port: 4444 });
+    manager.showSettings();
+    emitState();
+    return getPublicState();
+  });
+  ipcMain.handle("browser-lite:reset-installation", async () => {
+    nodeAgent.disconnect();
+    await manager.resetForReinstall();
+    await installation.resetData({ preservePairing: true });
+    app.relaunch();
+    app.isQuitting = true;
+    app.quit();
+    return { restarting: true };
+  });
+  ipcMain.handle("browser-lite:uninstall", async () => {
+    await nodeAgent.unpair();
+    await manager.resetForReinstall();
+    app.setLoginItemSettings({ openAtLogin: false, openAsHidden: false });
+    const destinations = installation.scheduleRecoverableUninstall();
+    app.isQuitting = true;
+    app.quit();
+    return destinations;
+  });
   ipcMain.handle("browser-lite:pair", async (_event, payload) => {
     const state = await nodeAgent.pair(payload.serverUrl, payload.pairingCode, payload.displayName);
     emitState();
@@ -152,6 +197,7 @@ function registerIpc() {
     return nodeAgent.publicState();
   });
   ipcMain.handle("browser-lite:open-instance", async (_event, instanceId = "browser_lite") => {
+    if (!installation.isComplete()) throw new Error("请先完成 Browser Lite 安装");
     await manager.ensure(instanceId, { port: instanceId === "browser_lite" ? 4444 : 0 });
     manager.showInstance(instanceId);
     emitState();
@@ -180,7 +226,10 @@ function registerIpc() {
 }
 
 app.on("second-instance", (_event, argv, _workingDirectory, additionalData) => {
-  void pairFromArguments(argv, additionalData).catch((error) => console.error("Browser Lite pairing failed", error));
+  stagePairingRequest(pairingOptions(argv, additionalData));
+  if (installation?.isComplete()) {
+    void pairFromArguments(argv, additionalData).catch((error) => console.error("Browser Lite pairing failed", error));
+  }
   createDashboardWindow();
   manager?.showSettings();
 });
@@ -194,15 +243,19 @@ app.on("will-quit", () => {
 async function bootstrap() {
   if (app.isPackaged) app.setLoginItemSettings({ openAtLogin: true, openAsHidden: true });
   createDashboardWindow();
-  manager = new BrowserLiteManager({ hostWindow: dashboardWindow, onChanged: emitState });
+  installation = new BrowserLiteInstallation();
+  await installation.load();
+  dashboardWindow.setTitle(installation.isComplete() ? "Browser Lite — 设置" : "Browser Lite — 安装");
+  manager = new BrowserLiteManager({ hostWindow: dashboardWindow, installation, onChanged: emitState });
   nodeAgent = new BrowserLiteNodeAgent(manager, { onChanged: emitState });
   registerIpc();
   createTray();
-  await nodeAgent.load();
-  await pairFromArguments(process.argv);
-  await manager.ensure("browser_lite", { port: 4444 });
+  if (installation.isComplete()) {
+    await startNodeAgent();
+    await manager.ensure("browser_lite", { port: 4444 });
+  }
   manager.showSettings();
-  if (app.isPackaged && app.getLoginItemSettings().wasOpenedAtLogin) dashboardWindow.hide();
+  if (installation.isComplete() && app.isPackaged && app.getLoginItemSettings().wasOpenedAtLogin) dashboardWindow.hide();
   emitState();
 }
 

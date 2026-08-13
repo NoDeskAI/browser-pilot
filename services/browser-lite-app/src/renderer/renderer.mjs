@@ -1,4 +1,13 @@
 const elements = {
+  installer: document.querySelector("#installer"),
+  installerError: document.querySelector("#installer-error"),
+  chromeRunning: document.querySelector("#chrome-running"),
+  profileList: document.querySelector("#profile-list"),
+  importLoginState: document.querySelector("#import-login-state"),
+  importBookmarks: document.querySelector("#import-bookmarks"),
+  importHistory: document.querySelector("#import-history"),
+  installFresh: document.querySelector("#install-fresh"),
+  installImport: document.querySelector("#install-import"),
   connectionPill: document.querySelector("#connection-pill"),
   pairForm: document.querySelector("#pair-form"),
   serverUrl: document.querySelector("#server-url"),
@@ -16,6 +25,13 @@ const elements = {
   chromiumVersion: document.querySelector("#chromium-version"),
   activeInstance: document.querySelector("#active-instance"),
   showSettings: document.querySelector("#show-settings"),
+  resetInstallation: document.querySelector("#reset-installation"),
+  uninstallApp: document.querySelector("#uninstall-app"),
+  reimportBrowserData: document.querySelector("#reimport-browser-data"),
+  importSource: document.querySelector("#import-source"),
+  importedCookies: document.querySelector("#imported-cookies"),
+  importedBookmarks: document.querySelector("#imported-bookmarks"),
+  importedHistory: document.querySelector("#imported-history"),
 };
 
 let currentState = null;
@@ -28,6 +44,32 @@ function escapeHtml(value) {
 
 function render(state) {
   currentState = state;
+  const installation = state.installation || {};
+  const installMode = installation.required === true;
+  document.body.classList.toggle("install-mode", installMode);
+  elements.installer.classList.toggle("hidden", !installMode);
+  elements.chromeRunning.classList.toggle("hidden", !installation.chromeRunning);
+  elements.installerError.textContent = installation.lastError || "";
+  if (installMode) {
+    const profiles = installation.profiles || [];
+    elements.profileList.innerHTML = profiles.length ? profiles.map((profile, index) => `
+      <label class="profile-option">
+        <input type="radio" name="profile" value="${escapeHtml(profile.id)}" ${index === 0 ? "checked" : ""} />
+        <span class="profile-name"><strong>${escapeHtml(profile.name)}</strong><small>${escapeHtml(profile.email || `${profile.browser} · ${profile.directory}`)}</small></span>
+        <span class="profile-counts">${escapeHtml(profile.counts.cookies)} Cookie · ${escapeHtml(profile.counts.bookmarks)} 书签<br>${escapeHtml(profile.counts.history)} 历史 · ${escapeHtml(profile.counts.extensions)} 扩展</span>
+      </label>
+    `).join("") : '<div class="empty">没有发现可导入的 Chrome Profile，你可以选择“全新开始”。</div>';
+    elements.installImport.disabled = installation.busy || profiles.length === 0;
+    elements.installFresh.disabled = installation.busy;
+  }
+  const importResult = installation.result || {};
+  elements.importSource.textContent = installation.mode === "imported"
+    ? `已从 ${installation.source?.browser || "浏览器"} · ${installation.source?.profileDirectory || ""} 导入，本机独立保存。`
+    : "当前使用全新的 Browser Lite Profile。";
+  elements.importedCookies.textContent = importResult.cookies || 0;
+  elements.importedBookmarks.textContent = importResult.bookmarks || 0;
+  elements.importedHistory.textContent = importResult.history || 0;
+  document.body.classList.remove("booting");
   const workspace = state.workspace || {};
   document.body.classList.toggle("browser-mode", workspace.mode === "browser");
   elements.activeInstance.textContent = workspace.activeInstanceId || "";
@@ -121,6 +163,59 @@ elements.instances.addEventListener("click", async (event) => {
 elements.showSettings.addEventListener("click", async () => {
   await window.browserLite.showSettings();
   await refresh();
+});
+
+elements.installImport.addEventListener("click", async () => {
+  const profile = document.querySelector('input[name="profile"]:checked');
+  if (!profile) return;
+  elements.installerError.textContent = "";
+  elements.installImport.disabled = true;
+  elements.installFresh.disabled = true;
+  elements.installImport.textContent = "正在导入…";
+  try {
+    await window.browserLite.installImport({
+      profileId: profile.value,
+      loginState: elements.importLoginState.checked,
+      bookmarks: elements.importBookmarks.checked,
+      history: elements.importHistory.checked,
+    });
+    await refresh();
+  } catch (error) {
+    elements.installerError.textContent = error.message || String(error);
+  } finally {
+    elements.installImport.textContent = "导入并开始使用";
+    elements.installImport.disabled = false;
+    elements.installFresh.disabled = false;
+  }
+});
+
+elements.installFresh.addEventListener("click", async () => {
+  if (!window.confirm("确定不导入 Chrome，使用全新的 Browser Lite？")) return;
+  await window.browserLite.installFresh();
+  await refresh();
+});
+
+elements.resetInstallation.addEventListener("click", async () => {
+  if (!window.confirm("重置会清空 Browser Lite 中的浏览与导入数据，并重新打开安装向导。Browser Pilot 配对会保留。继续吗？")) return;
+  elements.resetInstallation.disabled = true;
+  await window.browserLite.resetInstallation();
+});
+
+elements.reimportBrowserData.addEventListener("click", async () => {
+  if (!window.confirm("重新导入会清空 Browser Lite 当前浏览数据，保留 Browser Pilot 配对，然后重启安装向导。继续吗？")) return;
+  elements.reimportBrowserData.disabled = true;
+  await window.browserLite.resetInstallation();
+});
+
+elements.uninstallApp.addEventListener("click", async () => {
+  if (!window.confirm("彻底卸载 Browser Lite？应用与本地数据会移动到废纸篓，Browser Pilot 节点会解除配对。")) return;
+  elements.uninstallApp.disabled = true;
+  try {
+    await window.browserLite.uninstall();
+  } catch (error) {
+    window.alert(error.message || String(error));
+    elements.uninstallApp.disabled = false;
+  }
 });
 
 window.browserLite.onState(render);

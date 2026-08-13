@@ -18,6 +18,13 @@ isolated browser view into that same window when a Browser Pilot instance is
 opened or controlled. The local compatibility endpoint is
 `http://127.0.0.1:4444`; it is loopback-only.
 
+On the first installed launch, Browser Lite requires an installation decision
+before it starts the browser runtime. The user can import a local Google Chrome
+profile or choose a fresh profile. The importer copies cookies, local web
+storage, bookmarks, and recent history without modifying the source Chrome
+profile. Chrome passwords and extensions are shown as unsupported because
+Electron does not provide Chrome's complete password manager or extension API.
+
 ## Build DMG
 
 ```bash
@@ -48,6 +55,13 @@ mistaken for a public release.
 
 Stopping an instance keeps its partition. Removing an instance clears its
 cookies, storage, and cache.
+
+Settings provides two maintenance flows for local testing:
+
+- Reset installation: preserves Browser Pilot pairing, clears imported/browser
+  data, restarts the app, and shows the installation assistant again.
+- Complete uninstall: disconnects the node, disables login startup, and moves
+  both the installed app and its local data to the macOS Trash for recovery.
 
 ## Browser Pilot pairing
 
