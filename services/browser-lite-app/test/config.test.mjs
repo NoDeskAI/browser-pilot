@@ -27,6 +27,17 @@ test("sandboxed preload uses the Electron-supported CommonJS format", async () =
   assert.match(preload, /contextBridge\.exposeInMainWorld/);
 });
 
+test("settings and browser share one native BrowserWindow", async () => {
+  const main = await readFile(join(ROOT, "src", "main.mjs"), "utf8");
+  const runtime = await readFile(join(ROOT, "src", "electron-runtime.mjs"), "utf8");
+  const html = await readFile(join(ROOT, "src", "renderer", "index.html"), "utf8");
+  assert.equal((main.match(/new BrowserWindow\(/g) || []).length, 1);
+  assert.doesNotMatch(runtime, /new BrowserWindow\(/);
+  assert.match(runtime, /new WebContentsView\(/);
+  assert.match(main, /browser-lite:show-settings/);
+  assert.match(html, /id="show-settings"/);
+});
+
 test("remote node token is encrypted without interactive Keychain access", async () => {
   const source = await readFile(join(ROOT, "src", "node-agent.mjs"), "utf8");
   assert.match(source, /createCipheriv\("aes-256-gcm"/);

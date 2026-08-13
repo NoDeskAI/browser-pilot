@@ -14,6 +14,8 @@ const elements = {
   instances: document.querySelector("#instances"),
   appVersion: document.querySelector("#app-version"),
   chromiumVersion: document.querySelector("#chromium-version"),
+  activeInstance: document.querySelector("#active-instance"),
+  showSettings: document.querySelector("#show-settings"),
 };
 
 let currentState = null;
@@ -26,6 +28,9 @@ function escapeHtml(value) {
 
 function render(state) {
   currentState = state;
+  const workspace = state.workspace || {};
+  document.body.classList.toggle("browser-mode", workspace.mode === "browser");
+  elements.activeInstance.textContent = workspace.activeInstanceId || "";
   const node = state.node || {};
   elements.appVersion.textContent = state.app?.version ? `v${state.app.version}` : "—";
   elements.chromiumVersion.textContent = state.app?.chromiumVersion || "—";
@@ -110,6 +115,11 @@ elements.instances.addEventListener("click", async (event) => {
   if (button.dataset.action === "open") await window.browserLite.openInstance(instanceId);
   else if (button.dataset.action === "pause") await window.browserLite.pauseInstance(instanceId);
   else if (button.dataset.action === "stop") await window.browserLite.stopInstance(instanceId);
+  await refresh();
+});
+
+elements.showSettings.addEventListener("click", async () => {
+  await window.browserLite.showSettings();
   await refresh();
 });
 

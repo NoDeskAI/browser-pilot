@@ -13,8 +13,10 @@ npm test
 npm start
 ```
 
-The app opens a dashboard and a persistent `browser_lite` browser instance. The
-local compatibility endpoint is `http://127.0.0.1:4444`; it is loopback-only.
+The app uses one native window. It opens on the settings page and swaps an
+isolated browser view into that same window when a Browser Pilot instance is
+opened or controlled. The local compatibility endpoint is
+`http://127.0.0.1:4444`; it is loopback-only.
 
 ## Build DMG
 

@@ -85,6 +85,7 @@ async function getPublicState() {
     },
     node: nodeAgent?.publicState() ?? null,
     instances: manager ? await manager.list() : [],
+    workspace: manager?.workspaceState() ?? { mode: "settings", activeInstanceId: null, browserAvailable: false },
   };
 }
 
@@ -95,7 +96,7 @@ function createDashboardWindow() {
     return dashboardWindow;
   }
   dashboardWindow = new BrowserWindow({
-    title: "Browser Lite",
+    title: "Browser Lite — 设置",
     width: 960,
     height: 680,
     minWidth: 760,
@@ -110,6 +111,7 @@ function createDashboardWindow() {
     },
   });
   void dashboardWindow.loadFile(join(SOURCE_DIR, "renderer", "index.html"));
+  dashboardWindow.on("resize", () => manager?.layout());
   dashboardWindow.on("close", (event) => {
     if (!app.isQuitting) {
       event.preventDefault();
@@ -128,13 +130,13 @@ function createTray() {
   tray.setToolTip("Browser Lite");
   const updateMenu = () => {
     tray.setContextMenu(Menu.buildFromTemplate([
-      { label: "打开 Browser Lite", click: () => createDashboardWindow() },
+      { label: "打开 Browser Lite", click: () => { createDashboardWindow(); manager?.showSettings(); } },
       { type: "separator" },
       { label: "退出", click: () => { app.isQuitting = true; app.quit(); } },
     ]));
   };
   updateMenu();
-  tray.on("click", () => createDashboardWindow());
+  tray.on("click", () => { createDashboardWindow(); manager?.showSettings(); });
 }
 
 function registerIpc() {
@@ -151,6 +153,12 @@ function registerIpc() {
   });
   ipcMain.handle("browser-lite:open-instance", async (_event, instanceId = "browser_lite") => {
     await manager.ensure(instanceId, { port: instanceId === "browser_lite" ? 4444 : 0 });
+    manager.showInstance(instanceId);
+    emitState();
+    return getPublicState();
+  });
+  ipcMain.handle("browser-lite:show-settings", async () => {
+    manager.showSettings();
     emitState();
     return getPublicState();
   });
@@ -174,6 +182,7 @@ function registerIpc() {
 app.on("second-instance", (_event, argv, _workingDirectory, additionalData) => {
   void pairFromArguments(argv, additionalData).catch((error) => console.error("Browser Lite pairing failed", error));
   createDashboardWindow();
+  manager?.showSettings();
 });
 app.on("window-all-closed", () => {});
 app.on("before-quit", () => { app.isQuitting = true; });
@@ -184,14 +193,16 @@ app.on("will-quit", () => {
 
 async function bootstrap() {
   if (app.isPackaged) app.setLoginItemSettings({ openAtLogin: true, openAsHidden: true });
-  manager = new BrowserLiteManager({ onChanged: emitState });
+  createDashboardWindow();
+  manager = new BrowserLiteManager({ hostWindow: dashboardWindow, onChanged: emitState });
   nodeAgent = new BrowserLiteNodeAgent(manager, { onChanged: emitState });
   registerIpc();
   createTray();
   await nodeAgent.load();
   await pairFromArguments(process.argv);
   await manager.ensure("browser_lite", { port: 4444 });
-  if (!app.isPackaged || !app.getLoginItemSettings().wasOpenedAtLogin) createDashboardWindow();
+  manager.showSettings();
+  if (app.isPackaged && app.getLoginItemSettings().wasOpenedAtLogin) dashboardWindow.hide();
   emitState();
 }
 

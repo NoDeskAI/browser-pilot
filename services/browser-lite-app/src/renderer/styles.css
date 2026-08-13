@@ -58,4 +58,11 @@ button.secondary { color: #dbe7f8; border: 1px solid var(--border); background: 
 .metric { border: 1px solid var(--border); border-radius: 16px; padding: 16px; background: rgba(18, 24, 34, .7); }
 .metric span { display: block; color: var(--muted); font-size: 11px; margin-bottom: 7px; }
 .metric strong { font-size: 13px; }
+.browser-toolbar { display: none; position: fixed; inset: 0 0 auto 0; height: 56px; padding: 0 14px 0 78px; align-items: center; gap: 14px; background: rgba(9, 13, 19, .97); border-bottom: 1px solid var(--border); -webkit-app-region: drag; }
+.browser-mode .shell { display: none; }
+.browser-mode .browser-toolbar { display: flex; }
+.brand-compact { display: flex; align-items: center; gap: 9px; font-size: 13px; }
+.brand-compact span { width: 18px; height: 18px; border-radius: 6px; background: linear-gradient(135deg, var(--cyan), var(--violet)); box-shadow: 0 0 14px rgba(84, 214, 255, .2); }
+.browser-instance { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.toolbar-settings { margin-left: auto; padding: 7px 12px; color: #dbe7f8; border: 1px solid var(--border); background: rgba(255, 255, 255, .05); -webkit-app-region: no-drag; }
 @media (max-width: 800px) { .pair-form { grid-template-columns: 1fr; } .environment-grid { grid-template-columns: repeat(2, 1fr); } }

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, session } from "electron";
+import { app, session, WebContentsView } from "electron";
 import { createServer } from "node:http";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
@@ -21,8 +21,10 @@ function safeInstanceId(value) {
   return normalized.slice(0, 64);
 }
 
-function targetIdFor(window) {
-  return `electron-${window.webContents.id}`;
+export const APP_BAR_HEIGHT = 56;
+
+function targetIdFor(view) {
+  return `electron-${view.webContents.id}`;
 }
 
 export class ElectronBrowserLiteState {
@@ -37,8 +39,10 @@ export class ElectronBrowserLiteState {
     this.timeouts = { script: 30_000, pageLoad: 60_000, implicit: 0 };
     this.startPromise = null;
     this.onChanged = onChanged;
+    this.onActivate = config.onActivate;
     this.paused = false;
     this.stopped = false;
+    this.visible = false;
     this.partition = `persist:browser-lite-${safeInstanceId(config.instanceId)}`;
   }
 
@@ -65,14 +69,7 @@ export class ElectronBrowserLiteState {
   }
 
   async createWindow(url = "about:blank") {
-    const window = new BrowserWindow({
-      title: `Browser Lite — ${this.config.instanceId}`,
-      width: this.config.width,
-      height: this.config.height,
-      minWidth: 480,
-      minHeight: 320,
-      show: !this.paused,
-      backgroundColor: "#f7f8fb",
+    const view = new WebContentsView({
       webPreferences: {
         partition: this.partition,
         nodeIntegration: false,
@@ -82,42 +79,71 @@ export class ElectronBrowserLiteState {
         spellcheck: true,
       },
     });
-    const targetId = targetIdFor(window);
-    window.webContents.setUserAgent(
+    const targetId = targetIdFor(view);
+    this.config.hostWindow.contentView.addChildView(view);
+    view.setBounds(this.config.browserBounds());
+    view.setVisible(false);
+    view.webContents.setUserAgent(
       `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) `
       + `AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${process.versions.chrome} Safari/537.36`,
     );
-    this.windows.set(targetId, window);
+    this.windows.set(targetId, view);
     this.activeTargetId = targetId;
-    window.on("closed", () => {
+    view.webContents.on("destroyed", () => {
       this.windows.delete(targetId);
       if (this.activeTargetId === targetId) this.activeTargetId = [...this.windows.keys()].at(-1) ?? null;
       this.notifyChanged();
     });
-    window.webContents.on("did-finish-load", () => this.notifyChanged());
-    window.webContents.on("page-title-updated", () => this.notifyChanged());
-    window.webContents.setWindowOpenHandler(({ url: nextUrl }) => {
+    view.webContents.on("did-finish-load", () => this.notifyChanged());
+    view.webContents.on("page-title-updated", () => this.notifyChanged());
+    view.webContents.setWindowOpenHandler(({ url: nextUrl }) => {
       void this.createWindow(nextUrl);
       return { action: "deny" };
     });
-    if (!window.webContents.debugger.isAttached()) window.webContents.debugger.attach("1.3");
-    await window.loadURL(url);
+    if (!view.webContents.debugger.isAttached()) view.webContents.debugger.attach("1.3");
+    await view.webContents.loadURL(url);
+    if (this.visible) this.setVisible(true, targetId);
     this.notifyChanged();
-    return { targetId, window };
+    return { targetId, window: view };
   }
 
   liveWindows() {
-    for (const [targetId, window] of this.windows) {
-      if (window.isDestroyed() || window.webContents.isDestroyed()) this.windows.delete(targetId);
+    for (const [targetId, view] of this.windows) {
+      if (view.webContents.isDestroyed()) this.windows.delete(targetId);
     }
     return [...this.windows.entries()];
   }
 
   windowForTarget(targetId = undefined) {
     const selected = targetId ?? this.activeTargetId;
-    const window = selected ? this.windows.get(selected) : null;
-    if (!window || window.isDestroyed()) return null;
-    return window;
+    const view = selected ? this.windows.get(selected) : null;
+    if (!view || view.webContents.isDestroyed()) return null;
+    return view;
+  }
+
+  layout() {
+    const bounds = this.config.browserBounds();
+    for (const [, view] of this.liveWindows()) view.setBounds(bounds);
+  }
+
+  setVisible(visible, targetId = this.activeTargetId) {
+    this.visible = Boolean(visible && !this.paused && !this.stopped);
+    if (targetId && this.windows.has(targetId)) this.activeTargetId = targetId;
+    for (const [id, view] of this.liveWindows()) {
+      view.setVisible(this.visible && id === this.activeTargetId);
+    }
+    if (this.visible) this.windowForTarget()?.webContents.focus();
+  }
+
+  destroyView(targetId) {
+    const view = this.windows.get(targetId);
+    if (!view) return false;
+    this.config.hostWindow.contentView.removeChildView(view);
+    this.windows.delete(targetId);
+    if (!view.webContents.isDestroyed()) view.webContents.close();
+    if (this.activeTargetId === targetId) this.activeTargetId = [...this.windows.keys()].at(-1) ?? null;
+    if (this.visible && this.activeTargetId) this.setVisible(true, this.activeTargetId);
+    return true;
   }
 
   async ensureConnected() {
@@ -167,9 +193,7 @@ export class ElectronBrowserLiteState {
       return {};
     }
     if (method === "Target.closeTarget") {
-      const window = this.windowForTarget(params.targetId);
-      if (window) window.close();
-      return { success: Boolean(window) };
+      return { success: this.destroyView(params.targetId) };
     }
 
     const selectedTarget = targetId ?? await this.ensurePage();
@@ -177,14 +201,21 @@ export class ElectronBrowserLiteState {
     if (!window) throw new Error(`Unknown Browser Lite target: ${selectedTarget}`);
 
     if (method === "Browser.getWindowForTarget") {
-      const [x, y] = window.getPosition();
-      const [width, height] = window.getSize();
-      return { windowId: window.id, bounds: { left: x, top: y, width, height, windowState: "normal" } };
+      const [x, y] = this.config.hostWindow.getPosition();
+      const { width, height } = this.config.browserBounds();
+      return {
+        windowId: this.config.hostWindow.id,
+        bounds: { left: x, top: y + APP_BAR_HEIGHT, width, height, windowState: "normal" },
+      };
     }
     if (method === "Browser.setWindowBounds") {
       const bounds = params.bounds ?? {};
-      if (Number.isFinite(bounds.left) && Number.isFinite(bounds.top)) window.setPosition(bounds.left, bounds.top);
-      if (Number.isFinite(bounds.width) && Number.isFinite(bounds.height)) window.setSize(bounds.width, bounds.height);
+      if (Number.isFinite(bounds.left) && Number.isFinite(bounds.top)) this.config.hostWindow.setPosition(bounds.left, bounds.top);
+      if (Number.isFinite(bounds.width) && Number.isFinite(bounds.height)) {
+        this.config.width = bounds.width;
+        this.config.height = bounds.height;
+        this.config.hostWindow.setContentSize(bounds.width, bounds.height + APP_BAR_HEIGHT);
+      }
       return {};
     }
     if (method === "Browser.setDownloadBehavior") {
@@ -203,10 +234,8 @@ export class ElectronBrowserLiteState {
     const window = this.windowForTarget(selectedTarget);
     if (!window) throw new Error(`Unknown Browser Lite target: ${selectedTarget}`);
     this.activeTargetId = selectedTarget;
-    if (!this.paused) {
-      window.show();
-      window.focus();
-    }
+    this.onActivate?.(this.config.instanceId, selectedTarget);
+    window.webContents.focus();
     return selectedTarget;
   }
 
@@ -278,29 +307,29 @@ export class ElectronBrowserLiteState {
 
   async closeActiveTarget() {
     const targetId = await this.ensurePage();
-    const window = this.windowForTarget(targetId);
-    if (window) window.close();
+    this.destroyView(targetId);
     await new Promise((resolveDelay) => setTimeout(resolveDelay, 100));
-    this.activeTargetId = null;
     if (this.liveWindows().length === 0) await this.createWindow();
     return (await this.targets()).map((target) => target.targetId);
   }
 
   async windowRect() {
-    const window = this.windowForTarget(await this.ensurePage());
-    const [x, y] = window.getPosition();
-    const [width, height] = window.getSize();
+    await this.ensurePage();
+    const [x, y] = this.config.hostWindow.getPosition();
+    const { width, height } = this.config.browserBounds();
     return { x, y, width, height };
   }
 
   async setWindowRect(body) {
-    const window = this.windowForTarget(await this.ensurePage());
+    await this.ensurePage();
     const current = await this.windowRect();
     const x = Number.isFinite(Number(body.x)) ? Number(body.x) : current.x;
     const y = Number.isFinite(Number(body.y)) ? Number(body.y) : current.y;
     const width = Math.max(320, Number(body.width) || current.width);
     const height = Math.max(240, Number(body.height) || current.height);
-    window.setBounds({ x, y, width, height });
+    this.config.width = width;
+    this.config.height = height;
+    this.config.hostWindow.setBounds({ x, y, width, height: height + APP_BAR_HEIGHT });
     return this.windowRect();
   }
 
@@ -409,7 +438,7 @@ export class ElectronBrowserLiteState {
 
   async pause() {
     this.paused = true;
-    for (const [, window] of this.liveWindows()) window.hide();
+    this.setVisible(false);
     this.notifyChanged();
   }
 
@@ -417,13 +446,12 @@ export class ElectronBrowserLiteState {
     this.paused = false;
     this.stopped = false;
     await this.start();
-    for (const [, window] of this.liveWindows()) window.show();
     this.notifyChanged();
   }
 
   async stop() {
-    for (const [, window] of this.liveWindows()) window.close();
-    this.windows.clear();
+    this.visible = false;
+    for (const [targetId] of this.liveWindows()) this.destroyView(targetId);
     this.activeTargetId = null;
     this.startPromise = null;
     this.stopped = true;
@@ -464,9 +492,61 @@ export class ElectronBrowserLiteState {
 }
 
 export class BrowserLiteManager {
-  constructor({ onChanged } = {}) {
+  constructor({ hostWindow, onChanged } = {}) {
+    if (!hostWindow) throw new Error("Browser Lite requires a host window");
     this.instances = new Map();
+    this.hostWindow = hostWindow;
     this.onChanged = onChanged;
+    this.viewMode = "settings";
+    this.activeInstanceId = null;
+    this.settingsContentSize = hostWindow.getContentSize();
+    hostWindow.on("resize", () => {
+      if (this.viewMode === "settings") this.settingsContentSize = hostWindow.getContentSize();
+      this.layout();
+    });
+  }
+
+  browserBounds() {
+    const [width, contentHeight] = this.hostWindow.getContentSize();
+    return { x: 0, y: APP_BAR_HEIGHT, width, height: Math.max(240, contentHeight - APP_BAR_HEIGHT) };
+  }
+
+  layout() {
+    for (const entry of this.instances.values()) entry.state.layout();
+  }
+
+  workspaceState() {
+    return {
+      mode: this.viewMode,
+      activeInstanceId: this.activeInstanceId,
+      browserAvailable: Boolean(this.activeInstanceId && this.instances.has(this.activeInstanceId)),
+    };
+  }
+
+  showSettings() {
+    for (const entry of this.instances.values()) entry.state.setVisible(false);
+    this.viewMode = "settings";
+    this.hostWindow.setTitle("Browser Lite — 设置");
+    this.hostWindow.setContentSize(this.settingsContentSize[0], this.settingsContentSize[1]);
+    this.hostWindow.show();
+    this.hostWindow.focus();
+    this.onChanged?.();
+  }
+
+  showInstance(instanceId) {
+    const id = safeInstanceId(instanceId ?? this.activeInstanceId);
+    const entry = this.instances.get(id);
+    if (!entry) return false;
+    for (const [otherId, other] of this.instances) other.state.setVisible(otherId === id);
+    this.activeInstanceId = id;
+    this.viewMode = "browser";
+    this.hostWindow.setTitle(`Browser Lite — ${id}`);
+    this.hostWindow.setContentSize(entry.state.config.width, entry.state.config.height + APP_BAR_HEIGHT);
+    entry.state.layout();
+    this.hostWindow.show();
+    this.hostWindow.focus();
+    this.onChanged?.();
+    return true;
   }
 
   async ensure(instanceId, options = {}) {
@@ -481,6 +561,9 @@ export class BrowserLiteManager {
         instanceId: id,
         profileDir,
         dataRoot: app.getPath("userData"),
+        hostWindow: this.hostWindow,
+        browserBounds: () => this.browserBounds(),
+        onActivate: (activeId) => this.showInstance(activeId),
         width: Math.max(320, Number(options.width) || 1280),
         height: Math.max(240, Number(options.height) || 800),
       };
@@ -522,13 +605,17 @@ export class BrowserLiteManager {
   }
 
   async pause(instanceId) {
-    const entry = this.instances.get(safeInstanceId(instanceId));
+    const id = safeInstanceId(instanceId);
+    const entry = this.instances.get(id);
     if (entry) await entry.state.pause();
+    if (this.viewMode === "browser" && this.activeInstanceId === id) this.showSettings();
   }
 
   async stop(instanceId) {
-    const entry = this.instances.get(safeInstanceId(instanceId));
+    const id = safeInstanceId(instanceId);
+    const entry = this.instances.get(id);
     if (entry) await entry.state.stop();
+    if (this.viewMode === "browser" && this.activeInstanceId === id) this.showSettings();
   }
 
   async remove(instanceId) {
@@ -538,6 +625,10 @@ export class BrowserLiteManager {
     await entry.state.remove();
     await new Promise((resolveClose) => entry.server.close(resolveClose));
     this.instances.delete(id);
+    if (this.activeInstanceId === id) {
+      this.activeInstanceId = null;
+      this.showSettings();
+    }
     this.onChanged?.();
   }
 
@@ -558,6 +649,7 @@ export class BrowserLiteManager {
 
   async shutdown() {
     for (const entry of this.instances.values()) {
+      await entry.state.stop();
       await new Promise((resolveClose) => entry.server.close(resolveClose));
     }
   }

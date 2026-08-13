@@ -12,9 +12,9 @@
       <header class="hero">
         <div class="brand-mark" aria-hidden="true"><span></span></div>
         <div>
-          <p class="eyebrow">BROWSER PILOT NODE</p>
+          <p class="eyebrow">SETTINGS</p>
           <h1>Browser Lite</h1>
-          <p class="subtitle">Mac 上的真实 Chromium 运行节点</p>
+          <p class="subtitle">Mac 远程浏览器节点设置</p>
         </div>
         <div id="connection-pill" class="pill offline">未配对</div>
       </header>
@@ -55,7 +55,7 @@
               <p class="eyebrow">RUNTIME INSTANCES</p>
               <h2>运行实例</h2>
             </div>
-            <button id="open-default" class="secondary" type="button">打开本地实例</button>
+            <button id="open-default" class="secondary" type="button">打开浏览器</button>
           </div>
           <div id="instances" class="instance-list">
             <div class="empty">正在读取实例…</div>
@@ -78,6 +78,11 @@
         </section>
       </main>
     </div>
+    <nav class="browser-toolbar" aria-label="Browser Lite controls">
+      <div class="brand-compact"><span aria-hidden="true"></span><strong>Browser Lite</strong></div>
+      <span id="active-instance" class="browser-instance mono"></span>
+      <button id="show-settings" class="toolbar-settings" type="button">设置</button>
+    </nav>
     <script type="module" src="renderer.mjs"></script>
   </body>
 </html>
