@@ -8,7 +8,7 @@ const elements = Object.fromEntries([
   "nav-back", "nav-forward", "nav-reload", "address-form", "address-input", "agent-state",
   "return-control", "take-control", "terminate-task", "task-control-bar", "task-control-name",
   "settings-search-input", "settings-profile-page", "settings-about-page", "profile-display-name",
-  "browser-bookmarks", "settings-bookmarks", "settings-space-count", "new-tab-group", "pinned-extensions",
+  "browser-bookmarks", "settings-bookmarks", "settings-space-count", "pinned-extensions",
   "extensions-menu-button", "chrome-popover",
 ].map((id) => [id.replace(/-([a-z])/g, (_, letter) => letter.toUpperCase()), document.querySelector(`#${id}`)]));
 
@@ -63,11 +63,23 @@ function safeDataImage(value) {
   return /^data:image\/(?:png|jpeg|gif|webp);base64,[A-Za-z0-9+/=]+$/.test(image) ? image : "";
 }
 
+function folderIcon() {
+  return `<svg class="bookmark-folder-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M1.5 4.25c0-.69.56-1.25 1.25-1.25h3.1l1.28 1.5h6.12c.69 0 1.25.56 1.25 1.25v6.5c0 .69-.56 1.25-1.25 1.25H2.75c-.69 0-1.25-.56-1.25-1.25v-8Z" /></svg>`;
+}
+
+function savedGroupsIcon() {
+  return `<svg class="saved-groups-icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="1.75" y="1.75" width="4.5" height="4.5" rx="1"/><rect x="9.75" y="1.75" width="4.5" height="4.5" rx="1"/><rect x="1.75" y="9.75" width="4.5" height="4.5" rx="1"/><rect x="9.75" y="9.75" width="4.5" height="4.5" rx="1"/></svg>`;
+}
+
+function genericBookmarkIcon() {
+  return `<svg class="bookmark-generic-icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.25"/><path d="M1.9 8h12.2M8 1.75c1.65 1.7 2.5 3.78 2.5 6.25S9.65 12.55 8 14.25C6.35 12.55 5.5 10.47 5.5 8S6.35 3.45 8 1.75Z"/></svg>`;
+}
+
 function bookmarkIcon(bookmark) {
   const image = safeDataImage(bookmark?.iconDataUrl);
   if (image) return `<img class="bookmark-favicon" src="${image}" alt="" />`;
-  if (bookmark?.type === "folder") return '<span class="bookmark-folder-icon" aria-hidden="true"></span>';
-  return `<span class="bookmark-fallback" aria-hidden="true">${escapeHtml(String(bookmark?.name || "网").slice(0, 1).toLocaleUpperCase())}</span>`;
+  if (bookmark?.type === "folder") return folderIcon();
+  return genericBookmarkIcon();
 }
 
 function bookmarkButton(bookmark) {
@@ -83,12 +95,13 @@ function renderBookmarks(installation, taskSpaceState) {
   const groups = taskSpaceState?.activeTaskSpace?.tabGroups || [];
   const visible = bookmarks.slice(0, 14);
   const markup = [
-    ...groups.map((group) => `<button class="saved-tab-group group-color-${escapeHtml(group.color)}" data-action="saved-tab-group" data-group-id="${escapeHtml(group.id)}" type="button" title="标签页分组：${escapeHtml(group.name)}"><span class="saved-group-dot"></span><span>${escapeHtml(group.name)}</span></button>`),
-    groups.length ? '<span class="bookmark-separator" aria-hidden="true"></span>' : "",
+    ...groups.map((group) => `<button class="saved-tab-group group-color-${escapeHtml(group.color)}" data-action="saved-tab-group" data-group-id="${escapeHtml(group.id)}" type="button" title="标签页分组：${escapeHtml(group.name)}"><span>${escapeHtml(group.name)}</span></button>`),
+    `<button class="saved-tab-groups-menu" data-action="new-tab-group" type="button" aria-label="标签页分组" title="标签页分组">${savedGroupsIcon()}</button>`,
+    '<span class="bookmark-separator" aria-hidden="true"></span>',
     ...visible.map(bookmarkButton),
     bookmarks.length > visible.length ? `<button class="bookmark-overflow" data-action="bookmark-overflow" type="button" aria-label="显示 ${bookmarks.length - visible.length} 个隐藏书签">»</button>` : "",
     '<span class="bookmark-separator bookmark-tail-separator" aria-hidden="true"></span>',
-    '<button class="bookmark-all" data-action="all-bookmarks" type="button"><span class="bookmark-folder-icon" aria-hidden="true"></span><span>所有书签</span></button>',
+    `<button class="bookmark-all" data-action="all-bookmarks" type="button">${folderIcon()}<span>所有书签</span></button>`,
   ].join("");
   elements.browserBookmarks.innerHTML = markup;
   elements.settingsBookmarks.innerHTML = markup;
@@ -171,9 +184,8 @@ function renderBrowser(taskSpaceState, installation) {
   const groupedMarkup = groups.map((group) => {
     const groupTabs = tabs.filter((tab) => tab.groupId === group.id);
     for (const tab of groupTabs) groupedIds.add(tab.targetId);
-    return `<div class="tab-group group-color-${escapeHtml(group.color)}" data-tab-group-id="${escapeHtml(group.id)}">
-      <button class="tab-group-pill" data-action="toggle-tab-group" data-group-id="${escapeHtml(group.id)}" type="button" aria-expanded="${!group.collapsed}" title="${group.collapsed ? "展开" : "折叠"} ${escapeHtml(group.name)}"><span class="tab-group-dot"></span><span>${escapeHtml(group.name)}</span></button>
-      <button class="tab-group-edit" data-action="edit-tab-group" data-group-id="${escapeHtml(group.id)}" type="button" aria-label="编辑 ${escapeHtml(group.name)}">⌄</button>
+    return `<div class="tab-group group-color-${escapeHtml(group.color)} ${group.collapsed ? "collapsed" : "expanded"}" data-tab-group-id="${escapeHtml(group.id)}">
+      <button class="tab-group-pill" data-action="toggle-tab-group" data-group-id="${escapeHtml(group.id)}" type="button" aria-expanded="${!group.collapsed}" title="${group.collapsed ? "展开" : "折叠"} ${escapeHtml(group.name)}"><span>${escapeHtml(group.name)}</span></button>
       ${group.collapsed ? "" : groupTabs.map(tabMarkup).join("")}
     </div>`;
   }).join("");
@@ -314,7 +326,15 @@ function extensionIcon(extension) {
   const image = safeDataImage(extension.iconDataUrl);
   return image
     ? `<img class="extension-menu-icon" src="${image}" alt="" />`
-    : `<span class="extension-menu-fallback" aria-hidden="true">${escapeHtml(extension.name.slice(0, 1).toLocaleUpperCase())}</span>`;
+    : `<span class="extension-menu-fallback" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M20.5 11H19V7c0-1.1-.9-2-2-2h-4V3.5A2.5 2.5 0 0 0 10.5 1 2.5 2.5 0 0 0 8 3.5V5H4a2 2 0 0 0-2 2v3.8h1.5a2.7 2.7 0 1 1 0 5.4H2V20c0 1.1.9 2 2 2h3.8v-1.5a2.7 2.7 0 1 1 5.4 0V22H17c1.1 0 2-.9 2-2v-4h1.5a2.5 2.5 0 0 0 0-5Z"/></svg></span>`;
+}
+
+function extensionPinIcon(pinned) {
+  return `<span class="extension-pin-state ${pinned ? "pinned" : ""}" title="${pinned ? "已固定" : "未固定"}" aria-label="${pinned ? "已固定" : "未固定"}"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M13.75 8.25V4.5l1-1v-1h-9.5v1l1 1v3.75c0 1.1-.9 2-2 2v1.75h4.95v5.5h1.6V12h4.95v-1.75c-1.1 0-2-.9-2-2Z"/></svg></span>`;
+}
+
+function extensionMoreIcon() {
+  return `<svg class="extension-more-icon" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="4.5" r="1.25"/><circle cx="10" cy="10" r="1.25"/><circle cx="10" cy="15.5" r="1.25"/></svg>`;
 }
 
 function extensionStatus(extension) {
@@ -326,7 +346,7 @@ function extensionStatus(extension) {
 
 function openExtensionsMenu() {
   const extensions = currentExtensions();
-  const content = extensions.length ? extensions.map((extension) => `<button class="popover-row extension-row" data-action="extension-details" data-extension-id="${escapeHtml(extension.id)}" type="button">${extensionIcon(extension)}<span><strong>${escapeHtml(extension.name)}</strong><small>${escapeHtml(extensionStatus(extension))} · v${escapeHtml(extension.version)}</small></span>${extension.pinned ? '<span class="pin-mark" title="已固定">●</span>' : ""}</button>`).join("") : '<p class="popover-empty">没有导入扩展程序</p>';
+  const content = extensions.length ? extensions.map((extension) => `<div class="extension-row" data-extension-id="${escapeHtml(extension.id)}"><button class="extension-main" data-action="extension-details" data-extension-id="${escapeHtml(extension.id)}" type="button">${extensionIcon(extension)}<span><strong>${escapeHtml(extension.name)}</strong><small>${escapeHtml(extensionStatus(extension))} · v${escapeHtml(extension.version)}</small></span></button>${extensionPinIcon(extension.pinned)}<button class="extension-row-menu" data-action="extension-details" data-extension-id="${escapeHtml(extension.id)}" type="button" aria-label="${escapeHtml(extension.name)}的更多操作">${extensionMoreIcon()}</button></div>`).join("") : '<p class="popover-empty">没有导入扩展程序</p>';
   openPopover("扩展程序", content, "extensions");
 }
 
@@ -341,7 +361,7 @@ function openExtensionDetails(extensionId) {
 const GROUP_COLORS = ["grey", "blue", "red", "yellow", "green", "pink", "purple", "cyan", "orange"];
 
 function groupForm(group = null, targetId = "") {
-  const color = group?.color || "blue";
+  const color = group?.color || "grey";
   return `<form id="tab-group-form" data-group-id="${escapeHtml(group?.id || "")}" data-target-id="${escapeHtml(targetId)}">
     <label class="popover-label">名称<input name="name" maxlength="40" value="${escapeHtml(group?.name || "新建标签组")}" autocomplete="off" /></label>
     <fieldset class="group-colors"><legend>颜色</legend>${GROUP_COLORS.map((value) => `<label class="group-color-${value}" title="${value}"><input type="radio" name="color" value="${value}" ${value === color ? "checked" : ""} /><span></span></label>`).join("")}</fieldset>
@@ -403,13 +423,17 @@ elements.browserTabs.addEventListener("click", async (event) => {
 });
 
 elements.browserTabs.addEventListener("contextmenu", (event) => {
+  const group = event.target.closest("[data-tab-group-id]");
   const tab = event.target.closest("[data-target-id]");
+  if (group && !tab) {
+    event.preventDefault();
+    openGroupEditor(group.dataset.tabGroupId);
+    return;
+  }
   if (!tab) return;
   event.preventDefault();
   openTabGroupAssignment(tab.dataset.targetId);
 });
-
-elements.newTabGroup.addEventListener("click", openNewGroupMenu);
 
 elements.browserBookmarks.addEventListener("click", async (event) => {
   const button = event.target.closest("button[data-action]");
@@ -425,6 +449,8 @@ elements.browserBookmarks.addEventListener("click", async (event) => {
     openPopover("隐藏的书签", bookmarkMenuItems(bookmarks.slice(14)), "bookmarks");
   } else if (button.dataset.action === "all-bookmarks") {
     openPopover("所有书签", bookmarkMenuItems(allBookmarkNodes()), "bookmarks");
+  } else if (button.dataset.action === "new-tab-group") {
+    openNewGroupMenu();
   } else if (button.dataset.action === "saved-tab-group" && space) {
     await run(button, null, () => window.browserLite.taskSpaceBrowserAction(space.id, "toggleTabGroup", button.dataset.groupId));
   }
@@ -471,7 +497,7 @@ elements.chromePopover.addEventListener("submit", async (event) => {
   if (!space || !targetId) return;
   const form = new FormData(event.target);
   const groupId = event.target.dataset.groupId;
-  const payload = { name: String(form.get("name") || "新建标签组"), color: String(form.get("color") || "blue") };
+  const payload = { name: String(form.get("name") || "新建标签组"), color: String(form.get("color") || "grey") };
   closePopover();
   if (groupId) {
     await run(null, null, () => window.browserLite.taskSpaceBrowserAction(space.id, "updateTabGroup", { ...payload, groupId }));
@@ -597,7 +623,7 @@ window.addEventListener("keydown", async (event) => {
 
 document.addEventListener("click", (event) => {
   if (elements.chromePopover.classList.contains("hidden")) return;
-  if (event.target.closest("#chrome-popover, #browser-bookmarks, #extensions-menu-button, #pinned-extensions, #new-tab-group, [data-action='edit-tab-group']")) return;
+  if (event.target.closest("#chrome-popover, #browser-bookmarks, #extensions-menu-button, #pinned-extensions")) return;
   closePopover();
 });
 

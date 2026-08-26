@@ -241,14 +241,14 @@ export class ElectronBrowserLiteState {
     }));
   }
 
-  createTabGroup({ targetId = this.activeTargetId, name = "新建标签组", color = "blue" } = {}) {
+  createTabGroup({ targetId = this.activeTargetId, name = "新建标签组", color = "grey" } = {}) {
     if (!targetId || !this.windows.has(targetId)) throw new Error("请选择要分组的标签页");
     this.removeTargetFromGroup(targetId);
     const id = `group-${this.nextTabGroupId++}`;
     this.tabGroups.set(id, {
       id,
       name: String(name || "新建标签组").trim().slice(0, 40) || "新建标签组",
-      color: TAB_GROUP_COLORS.has(color) ? color : "blue",
+      color: TAB_GROUP_COLORS.has(color) ? color : "grey",
       collapsed: false,
     });
     this.tabGroupByTarget.set(targetId, id);
@@ -315,7 +315,7 @@ export class ElectronBrowserLiteState {
       this.tabGroups.set(id, {
         id,
         name: String(saved?.name || "新建标签组").slice(0, 40),
-        color: TAB_GROUP_COLORS.has(saved?.color) ? saved.color : "blue",
+        color: TAB_GROUP_COLORS.has(saved?.color) ? saved.color : "grey",
         collapsed: Boolean(saved?.collapsed),
       });
       const numericId = Number(id.replace(/^group-/, ""));

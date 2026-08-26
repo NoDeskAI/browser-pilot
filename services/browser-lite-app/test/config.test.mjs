@@ -11,7 +11,7 @@ test("app manifest is arm64 DMG buildable with embedded Electron Chromium", asyn
   assert.equal(manifest.main, "src/main.mjs");
   assert.match(manifest.devDependencies.electron, /^43\./);
   assert.equal(manifest.scripts["build:dmg"], "node scripts/build-dmg.mjs");
-  assert.equal(manifest.version, "0.5.2");
+  assert.equal(manifest.version, "0.5.3");
 });
 
 test("renderer has a restrictive content security policy", async () => {
@@ -149,7 +149,11 @@ test("embedded Browser Lite keeps bookmarks and browser chrome in its shell", as
   assert.match(html, /id="browser-bookmarks"/);
   assert.match(renderer, /elements\.browserBookmarks\.innerHTML = markup/);
   assert.match(html, /id="extensions-menu-button"/);
-  assert.match(html, /id="new-tab-group"/);
+  assert.doesNotMatch(html, /id="new-tab-group"/);
+  assert.match(renderer, /class="saved-tab-groups-menu" data-action="new-tab-group"/);
+  assert.match(renderer, /class="bookmark-folder-icon" viewBox="0 0 16 16"/);
+  assert.match(renderer, /class="extension-row-menu"/);
+  assert.match(renderer, /class="extension-pin-state/);
   assert.match(renderer, /openBookmarkFolder/);
   assert.match(renderer, /openExtensionsMenu/);
   assert.match(renderer, /createTabGroup/);

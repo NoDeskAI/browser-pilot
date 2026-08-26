@@ -96,7 +96,7 @@ function persistedBrowserSession(value) {
   const groups = (Array.isArray(value.groups) ? value.groups : []).slice(0, 50).map((group) => ({
     id: String(group?.id || ""),
     name: String(group?.name || "新建标签组").slice(0, 40),
-    color: String(group?.color || "blue"),
+    color: String(group?.color || "grey"),
     collapsed: Boolean(group?.collapsed),
   })).filter((group) => group.id);
   const groupIds = new Set(groups.map((group) => group.id));

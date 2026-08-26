@@ -120,11 +120,18 @@ try {
   assert.ok(bookmarkMenuRows > 0);
   await client.evaluate(`document.querySelector('#chrome-popover [data-action="close-popover"]').click()`);
 
-  await waitForState(client, `Boolean(document.querySelector('.browser-tab.active'))`, 12_000);
-  const hadGroups = await client.evaluate(`document.querySelectorAll('[data-tab-group-id]').length > 0`);
-  if (!hadGroups) {
+  await waitForState(client, `Boolean(document.querySelector('.browser-tab.active, [data-tab-group-id]'))`, 12_000);
+  const staleTestGroupIds = await client.evaluate(`window.browserLite.getState().then(state => state.taskSpaces.activeTaskSpace.tabGroups.filter(group => group.name === "Mac mini 验收").map(group => group.id))`);
+  for (const staleGroupId of staleTestGroupIds) {
+    await client.evaluate(`window.browserLite.getState().then(state => window.browserLite.taskSpaceBrowserAction(state.taskSpaces.activeTaskSpace.id, "removeTabGroup", ${JSON.stringify(staleGroupId)}))`);
+  }
+  await waitForState(client, `window.browserLite.getState().then(state => !state.taskSpaces.activeTaskSpace.tabGroups.some(group => group.name === "Mac mini 验收"))`);
+  const existingGroups = await client.evaluate(`window.browserLite.getState().then(state => state.taskSpaces.activeTaskSpace.tabGroups)`);
+  let createdGroupId = "";
+  let testedGroupId = existingGroups[0]?.id || "";
+  if (!testedGroupId) {
     const groupMenuOpened = await client.evaluate(`(() => {
-      document.querySelector('#new-tab-group').click();
+      document.querySelector('#browser-bookmarks [data-action="new-tab-group"]').click();
       return Boolean(document.querySelector('#tab-group-form'));
     })()`);
     assert.equal(groupMenuOpened, true, "Tab group editor did not open from the browser chrome");
@@ -134,11 +141,15 @@ try {
       form.querySelector('input[value="purple"]').checked = true;
       form.requestSubmit();
     })()`);
-    await waitForState(client, `document.querySelectorAll('[data-tab-group-id]').length > 0`);
+    await waitForState(client, `window.browserLite.getState().then(state => state.taskSpaces.activeTaskSpace.tabGroups.length > 0)`);
+    createdGroupId = await client.evaluate(`window.browserLite.getState().then(state => state.taskSpaces.activeTaskSpace.tabGroups.at(-1).id)`);
+    testedGroupId = createdGroupId;
+    await waitForState(client, `Boolean(document.querySelector('[data-tab-group-id="${createdGroupId}"]'))`);
   }
-  const groupBeforeToggle = await client.evaluate(`document.querySelector('[data-action="toggle-tab-group"]').getAttribute('aria-expanded')`);
-  await client.evaluate(`document.querySelector('[data-action="toggle-tab-group"]').click()`);
-  await waitForState(client, `document.querySelector('[data-action="toggle-tab-group"]').getAttribute('aria-expanded') !== ${JSON.stringify(groupBeforeToggle)}`);
+  const groupSelector = `[data-tab-group-id="${testedGroupId}"] [data-action="toggle-tab-group"]`;
+  const groupBeforeToggle = await client.evaluate(`document.querySelector(${JSON.stringify(groupSelector)}).getAttribute('aria-expanded')`);
+  await client.evaluate(`document.querySelector(${JSON.stringify(groupSelector)}).click()`);
+  await waitForState(client, `document.querySelector(${JSON.stringify(groupSelector)}).getAttribute('aria-expanded') !== ${JSON.stringify(groupBeforeToggle)}`);
   const tabGroups = await client.evaluate(`window.browserLite.getState().then(state => state.taskSpaces.activeTaskSpace.tabGroups)`);
   assert.ok(tabGroups.length > 0, "Tab group state was not persisted to the Space");
 
@@ -157,6 +168,14 @@ try {
   }).then((response) => response.json());
   assert.equal(session.value.capabilities["browser-lite:embedded"], true);
   assert.equal(session.value.sessionId, activeInstance.sessionId);
+
+  if (createdGroupId) {
+    await client.evaluate(`window.browserLite.getState().then(state => window.browserLite.taskSpaceBrowserAction(state.taskSpaces.activeTaskSpace.id, "removeTabGroup", ${JSON.stringify(createdGroupId)}))`);
+    await waitForState(client, `!document.querySelector('[data-tab-group-id="${createdGroupId}"]')`);
+  } else {
+    await client.evaluate(`document.querySelector(${JSON.stringify(groupSelector)}).click()`);
+    await waitForState(client, `document.querySelector(${JSON.stringify(groupSelector)}).getAttribute('aria-expanded') === ${JSON.stringify(groupBeforeToggle)}`);
+  }
 
   await client.evaluate(`document.querySelector('#browser-space-count').click()`);
   await waitForState(client, `document.body.classList.contains('spaces-mode')`);
