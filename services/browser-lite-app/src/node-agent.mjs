@@ -9,6 +9,9 @@ function delay(milliseconds) {
 }
 
 const TOKEN_ENCRYPTION = "local-aes-256-gcm-v1";
+const NODE_CAPABILITIES = Object.freeze([
+  "webdriver", "cdp", "screenshot", "persistent_profile", "multi_instance", "task_spaces",
+]);
 
 function normalizeServerUrl(value) {
   const url = new URL(String(value || ""));
@@ -27,8 +30,9 @@ function websocketUrl(serverUrl, nodeId) {
 }
 
 export class BrowserLiteNodeAgent {
-  constructor(manager, { onChanged } = {}) {
+  constructor(manager, { onChanged, taskSpaces } = {}) {
     this.manager = manager;
+    this.taskSpaces = taskSpaces;
     this.onChanged = onChanged;
     this.configPath = join(app.getPath("userData"), "node-config.json");
     this.keyPath = join(app.getPath("userData"), "node-key.bin");
@@ -115,7 +119,7 @@ export class BrowserLiteNodeAgent {
         architecture: arch(),
         appVersion: app.getVersion(),
         chromiumVersion: process.versions.chrome,
-        capabilities: ["webdriver", "cdp", "screenshot", "persistent_profile", "multi_instance"],
+        capabilities: NODE_CAPABILITIES,
       }),
     });
     const body = await response.json().catch(() => ({}));
@@ -220,6 +224,7 @@ export class BrowserLiteNodeAgent {
       nodeId: config.nodeId,
       appVersion: app.getVersion(),
       chromiumVersion: process.versions.chrome,
+      capabilities: NODE_CAPABILITIES,
       instances: await this.manager.list(),
     }));
     const heartbeat = setInterval(() => {
@@ -249,6 +254,8 @@ export class BrowserLiteNodeAgent {
         requestId: message.requestId,
         ok: false,
         error: error.message || String(error),
+        errorCode: error.code || error.error_code || undefined,
+        details: error.details,
       }));
     }
   }
@@ -256,24 +263,36 @@ export class BrowserLiteNodeAgent {
   async handleRequest(message) {
     const instanceId = message.instanceId;
     if (!instanceId) throw new Error("Browser Lite request is missing instanceId");
+    const mappedInstanceId = this.taskSpaces?.instanceIdForContext(instanceId) || instanceId;
     switch (message.action) {
       case "ensure": {
-        const entry = await this.manager.ensure(instanceId, message.options || {});
+        const space = this.taskSpaces
+          ? await this.taskSpaces.ensureContextTaskSpace(instanceId, message.options?.taskName)
+          : null;
+        const entry = await this.manager.ensure(space?.instanceId || mappedInstanceId, message.options || {});
         return { status: "running", runtime: await entry.state.runtimeStatus() };
       }
       case "status":
-        return this.manager.status(instanceId);
+        return this.manager.status(mappedInstanceId);
       case "pause":
-        await this.manager.pause(instanceId);
-        return this.manager.status(instanceId);
+        await this.manager.pause(mappedInstanceId);
+        return this.manager.status(mappedInstanceId);
       case "stop":
-        await this.manager.stop(instanceId);
+        await this.manager.stop(mappedInstanceId);
         return { status: "exited" };
       case "remove":
-        await this.manager.remove(instanceId);
+        if (this.taskSpaces) await this.taskSpaces.removeContextTaskSpace(instanceId);
+        else await this.manager.remove(mappedInstanceId);
         return { status: "not_found" };
       case "webdriver":
-        return this.manager.request(instanceId, message.request || {});
+        if (this.taskSpaces && !this.taskSpaces.instanceIdForContext(instanceId)) {
+          await this.taskSpaces.ensureContextTaskSpace(instanceId);
+        }
+        if (this.taskSpaces) return this.taskSpaces.agentWebDriverRequest(instanceId, message.request || {});
+        return this.manager.request(mappedInstanceId, message.request || {});
+      case "task_space":
+        if (!this.taskSpaces) throw new Error("Browser Lite task-space controller is unavailable");
+        return this.taskSpaces.dispatch(message.method, message.args || [], instanceId);
       default:
         throw new Error(`Unknown Browser Lite node action: ${message.action}`);
     }

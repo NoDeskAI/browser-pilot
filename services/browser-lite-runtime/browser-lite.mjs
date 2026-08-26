@@ -141,6 +141,8 @@ export function parseArgs(argv) {
     chromeBin: raw["chrome-bin"] ? resolve(String(raw["chrome-bin"])) : undefined,
     width: asInteger(raw.width, 1280, "--width", 320, 16_384),
     height: asInteger(raw.height, 800, "--height", 240, 16_384),
+    profileDirectory: String(raw["profile-directory"] ?? "Default"),
+    startUrl: String(raw["start-url"] ?? "chrome://newtab/"),
   };
 }
 
@@ -155,6 +157,7 @@ Options:
   --port <port>          WebDriver-compatible port (default: 4444)
   --instance-id <id>     Persistent instance name (default: browser_lite)
   --profile-dir <path>   Chrome profile directory
+  --profile-directory   Profile directory inside the user data root (default: Default)
   --data-root <path>     Browser Lite data root
   --chrome-bin <path>    Chrome/Chromium executable
   --width <pixels>       Initial window width (default: 1280)
@@ -165,9 +168,10 @@ Options:
 }
 
 class CdpConnection {
-  constructor(webSocketUrl, onEvent) {
+  constructor(webSocketUrl, onEvent, onClose) {
     this.webSocketUrl = webSocketUrl;
     this.onEvent = onEvent;
+    this.onClose = onClose;
     this.socket = null;
     this.sequence = 0;
     this.pending = new Map();
@@ -224,6 +228,7 @@ class CdpConnection {
       pending.reject(new Error("Chrome CDP connection closed"));
     }
     this.pending.clear();
+    this.onClose?.();
   }
 
   async send(method, params = {}, sessionId = undefined, timeoutMs = 30_000) {
@@ -289,6 +294,7 @@ export class BrowserLiteState {
     this.sessionId = `browser-lite-${config.instanceId}`;
     this.startedAt = null;
     this.chromePid = null;
+    this.chromeChild = null;
     this.debugPort = null;
     this.browserVersion = null;
     this.cdp = null;
@@ -298,6 +304,12 @@ export class BrowserLiteState {
     this.targetOrder = [];
     this.pointer = { x: 0, y: 0 };
     this.timeouts = { ...DEFAULT_TIMEOUTS };
+    this.paused = false;
+    this.stopped = false;
+    this.shutdownRequested = false;
+    this.nativeExitNotified = false;
+    this.visible = false;
+    this.preview = { capturedAt: 0, dataUrl: "" };
   }
 
   async start() {
@@ -310,24 +322,68 @@ export class BrowserLiteState {
   }
 
   async startInner() {
+    this.shutdownRequested = false;
+    this.nativeExitNotified = false;
     await mkdir(this.config.profileDir, { recursive: true, mode: 0o700 });
     const existing = await this.findExistingChrome();
     const devTools = existing ?? await this.launchChrome();
     this.debugPort = devTools.port;
     this.browserVersion = devTools.version.Browser ?? null;
-    this.cdp = new CdpConnection(devTools.version.webSocketDebuggerUrl, (event) => this.handleCdpEvent(event));
+    this.cdp = new CdpConnection(
+      devTools.version.webSocketDebuggerUrl,
+      (event) => this.handleCdpEvent(event),
+      () => this.handleCdpClose(),
+    );
     await this.cdp.connect();
     await this.cdp.send("Target.setDiscoverTargets", { discover: true });
     const targets = await this.cdp.send("Target.getTargets");
     this.refreshTargetOrder(targets.targetInfos ?? []);
     await this.ensurePage();
     this.startedAt = new Date().toISOString();
+    this.stopped = false;
     log(existing ? "chrome.reused" : "chrome.launched", {
       instanceId: this.config.instanceId,
       profileDir: this.config.profileDir,
       debugPort: this.debugPort,
       browserVersion: this.browserVersion,
     });
+  }
+
+  handleCdpClose() {
+    if (this.shutdownRequested || this.stopped) return;
+    this.stopped = true;
+    this.paused = false;
+    this.visible = false;
+    this.cdp = null;
+    this.startPromise = null;
+    this.targetSessions.clear();
+    this.config.onChanged?.();
+  }
+
+  handleChromeExit(code, signal, pid) {
+    if (pid !== this.chromePid || this.nativeExitNotified) return;
+    const requested = this.shutdownRequested;
+    this.nativeExitNotified = true;
+    this.stopped = true;
+    this.paused = false;
+    this.visible = false;
+    this.chromePid = null;
+    this.chromeChild = null;
+    this.cdp?.close();
+    this.cdp = null;
+    this.startPromise = null;
+    this.activeTargetId = null;
+    this.targetSessions.clear();
+    this.targetOrder = [];
+    if (!requested) {
+      this.config.onNativeBrowserExit?.({
+        instanceId: this.config.instanceId,
+        pid,
+        code,
+        signal,
+      });
+    }
+    this.config.onChanged?.();
   }
 
   handleCdpEvent(event) {
@@ -347,6 +403,7 @@ export class BrowserLiteState {
         if (knownSessionId === sessionId) this.targetSessions.delete(targetId);
       }
     }
+    this.config.onChanged?.();
   }
 
   refreshTargetOrder(targetInfos) {
@@ -395,13 +452,19 @@ export class BrowserLiteState {
       "--no-default-browser-check",
       "--disable-background-mode",
       "--disable-component-update",
+      "--disable-infobars",
       "--disable-session-crashed-bubble",
+      `--profile-directory=${this.config.profileDirectory || "Default"}`,
+      ...(this.config.extensionPath ? [`--load-extension=${this.config.extensionPath}`] : []),
       `--window-size=${this.config.width},${this.config.height}`,
-      "about:blank",
+      this.config.startUrl || "chrome://newtab/",
     ];
     const child = spawn(chromeBin, args, { detached: true, stdio: "ignore" });
+    this.chromeChild = child;
     child.unref();
     this.chromePid = child.pid ?? null;
+    const chromePid = this.chromePid;
+    child.once("exit", (code, signal) => this.handleChromeExit(code, signal, chromePid));
 
     let lastError = null;
     for (let attempt = 0; attempt < 150; attempt += 1) {
@@ -419,12 +482,10 @@ export class BrowserLiteState {
   }
 
   async ensureConnected() {
+    if (this.stopped) throw new Error("Browser Lite is stopped");
     if (this.cdp?.socket?.readyState === WebSocket.OPEN) return;
-    this.cdp?.close();
-    this.cdp = null;
-    this.startPromise = null;
-    this.targetSessions.clear();
-    await this.start();
+    this.handleCdpClose();
+    throw new Error("Browser Lite Chromium exited");
   }
 
   async targets() {
@@ -433,7 +494,75 @@ export class BrowserLiteState {
     const pageTargets = (result.targetInfos ?? []).filter((target) => target.type === "page");
     this.refreshTargetOrder(pageTargets);
     const byId = new Map(pageTargets.map((target) => [target.targetId, target]));
-    return this.targetOrder.map((targetId) => byId.get(targetId)).filter(Boolean);
+    return this.targetOrder.map((targetId) => byId.get(targetId)).filter(Boolean).map((target) => ({
+      ...target,
+      active: target.targetId === this.activeTargetId,
+    }));
+  }
+
+  async resetImportedExtensionStartupTabs(knownOnboardingUrls = []) {
+    const startUrl = this.config.startUrl || "chrome://newtab/";
+    const urlKey = (value) => {
+      try {
+        const url = new URL(String(value || ""));
+        if (["http:", "https:"].includes(url.protocol) && url.pathname !== "/") {
+          url.pathname = url.pathname.replace(/\/+$/, "");
+        }
+        return url.toString();
+      } catch {
+        return String(value || "");
+      }
+    };
+    const blankUrls = new Set([startUrl, "chrome://new-tab-page/", "chrome://newtab/"]);
+    const knownUrls = new Set(
+      (Array.isArray(knownOnboardingUrls) ? knownOnboardingUrls : []).map(urlKey),
+    );
+    const fullReset = knownUrls.size === 0;
+    let keepTargetId = null;
+    let closed = 0;
+    const closedUrls = new Set();
+    let quietChecks = 0;
+    for (let attempt = 0; attempt < 20 && quietChecks < 4; attempt += 1) {
+      const pages = await this.targets();
+      if (fullReset && !pages.some((page) => page.targetId === keepTargetId)) {
+        keepTargetId = pages.find((page) => (
+          page.url === startUrl
+          || page.url === "chrome://new-tab-page/"
+          || page.url === "chrome://newtab/"
+        ))?.targetId ?? null;
+      }
+      if (fullReset && !keepTargetId) keepTargetId = (await this.createWindow(startUrl)).targetId;
+      const blankPages = pages.filter((page) => blankUrls.has(page.url));
+      const keepBlankTargetId = blankPages.find((page) => page.active)?.targetId ?? blankPages[0]?.targetId;
+      const extras = fullReset
+        ? pages.filter((page) => page.targetId !== keepTargetId)
+        : pages.filter((page) => (
+          knownUrls.has(urlKey(page.url))
+          || (blankUrls.has(page.url) && page.targetId !== keepBlankTargetId)
+        ));
+      for (const page of extras) {
+        await this.cdp.send("Target.closeTarget", { targetId: page.targetId }).catch(() => {});
+        this.targetSessions.delete(page.targetId);
+        this.targetOrder = this.targetOrder.filter((targetId) => targetId !== page.targetId);
+        if (page.url && !blankUrls.has(page.url)) {
+          closedUrls.add(urlKey(page.url));
+        }
+        closed += 1;
+      }
+      quietChecks = extras.length === 0 ? quietChecks + 1 : 0;
+      if (quietChecks < 4) await delay(250);
+    }
+    const remaining = await this.targets();
+    const selected = remaining.find((page) => page.targetId === this.activeTargetId)?.targetId
+      ?? remaining.find((page) => page.targetId === keepTargetId)?.targetId
+      ?? remaining.find((page) => blankUrls.has(page.url))?.targetId
+      ?? remaining.at(-1)?.targetId
+      ?? (await this.createWindow(startUrl)).targetId;
+    await this.activate(selected);
+    return {
+      closedTabs: closed,
+      onboardingUrls: [...new Set([...knownUrls, ...closedUrls])],
+    };
   }
 
   async ensurePage() {
@@ -472,7 +601,177 @@ export class BrowserLiteState {
     await this.cdp.send("Target.activateTarget", { targetId: selectedTarget });
     this.activeTargetId = selectedTarget;
     await this.attach(selectedTarget);
+    this.config.onChanged?.();
     return selectedTarget;
+  }
+
+  async sendRawCDP(method, params = {}, sessionId = undefined) {
+    await this.ensureConnected();
+    return this.cdp.send(method, params, sessionId);
+  }
+
+  async createWindow(url = this.config.startUrl || "chrome://newtab/") {
+    await this.ensureConnected();
+    const created = await this.cdp.send("Target.createTarget", { url });
+    if (!this.targetOrder.includes(created.targetId)) this.targetOrder.push(created.targetId);
+    await this.activate(created.targetId);
+    return { targetId: created.targetId };
+  }
+
+  async destroyView(targetId) {
+    await this.ensureConnected();
+    const result = await this.cdp.send("Target.closeTarget", { targetId });
+    this.targetSessions.delete(targetId);
+    this.targetOrder = this.targetOrder.filter((candidate) => candidate !== targetId);
+    if (this.activeTargetId === targetId) this.activeTargetId = null;
+    await delay(100);
+    if ((await this.targets()).length === 0) await this.createWindow();
+    else await this.ensurePage();
+    this.config.onChanged?.();
+    return result.success !== false;
+  }
+
+  async navigationState() {
+    await this.ensureConnected();
+    const targetId = await this.ensurePage();
+    const targets = await this.targets();
+    const target = targets.find((candidate) => candidate.targetId === targetId);
+    let history = { currentIndex: 0, entries: [] };
+    let loading = false;
+    try {
+      history = await this.sendPage("Page.getNavigationHistory", {}, targetId);
+      loading = !["interactive", "complete"].includes(
+        await this.evaluateExpression("document.readyState", { timeoutMs: 1_000 }),
+      );
+    } catch {}
+    const url = target?.url === "about:blank" ? "" : target?.url || "";
+    return {
+      url,
+      title: target?.title || "",
+      loading,
+      canGoBack: history.currentIndex > 0,
+      canGoForward: history.currentIndex >= 0 && history.currentIndex < history.entries.length - 1,
+    };
+  }
+
+  async goBack() {
+    const targetId = await this.ensurePage();
+    const history = await this.sendPage("Page.getNavigationHistory", {}, targetId);
+    const entry = history.entries?.[history.currentIndex - 1];
+    if (entry) await this.sendPage("Page.navigateToHistoryEntry", { entryId: entry.id }, targetId);
+  }
+
+  async goForward() {
+    const targetId = await this.ensurePage();
+    const history = await this.sendPage("Page.getNavigationHistory", {}, targetId);
+    const entry = history.entries?.[history.currentIndex + 1];
+    if (entry) await this.sendPage("Page.navigateToHistoryEntry", { entryId: entry.id }, targetId);
+  }
+
+  async reload() {
+    await this.sendPage("Page.reload", { ignoreCache: false });
+  }
+
+  async stopLoading() {
+    await this.sendPage("Page.stopLoading");
+  }
+
+  async browserWindow(targetId = undefined) {
+    await this.ensureConnected();
+    const selectedTarget = targetId ?? await this.ensurePage();
+    return this.cdp.send("Browser.getWindowForTarget", { targetId: selectedTarget });
+  }
+
+  async setVisible(visible, targetId = this.activeTargetId) {
+    if (this.stopped && !visible) return;
+    if (visible) await this.resume();
+    else await this.ensureConnected();
+    if (targetId) this.activeTargetId = targetId;
+    const selectedTarget = await this.ensurePage();
+    const current = await this.browserWindow(selectedTarget);
+    const windowState = visible && !this.paused ? "normal" : "minimized";
+    await this.cdp.send("Browser.setWindowBounds", { windowId: current.windowId, bounds: { windowState } });
+    this.visible = Boolean(visible && !this.paused);
+    if (this.visible) await this.activate(selectedTarget);
+    this.config.onChanged?.();
+  }
+
+  layout() {}
+
+  async capturePreview() {
+    if (this.stopped) return this.preview.dataUrl;
+    try {
+      const result = await this.sendPage("Page.captureScreenshot", { format: "png", fromSurface: true });
+      const data = result.data;
+      if (data) this.preview = { capturedAt: Date.now(), dataUrl: `data:image/png;base64,${data}` };
+    } catch {}
+    return this.preview.dataUrl;
+  }
+
+  async previewDataUrl() {
+    return this.preview.dataUrl || this.capturePreview();
+  }
+
+  async pause() {
+    if (this.stopped) return;
+    this.paused = true;
+    await this.setVisible(false);
+  }
+
+  async resume() {
+    this.paused = false;
+    this.stopped = false;
+    this.shutdownRequested = false;
+    await this.start();
+  }
+
+  async stop() {
+    if (this.stopped && !this.chromePid) return;
+    this.shutdownRequested = true;
+    this.stopped = true;
+    this.visible = false;
+    this.paused = false;
+    const chromePid = this.chromePid;
+    try { await this.cdp?.send("Browser.close"); } catch {}
+    if (chromePid) {
+      const chromeRunning = () => {
+        try {
+          process.kill(chromePid, 0);
+          return true;
+        } catch {
+          return false;
+        }
+      };
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        if (!chromeRunning()) break;
+        await delay(100);
+      }
+      if (chromeRunning()) {
+        try { process.kill(chromePid, "SIGTERM"); } catch {}
+        for (let attempt = 0; attempt < 10; attempt += 1) {
+          if (!chromeRunning()) break;
+          await delay(100);
+        }
+      }
+      if (chromeRunning()) {
+        try { process.kill(chromePid, "SIGKILL"); } catch {}
+      }
+    }
+    this.cdp?.close();
+    this.cdp = null;
+    this.chromeChild = null;
+    this.chromePid = null;
+    this.startPromise = null;
+    this.activeTargetId = null;
+    this.targetSessions.clear();
+    this.targetOrder = [];
+    await delay(150);
+    this.config.onChanged?.();
+  }
+
+  async remove() {
+    await this.stop();
+    await rm(this.config.profileDir, { recursive: true, force: true });
   }
 
   async evaluateExpression(expression, { awaitPromise = true, timeoutMs = undefined } = {}) {
@@ -560,7 +859,7 @@ export class BrowserLiteState {
 
   async windowRect() {
     const targetId = await this.ensurePage();
-    const result = await this.sendPage("Browser.getWindowForTarget", { targetId });
+    const result = await this.browserWindow(targetId);
     return {
       x: Number(result.bounds?.left ?? 0),
       y: Number(result.bounds?.top ?? 0),
@@ -571,7 +870,7 @@ export class BrowserLiteState {
 
   async setWindowRect(body) {
     const targetId = await this.ensurePage();
-    const current = await this.sendPage("Browser.getWindowForTarget", { targetId });
+    const current = await this.browserWindow(targetId);
     const bounds = {
       left: asInteger(body.x, Number(current.bounds?.left ?? 0), "x", -32_768, 32_768),
       top: asInteger(body.y, Number(current.bounds?.top ?? 0), "y", -32_768, 32_768),
@@ -579,7 +878,7 @@ export class BrowserLiteState {
       height: asInteger(body.height, Number(current.bounds?.height ?? this.config.height), "height", 240, 16_384),
       windowState: "normal",
     };
-    await this.sendPage("Browser.setWindowBounds", { windowId: current.windowId, bounds });
+    await this.cdp.send("Browser.setWindowBounds", { windowId: current.windowId, bounds });
     return this.windowRect();
   }
 
@@ -660,21 +959,67 @@ export class BrowserLiteState {
     }));
   }
 
-  async addCookie(cookie) {
+  cookieParams(cookie, fallbackUrl = "") {
     if (!cookie || typeof cookie.name !== "string" || typeof cookie.value !== "string") {
       throw new WebDriverError("invalid argument", "cookie must include string name and value", 400);
     }
     const params = {
       name: cookie.name,
       value: cookie.value,
-      url: await this.currentUrl(),
+      url: cookie.url || fallbackUrl,
     };
-    for (const key of ["domain", "path", "secure", "httpOnly", "sameSite"]) {
+    for (const key of ["domain", "path", "secure", "httpOnly"]) {
       if (cookie[key] !== undefined) params[key] = cookie[key];
     }
-    if (cookie.expiry !== undefined) params.expires = Number(cookie.expiry);
+    const sameSite = {
+      no_restriction: "None",
+      lax: "Lax",
+      strict: "Strict",
+      None: "None",
+      Lax: "Lax",
+      Strict: "Strict",
+    }[cookie.sameSite];
+    if (sameSite) params.sameSite = sameSite;
+    if (cookie.expiry !== undefined || cookie.expirationDate !== undefined) {
+      params.expires = Number(cookie.expiry ?? cookie.expirationDate);
+    }
+    return params;
+  }
+
+  async addCookie(cookie) {
+    const params = this.cookieParams(cookie, cookie?.url ? "" : await this.currentUrl());
     const result = await this.sendPage("Network.setCookie", params);
     if (result.success === false) throw new WebDriverError("unable to set cookie", "Chrome rejected cookie", 500);
+  }
+
+  async addCookies(cookies) {
+    if (!Array.isArray(cookies)) {
+      throw new WebDriverError("invalid argument", "cookies must be an array", 400);
+    }
+    const needsFallbackUrl = cookies.some((cookie) => !cookie?.url);
+    const fallbackUrl = needsFallbackUrl ? await this.currentUrl() : "";
+    const normalized = [];
+    for (const cookie of cookies) {
+      try {
+        normalized.push(this.cookieParams(cookie, fallbackUrl));
+      } catch {}
+    }
+    let imported = 0;
+    for (let offset = 0; offset < normalized.length; offset += 100) {
+      const chunk = normalized.slice(offset, offset + 100);
+      try {
+        await this.sendPage("Network.setCookies", { cookies: chunk });
+        imported += chunk.length;
+      } catch {
+        for (const params of chunk) {
+          try {
+            const result = await this.sendPage("Network.setCookie", params);
+            if (result.success !== false) imported += 1;
+          } catch {}
+        }
+      }
+    }
+    return imported;
   }
 
   async deleteCookie(name = undefined) {
@@ -709,6 +1054,11 @@ export class BrowserLiteState {
       startedAt: this.startedAt,
       activeTargetId: this.activeTargetId,
       tabCount: targets.length,
+      chromiumVersion: this.browserVersion,
+      electronVersion: null,
+      bundledChromium: Boolean(this.config.bundledChromium),
+      paused: this.paused,
+      stopped: this.stopped,
     };
   }
 
@@ -761,6 +1111,22 @@ export function createBrowserLiteServer(state) {
       const method = request.method ?? "GET";
       const url = new URL(request.url ?? "/", "http://browser-lite.local");
       const path = decodeURIComponent(url.pathname).replace(/\/$/, "") || "/";
+
+      if (path === "/browser-lite/space-count" || path === "/browser-lite/show-spaces") {
+        if (!state.config.controlToken || url.searchParams.get("token") !== state.config.controlToken) {
+          throw new WebDriverError("invalid argument", "Invalid Browser Lite control token", 403);
+        }
+        if (method === "GET" && path === "/browser-lite/space-count") {
+          sendJson(response, 200, { count: Number(state.config.getSpaceCount?.() || 0) });
+          return;
+        }
+        if (method === "POST" && path === "/browser-lite/show-spaces") {
+          await state.config.onShowSpaces?.();
+          sendJson(response, 200, { shown: true });
+          return;
+        }
+        throw new WebDriverError("unknown command", `${method} ${path} is not implemented`, 404);
+      }
 
       if (method === "GET" && (path === "/healthz" || path === "/browser-lite/status")) {
         sendJson(response, 200, await state.runtimeStatus());

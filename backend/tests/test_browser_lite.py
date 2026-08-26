@@ -136,3 +136,50 @@ def test_cli_exposes_browser_lite_node_selection_and_rejects_egress_mix():
     assert "--browser-lite-node <id>" in template
     assert "standard_chrome|cloak_chromium|browser_lite" in template
     assert "Browser Lite uses the Mac node network; --network-egress is not supported." in template
+
+
+def test_node_agent_reconnect_refreshes_task_space_capability():
+    source = (Path(__file__).parents[2] / "services" / "browser-lite-app" / "src" / "node-agent.mjs").read_text()
+    assert '"task_spaces"' in source
+    assert 'type: "hello"' in source
+    assert "capabilities: NODE_CAPABILITIES" in source
+
+
+def test_task_space_command_uses_allowlisted_node_protocol(monkeypatch):
+    captured = {}
+
+    async def command(session_id, action, *, payload=None, timeout=45):
+        captured.update(session_id=session_id, action=action, payload=payload, timeout=timeout)
+        return {"taskSpaces": []}
+
+    monkeypatch.setattr(browser_lite, "session_command", command)
+    result = asyncio.run(browser_lite.task_space_command("session-1", "listTaskSpaces", timeout=7))
+    assert result == {"taskSpaces": []}
+    assert captured == {
+        "session_id": "session-1",
+        "action": "task_space",
+        "payload": {"method": "listTaskSpaces", "args": []},
+        "timeout": 7,
+    }
+    with pytest.raises(ValueError, match="Unknown Browser Lite task-space method"):
+        asyncio.run(browser_lite.task_space_command("session-1", "evaluateArbitraryCode"))
+
+
+def test_task_space_api_preserves_user_control_hard_stop(monkeypatch):
+    async def node(_session_id):
+        return {"tenant_id": "tenant-1"}
+
+    async def command(*_args, **_kwargs):
+        raise browser_lite.BrowserLiteNodeError(
+            "The task is under user control.", error_code="EGO_TASK_SPACE_USER_IN_CONTROL"
+        )
+
+    monkeypatch.setattr(browser_lite, "session_node", node)
+    monkeypatch.setattr(browser_lite, "task_space_command", command)
+    user = type("User", (), {"tenant_id": "tenant-1"})()
+    with pytest.raises(browser_lite.HTTPException) as exc:
+        asyncio.run(browser_lite.task_space_api(
+            browser_lite.TaskSpaceBody(sessionId="session-1", method="snapshot"), user
+        ))
+    assert exc.value.status_code == 409
+    assert exc.value.detail["errorCode"] == "EGO_TASK_SPACE_USER_IN_CONTROL"

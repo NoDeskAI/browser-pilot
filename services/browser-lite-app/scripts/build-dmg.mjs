@@ -6,21 +6,27 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import packager from "@electron/packager";
-import { signAsync } from "@electron/osx-sign";
+import { brandChromiumResources } from "./chromium-branding.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const DIST = join(ROOT, "dist");
 const TEMP = join(ROOT, "build", "dmg-staging");
 const APP_NAME = "Browser Lite";
+const EGO_COMPATIBLE_CHROMIUM_VERSION = "150.0.7871.224";
 const APP_PATH = join(DIST, `${APP_NAME}-darwin-arm64`, `${APP_NAME}.app`);
-const DMG_PATH = join(DIST, "Browser-Lite-0.1.0-arm64.dmg");
+const packageManifest = JSON.parse(await readFile(join(ROOT, "package.json"), "utf8"));
+const DMG_PATH = join(DIST, `Browser-Lite-${packageManifest.version}-arm64.dmg`);
 const runtimePath = resolve(ROOT, "..", "browser-lite-runtime", "browser-lite.mjs");
+const chromiumAppPath = process.env.BROWSER_LITE_CHROMIUM_APP
+  ? resolve(process.env.BROWSER_LITE_CHROMIUM_APP)
+  : null;
 
 function run(command, args, options = {}) {
   execFileSync(command, args, { stdio: "inherit", ...options });
 }
 
 function signingIdentity() {
+  if (["-", "adhoc", "ad-hoc"].includes(process.env.BROWSER_LITE_SIGN_IDENTITY)) return null;
   if (process.env.BROWSER_LITE_SIGN_IDENTITY) return process.env.BROWSER_LITE_SIGN_IDENTITY;
   const output = execFileSync("security", ["find-identity", "-v", "-p", "codesigning"], {
     encoding: "utf8",
@@ -31,24 +37,22 @@ function signingIdentity() {
     || null;
 }
 
-async function signApp(appPath, identity) {
-  if (!identity) {
-    run("codesign", [
-      "--force", "--deep", "--sign", "-", "--timestamp=none", "--options", "runtime",
-      "--entitlements", join(ROOT, "build", "entitlements.plist"), appPath,
-    ]);
-    return;
+function verifyChromiumVersion(appPath) {
+  const version = execFileSync("plutil", [
+    "-extract", "CFBundleShortVersionString", "raw", join(appPath, "Contents", "Info.plist"),
+  ], { encoding: "utf8" }).trim();
+  if (version !== EGO_COMPATIBLE_CHROMIUM_VERSION) {
+    throw new Error(
+      `Browser Lite requires Chromium ${EGO_COMPATIBLE_CHROMIUM_VERSION} for ego lite UI compatibility; received ${version}`,
+    );
   }
-  await signAsync({
-    app: appPath,
-    identity,
-    platform: "darwin",
-    hardenedRuntime: true,
-    entitlements: join(ROOT, "build", "entitlements.plist"),
-    entitlementsInherit: join(ROOT, "build", "entitlements.plist"),
-    gatekeeperAssess: false,
-    strictVerify: true,
-  });
+}
+
+async function signApp(appPath, identity) {
+  run("codesign", [
+    "--force", "--deep", "--sign", identity || "-", "--timestamp=none", "--options", "runtime",
+    "--entitlements", join(ROOT, "build", "entitlements.plist"), appPath,
+  ]);
 }
 
 async function prepareIcons() {
@@ -70,6 +74,18 @@ async function prepareIcons() {
   await copyFile(join(renderedDir, "trayTemplate.svg.png"), join(ROOT, "assets", "trayTemplate.png"));
 }
 
+async function brandBundledChromium(appPath) {
+  const infoPath = join(appPath, "Contents", "Info.plist");
+  const resourcesPath = join(appPath, "Contents", "Resources");
+  const iconName = "BrowserLite.icns";
+  await copyFile(join(ROOT, "build", "BrowserLite.icns"), join(resourcesPath, iconName));
+  run("plutil", ["-replace", "CFBundleDisplayName", "-string", APP_NAME, infoPath]);
+  run("plutil", ["-replace", "CFBundleName", "-string", APP_NAME, infoPath]);
+  run("plutil", ["-replace", "CFBundleIdentifier", "-string", "com.nodeskai.browserlite.chromium", infoPath]);
+  run("plutil", ["-replace", "CFBundleIconFile", "-string", iconName, infoPath]);
+  await brandChromiumResources(appPath);
+}
+
 async function main() {
   const identity = signingIdentity();
   await rm(DIST, { recursive: true, force: true });
@@ -82,6 +98,9 @@ async function main() {
     name: APP_NAME,
     platform: "darwin",
     arch: "arm64",
+    ...(process.env.BROWSER_LITE_ELECTRON_ZIP_DIR
+      ? { electronZipDir: process.env.BROWSER_LITE_ELECTRON_ZIP_DIR }
+      : {}),
     out: DIST,
     overwrite: true,
     asar: true,
@@ -97,6 +116,7 @@ async function main() {
     extendInfo: {
       CFBundleDisplayName: APP_NAME,
       CFBundleName: APP_NAME,
+      LSUIElement: true,
       LSApplicationCategoryType: "public.app-category.productivity",
       NSHumanReadableCopyright: "Copyright © 2026 Xy718",
       ...(identity ? {} : { LSEnvironment: { BROWSER_LITE_TEST_BUILD: "1" } }),
@@ -107,6 +127,18 @@ async function main() {
   await mkdir(join(resourcesDir, "browser-lite-runtime"), { recursive: true });
   await copyFile(runtimePath, join(resourcesDir, "browser-lite-runtime", "browser-lite.mjs"));
   await copyFile(join(ROOT, "assets", "trayTemplate.png"), join(resourcesDir, "trayTemplate.png"));
+  if (chromiumAppPath) {
+    verifyChromiumVersion(chromiumAppPath);
+    const bundledChromiumRoot = join(resourcesDir, "chromium");
+    const bundledChromiumApp = join(bundledChromiumRoot, `${APP_NAME}.app`);
+    await mkdir(bundledChromiumRoot, { recursive: true });
+    await cp(chromiumAppPath, bundledChromiumApp, {
+      recursive: true,
+      preserveTimestamps: true,
+      verbatimSymlinks: true,
+    });
+    await brandBundledChromium(bundledChromiumApp);
+  }
 
   await signApp(APP_PATH, identity);
   run("codesign", ["--verify", "--deep", "--strict", "--verbose=2", APP_PATH]);
@@ -126,11 +158,12 @@ async function main() {
   const manifest = {
     app: APP_PATH,
     dmg: DMG_PATH,
-    version: JSON.parse(await readFile(join(ROOT, "package.json"), "utf8")).version,
+    version: packageManifest.version,
     architecture: "arm64",
     signingMode: identity ? "development" : "ad-hoc",
     identity: identity || "ad-hoc",
     notarized: false,
+    chromiumRuntime: chromiumAppPath || "system Google Chrome fallback",
     notarizationReason: "Developer ID Application certificate and notary credentials are not configured",
   };
   await writeFile(join(DIST, "build-manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);

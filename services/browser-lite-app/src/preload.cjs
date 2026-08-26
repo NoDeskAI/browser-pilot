@@ -10,9 +10,15 @@ contextBridge.exposeInMainWorld("browserLite", Object.freeze({
   unpair: () => ipcRenderer.invoke("browser-lite:unpair"),
   openInstance: (instanceId) => ipcRenderer.invoke("browser-lite:open-instance", instanceId),
   showSettings: () => ipcRenderer.invoke("browser-lite:show-settings"),
+  showSpaces: () => ipcRenderer.invoke("browser-lite:show-spaces"),
   pauseInstance: (instanceId) => ipcRenderer.invoke("browser-lite:pause-instance", instanceId),
   stopInstance: (instanceId) => ipcRenderer.invoke("browser-lite:stop-instance", instanceId),
   removeInstance: (instanceId) => ipcRenderer.invoke("browser-lite:remove-instance", instanceId),
+  createTaskSpace: (name) => ipcRenderer.invoke("browser-lite:create-task-space", name),
+  openTaskSpace: (id) => ipcRenderer.invoke("browser-lite:open-task-space", id),
+  returnTaskSpace: (id) => ipcRenderer.invoke("browser-lite:return-task-space", id),
+  closeTaskSpace: (id) => ipcRenderer.invoke("browser-lite:close-task-space", id),
+  taskSpaceBrowserAction: (id, action, payload) => ipcRenderer.invoke("browser-lite:task-space-browser-action", id, action, payload),
   onState: (callback) => {
     const listener = (_event, state) => callback(state);
     ipcRenderer.on("browser-lite:state", listener);

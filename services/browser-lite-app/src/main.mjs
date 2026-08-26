@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, Menu, nativeImage, Tray } from "electron";
+import { app, BrowserWindow, globalShortcut, ipcMain, Menu, nativeImage, Tray } from "electron";
 import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { BrowserLiteManager } from "./electron-runtime.mjs";
 import { BrowserLiteInstallation } from "./installation.mjs";
 import { BrowserLiteNodeAgent } from "./node-agent.mjs";
+import { BrowserLiteTaskSpaceManager } from "./task-space-manager.mjs";
 
 const SOURCE_DIR = fileURLToPath(new URL(".", import.meta.url));
 let dashboardWindow = null;
@@ -13,14 +14,21 @@ let tray = null;
 let manager;
 let nodeAgent;
 let installation;
+let taskSpaces;
 let nodeAgentLoaded = false;
+let shutdownStarted = false;
+let shutdownComplete = false;
+const isTestBuild = process.env.BROWSER_LITE_TEST_BUILD === "1";
 
 // Ad-hoc signed test builds must stay unattended across upgrades. Chromium's
 // own cookie encryption otherwise asks macOS Keychain to trust each new ad-hoc
 // code identity. Developer ID release builds do not set this environment flag.
-if (process.env.BROWSER_LITE_TEST_BUILD === "1") app.commandLine.appendSwitch("use-mock-keychain");
+if (isTestBuild) app.commandLine.appendSwitch("use-mock-keychain");
 app.setName("Browser Lite");
-app.setPath("userData", join(app.getPath("appData"), "Browser Lite"));
+const testUserDataPath = isTestBuild
+  ? process.env.BROWSER_LITE_TEST_USER_DATA_DIR
+  : "";
+app.setPath("userData", testUserDataPath || join(app.getPath("appData"), "Browser Lite"));
 
 const PAIRING_REQUEST_PATH = join(app.getPath("userData"), "pairing-request.json");
 const initialPairingOptions = pairingOptions(process.argv);
@@ -85,6 +93,7 @@ async function startNodeAgent() {
 }
 
 async function getPublicState() {
+  const taskSpaceState = taskSpaces ? await taskSpaces.workspaceState() : { taskSpaces: [], activeTaskSpace: null };
   return {
     app: {
       name: app.getName(),
@@ -95,24 +104,26 @@ async function getPublicState() {
     },
     node: nodeAgent?.publicState() ?? null,
     instances: manager ? await manager.list() : [],
-    workspace: manager?.workspaceState() ?? { mode: "settings", activeInstanceId: null, browserAvailable: false },
+    taskSpaces: taskSpaceState,
+    workspace: manager?.workspaceState() ?? { mode: "spaces", activeInstanceId: null, browserAvailable: false },
     installation: installation ? await installation.publicState() : { complete: false, required: true, profiles: [] },
   };
 }
 
 function createDashboardWindow() {
   if (dashboardWindow && !dashboardWindow.isDestroyed()) {
+    app.focus({ steal: true });
     dashboardWindow.show();
     dashboardWindow.focus();
     return dashboardWindow;
   }
   dashboardWindow = new BrowserWindow({
-    title: "Browser Lite — 设置",
-    width: 960,
-    height: 680,
+    title: "Browser Lite",
+    width: 1280,
+    height: 800,
     minWidth: 760,
     minHeight: 560,
-    backgroundColor: "#0d1117",
+    backgroundColor: "#ffffff",
     titleBarStyle: "hiddenInset",
     webPreferences: {
       preload: join(SOURCE_DIR, "preload.cjs"),
@@ -132,6 +143,32 @@ function createDashboardWindow() {
   return dashboardWindow;
 }
 
+async function showMainWindow() {
+  createDashboardWindow();
+  const workspace = manager?.workspaceState();
+  if (workspace?.browserAvailable) {
+    await manager.showInstance(workspace.activeInstanceId);
+    return;
+  }
+  if (!manager || !taskSpaces || !installation?.isComplete()) {
+    await manager?.showSettings();
+    return;
+  }
+  await manager.showSpaces();
+}
+
+function requestMainWindow() {
+  void showMainWindow().catch((error) => {
+    console.error("Browser Lite failed to open its main workspace", error);
+    showSettingsWindow();
+  });
+}
+
+function showSettingsWindow() {
+  createDashboardWindow();
+  void manager?.showSettings();
+}
+
 function createTray() {
   const imagePath = join(app.isPackaged ? process.resourcesPath : join(app.getAppPath(), "assets"), "trayTemplate.png");
   let image = nativeImage.createFromPath(imagePath);
@@ -139,15 +176,14 @@ function createTray() {
   image.setTemplateImage(true);
   tray = new Tray(image);
   tray.setToolTip("Browser Lite");
-  const updateMenu = () => {
-    tray.setContextMenu(Menu.buildFromTemplate([
-      { label: "打开 Browser Lite", click: () => { createDashboardWindow(); manager?.showSettings(); } },
-      { type: "separator" },
-      { label: "退出", click: () => { app.isQuitting = true; app.quit(); } },
-    ]));
-  };
-  updateMenu();
-  tray.on("click", () => { createDashboardWindow(); manager?.showSettings(); });
+  const contextMenu = Menu.buildFromTemplate([
+    { label: "打开 Browser Lite", click: requestMainWindow },
+    { label: "打开设置", click: showSettingsWindow },
+    { type: "separator" },
+    { label: "退出", click: () => { app.isQuitting = true; app.quit(); } },
+  ]);
+  tray.on("click", requestMainWindow);
+  tray.on("right-click", () => tray.popUpContextMenu(contextMenu));
 }
 
 function registerIpc() {
@@ -155,16 +191,14 @@ function registerIpc() {
   ipcMain.handle("browser-lite:install-import", async (_event, payload) => {
     const result = await installation.importProfile(payload);
     await startNodeAgent();
-    await manager.ensure("browser_lite", { port: 4444 });
-    manager.showSettings();
+    await manager.showSpaces();
     emitState();
     return { result, state: await getPublicState() };
   });
   ipcMain.handle("browser-lite:install-fresh", async () => {
     await installation.freshStart();
     await startNodeAgent();
-    await manager.ensure("browser_lite", { port: 4444 });
-    manager.showSettings();
+    await manager.showSpaces();
     emitState();
     return getPublicState();
   });
@@ -180,7 +214,7 @@ function registerIpc() {
   ipcMain.handle("browser-lite:uninstall", async () => {
     await nodeAgent.unpair();
     await manager.resetForReinstall();
-    app.setLoginItemSettings({ openAtLogin: false, openAsHidden: false });
+    if (!isTestBuild) app.setLoginItemSettings({ openAtLogin: false, openAsHidden: false });
     const destinations = installation.scheduleRecoverableUninstall();
     app.isQuitting = true;
     app.quit();
@@ -199,12 +233,18 @@ function registerIpc() {
   ipcMain.handle("browser-lite:open-instance", async (_event, instanceId = "browser_lite") => {
     if (!installation.isComplete()) throw new Error("请先完成 Browser Lite 安装");
     await manager.ensure(instanceId, { port: instanceId === "browser_lite" ? 4444 : 0 });
-    manager.showInstance(instanceId);
+    manager.setTaskControlVisible(false);
+    await manager.showInstance(instanceId);
     emitState();
     return getPublicState();
   });
   ipcMain.handle("browser-lite:show-settings", async () => {
-    manager.showSettings();
+    await manager.showSettings();
+    emitState();
+    return getPublicState();
+  });
+  ipcMain.handle("browser-lite:show-spaces", async () => {
+    await manager.showSpaces();
     emitState();
     return getPublicState();
   });
@@ -223,6 +263,32 @@ function registerIpc() {
     emitState();
     return getPublicState();
   });
+  ipcMain.handle("browser-lite:create-task-space", async (_event, name) => {
+    const created = await taskSpaces.createUserTaskSpace(name || "新任务空间");
+    await taskSpaces.openForUser(created.id);
+    emitState();
+    return getPublicState();
+  });
+  ipcMain.handle("browser-lite:open-task-space", async (_event, id) => {
+    await taskSpaces.openForUser(id);
+    emitState();
+    return getPublicState();
+  });
+  ipcMain.handle("browser-lite:return-task-space", async (_event, id) => {
+    await taskSpaces.returnControlToAgent(id);
+    emitState();
+    return getPublicState();
+  });
+  ipcMain.handle("browser-lite:close-task-space", async (_event, id) => {
+    await taskSpaces.closeForUser(id);
+    emitState();
+    return getPublicState();
+  });
+  ipcMain.handle("browser-lite:task-space-browser-action", async (_event, id, action, payload) => {
+    await taskSpaces.userBrowserAction(id, action, payload);
+    emitState();
+    return getPublicState();
+  });
 }
 
 app.on("second-instance", (_event, argv, _workingDirectory, additionalData) => {
@@ -230,32 +296,62 @@ app.on("second-instance", (_event, argv, _workingDirectory, additionalData) => {
   if (installation?.isComplete()) {
     void pairFromArguments(argv, additionalData).catch((error) => console.error("Browser Lite pairing failed", error));
   }
-  createDashboardWindow();
-  manager?.showSettings();
+  requestMainWindow();
 });
+app.on("activate", requestMainWindow);
 app.on("window-all-closed", () => {});
-app.on("before-quit", () => { app.isQuitting = true; });
-app.on("will-quit", () => {
+app.on("before-quit", (event) => {
+  app.isQuitting = true;
+  if (shutdownComplete) return;
+  event.preventDefault();
+  if (shutdownStarted) return;
+  shutdownStarted = true;
+  globalShortcut.unregisterAll();
   nodeAgent?.disconnect();
-  void manager?.shutdown();
+  Promise.resolve(manager?.shutdown()).catch((error) => {
+    console.error("Browser Lite failed to stop Chromium cleanly", error);
+  }).finally(() => {
+    shutdownComplete = true;
+    app.quit();
+  });
 });
 
 async function bootstrap() {
-  if (app.isPackaged) app.setLoginItemSettings({ openAtLogin: true, openAsHidden: true });
+  app.dock?.hide();
+  if (app.isPackaged && !isTestBuild) {
+    app.setLoginItemSettings({ openAtLogin: true, openAsHidden: true });
+  }
   createDashboardWindow();
   installation = new BrowserLiteInstallation();
   await installation.load();
   dashboardWindow.setTitle(installation.isComplete() ? "Browser Lite — 设置" : "Browser Lite — 安装");
   manager = new BrowserLiteManager({ hostWindow: dashboardWindow, installation, onChanged: emitState });
-  nodeAgent = new BrowserLiteNodeAgent(manager, { onChanged: emitState });
+  taskSpaces = new BrowserLiteTaskSpaceManager(manager, {
+    statePath: join(app.getPath("userData"), "task-spaces.json"),
+    listProfiles: async () => {
+      const installationState = await installation.publicState();
+      const importedProfiles = await installation.profiles().catch(() => []);
+      const imported = importedProfiles.find((profile) => profile.directory === installationState.source?.profileDirectory);
+      return [{ id: "Default", isDefault: true, name: imported?.name || installationState.source?.profileName || "Browser Lite" }];
+    },
+    getBrowserVersion: async () => ({ currentVersion: app.getVersion(), updateAvailable: false }),
+  });
+  manager.getSpaceCount = () => taskSpaces?.spaces?.size || 0;
+  await taskSpaces.load();
+  nodeAgent = new BrowserLiteNodeAgent(manager, { onChanged: emitState, taskSpaces });
   registerIpc();
   createTray();
+  globalShortcut.register("Alt+S", () => {
+    void manager.showSpaces().then(emitState).catch((error) => console.error("Browser Lite failed to show Spaces", error));
+  });
   if (installation.isComplete()) {
     await startNodeAgent();
-    await manager.ensure("browser_lite", { port: 4444 });
   }
-  manager.showSettings();
-  if (installation.isComplete() && app.isPackaged && app.getLoginItemSettings().wasOpenedAtLogin) dashboardWindow.hide();
+  if (installation.isComplete()) await manager.showSpaces();
+  else await manager.showSettings();
+  if (installation.isComplete() && app.isPackaged && !isTestBuild && app.getLoginItemSettings().wasOpenedAtLogin) {
+    dashboardWindow.hide();
+  }
   emitState();
 }
 

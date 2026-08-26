@@ -1,0 +1,33 @@
+// Clean-room interface sketch for documentation and protocol analysis only.
+// This is NOT Ego Lite's original .mojom source and is intentionally not part
+// of Browser Lite's build. Names marked Reserved are unknown.
+
+module ego.reconstructed.mojom;
+
+struct ImportRequest {
+  string browser_source;
+  array<string> profile_directory_names;
+};
+
+interface EgoCliBridgeInferred {
+  // Request payload sizes are the generated Mojo payload sizes, including the
+  // struct header. Response types remain unknown unless noted below.
+  Reserved0@0(string? value);                                  // 24 bytes
+  Reserved1@1(string? first, string? second);                  // 40 bytes
+  ListImportableProfiles@2() => (string result_json);          // 8 bytes
+  ImportProfiles@3(array<ImportRequest> requests,
+                   bool set_default_browser,
+                   bool overwrite) => (string result_json);    // 24 bytes
+  Reserved4@4(string? value);                                  // 24 bytes
+  Reserved5@5();                                               // 8 bytes
+  Reserved6@6();                                               // 8 bytes
+  Reserved7@7();                                               // 8 bytes
+  Reserved8@8(bool? value);                                    // 16 bytes
+  Reserved9@9();                                               // 8 bytes
+  Reserved10@10();                                             // 8 bytes
+
+  // Ordinals 11-17 do not have request serializers in the analyzed CLI.
+  Reserved18@18();                                             // 8 bytes
+  Reserved19@19();                                             // 8 bytes
+  Reserved20@20(string? first, string? second);                // 40 bytes
+};

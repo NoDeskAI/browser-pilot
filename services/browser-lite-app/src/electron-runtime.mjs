@@ -1,6 +1,8 @@
 import { app, session, WebContentsView } from "electron";
 import { createServer } from "node:http";
+import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 
 let runtimeModulePromise;
@@ -21,10 +23,24 @@ function safeInstanceId(value) {
   return normalized.slice(0, 64);
 }
 
-export const APP_BAR_HEIGHT = 56;
+function nativeChromiumBinary() {
+  const bundledCandidates = [
+    join(process.resourcesPath, "chromium", "Browser Lite.app", "Contents", "MacOS", "Google Chrome for Testing"),
+    join(process.resourcesPath, "chromium", "Google Chrome for Testing.app", "Contents", "MacOS", "Google Chrome for Testing"),
+    join(process.resourcesPath, "chromium", "Chromium.app", "Contents", "MacOS", "Chromium"),
+  ];
+  return bundledCandidates.find((candidate) => existsSync(candidate));
+}
+
+export const APP_BAR_HEIGHT = 112;
+export const TASK_CONTROL_RESERVE = 105;
 
 function targetIdFor(view) {
   return `electron-${view.webContents.id}`;
+}
+
+function userVisibleUrl(url, startUrl) {
+  return url === startUrl && url.startsWith("data:text/html") ? "" : url;
 }
 
 export class ElectronBrowserLiteState {
@@ -43,6 +59,7 @@ export class ElectronBrowserLiteState {
     this.paused = false;
     this.stopped = false;
     this.visible = false;
+    this.preview = { capturedAt: 0, dataUrl: "" };
     this.partition = `persist:browser-lite-${safeInstanceId(config.instanceId)}`;
   }
 
@@ -94,7 +111,14 @@ export class ElectronBrowserLiteState {
       if (this.activeTargetId === targetId) this.activeTargetId = [...this.windows.keys()].at(-1) ?? null;
       this.notifyChanged();
     });
-    view.webContents.on("did-finish-load", () => this.notifyChanged());
+    view.webContents.on("did-finish-load", () => {
+      if (this.visible) void this.capturePreview();
+      this.notifyChanged();
+    });
+    view.webContents.on("did-start-loading", () => this.notifyChanged());
+    view.webContents.on("did-stop-loading", () => this.notifyChanged());
+    view.webContents.on("did-navigate", () => this.notifyChanged());
+    view.webContents.on("did-navigate-in-page", () => this.notifyChanged());
     view.webContents.on("page-title-updated", () => this.notifyChanged());
     view.webContents.setWindowOpenHandler(({ url: nextUrl }) => {
       void this.createWindow(nextUrl);
@@ -109,7 +133,11 @@ export class ElectronBrowserLiteState {
 
   liveWindows() {
     for (const [targetId, view] of this.windows) {
-      if (view.webContents.isDestroyed()) this.windows.delete(targetId);
+      try {
+        if (view.webContents.isDestroyed()) this.windows.delete(targetId);
+      } catch {
+        this.windows.delete(targetId);
+      }
     }
     return [...this.windows.entries()];
   }
@@ -117,20 +145,31 @@ export class ElectronBrowserLiteState {
   windowForTarget(targetId = undefined) {
     const selected = targetId ?? this.activeTargetId;
     const view = selected ? this.windows.get(selected) : null;
-    if (!view || view.webContents.isDestroyed()) return null;
-    return view;
+    if (!view) return null;
+    try {
+      if (view.webContents.isDestroyed()) {
+        this.windows.delete(selected);
+        return null;
+      }
+      return view;
+    } catch {
+      this.windows.delete(selected);
+      return null;
+    }
   }
 
   layout() {
     const bounds = this.config.browserBounds();
-    for (const [, view] of this.liveWindows()) view.setBounds(bounds);
+    for (const [targetId, view] of this.liveWindows()) {
+      try { view.setBounds(bounds); } catch { this.windows.delete(targetId); }
+    }
   }
 
   setVisible(visible, targetId = this.activeTargetId) {
     this.visible = Boolean(visible && !this.paused && !this.stopped);
     if (targetId && this.windows.has(targetId)) this.activeTargetId = targetId;
     for (const [id, view] of this.liveWindows()) {
-      view.setVisible(this.visible && id === this.activeTargetId);
+      try { view.setVisible(this.visible && id === this.activeTargetId); } catch { this.windows.delete(id); }
     }
     if (this.visible) this.windowForTarget()?.webContents.focus();
   }
@@ -158,7 +197,24 @@ export class ElectronBrowserLiteState {
       title: window.webContents.getTitle(),
       url: window.webContents.getURL(),
       attached: window.webContents.debugger.isAttached(),
+      active: targetId === this.activeTargetId,
     }));
+  }
+
+  navigationState() {
+    const window = this.windowForTarget();
+    if (!window) {
+      return { url: "", title: "", loading: false, canGoBack: false, canGoForward: false };
+    }
+    const navigation = window.webContents.navigationHistory;
+    const url = window.webContents.getURL();
+    return {
+      url: userVisibleUrl(url, this.config.startUrl || ""),
+      title: window.webContents.getTitle(),
+      loading: window.webContents.isLoading(),
+      canGoBack: navigation.canGoBack(),
+      canGoForward: navigation.canGoForward(),
+    };
   }
 
   async ensurePage() {
@@ -229,6 +285,18 @@ export class ElectronBrowserLiteState {
     return window.webContents.debugger.sendCommand(method, params);
   }
 
+  async sendRawCDP(method, params = {}, sessionId = undefined) {
+    if (sessionId === undefined && ["Target.createTarget", "Target.getTargets", "Target.activateTarget", "Target.closeTarget"].includes(method)) {
+      return this.sendPage(method, params);
+    }
+    const selectedTarget = await this.ensurePage();
+    const window = this.windowForTarget(selectedTarget);
+    if (!window) throw new Error(`Unknown Browser Lite target: ${selectedTarget}`);
+    await this.attach(selectedTarget);
+    if (sessionId !== undefined) return window.webContents.debugger.sendCommand(method, params, sessionId);
+    return this.sendPage(method, params, selectedTarget);
+  }
+
   async activate(targetId = undefined) {
     const selectedTarget = targetId ?? await this.ensurePage();
     const window = this.windowForTarget(selectedTarget);
@@ -288,6 +356,21 @@ export class ElectronBrowserLiteState {
     await this.waitForDocumentReady();
   }
 
+  async goBack() {
+    const window = this.windowForTarget(await this.ensurePage());
+    if (window?.webContents.navigationHistory.canGoBack()) await window.webContents.navigationHistory.goBack();
+  }
+
+  async goForward() {
+    const window = this.windowForTarget(await this.ensurePage());
+    if (window?.webContents.navigationHistory.canGoForward()) await window.webContents.navigationHistory.goForward();
+  }
+
+  async reload() {
+    const window = this.windowForTarget(await this.ensurePage());
+    window?.webContents.reload();
+  }
+
   async currentUrl() {
     return this.evaluateExpression("location.href");
   }
@@ -303,6 +386,24 @@ export class ElectronBrowserLiteState {
   async screenshot() {
     const result = await this.sendPage("Page.captureScreenshot", { format: "png", fromSurface: true });
     return result.data;
+  }
+
+  async capturePreview() {
+    const window = this.windowForTarget();
+    if (!window) return this.preview.dataUrl;
+    try {
+      const data = await this.screenshot();
+      if (!data) return this.preview.dataUrl;
+      this.preview = { capturedAt: Date.now(), dataUrl: `data:image/png;base64,${data}` };
+      return this.preview.dataUrl;
+    } catch {
+      return this.preview.dataUrl;
+    }
+  }
+
+  async previewDataUrl() {
+    if (this.preview.dataUrl) return this.preview.dataUrl;
+    return this.capturePreview();
   }
 
   async closeActiveTarget() {
@@ -498,18 +599,30 @@ export class BrowserLiteManager {
     this.hostWindow = hostWindow;
     this.installation = installation;
     this.onChanged = onChanged;
-    this.viewMode = "settings";
+    this.viewMode = "spaces";
     this.activeInstanceId = null;
-    this.settingsContentSize = hostWindow.getContentSize();
+    this.taskControlVisible = false;
+    this.modeContentSizes = {
+      spaces: [1280, 760],
+      settings: [1280, 800],
+    };
     hostWindow.on("resize", () => {
-      if (this.viewMode === "settings") this.settingsContentSize = hostWindow.getContentSize();
+      if (this.viewMode === "settings" || this.viewMode === "spaces") {
+        this.modeContentSizes[this.viewMode] = hostWindow.getContentSize();
+      }
       this.layout();
     });
   }
 
   browserBounds() {
     const [width, contentHeight] = this.hostWindow.getContentSize();
-    return { x: 0, y: APP_BAR_HEIGHT, width, height: Math.max(240, contentHeight - APP_BAR_HEIGHT) };
+    const footer = this.taskControlVisible ? TASK_CONTROL_RESERVE : 0;
+    return { x: 0, y: APP_BAR_HEIGHT, width, height: Math.max(240, contentHeight - APP_BAR_HEIGHT - footer) };
+  }
+
+  setTaskControlVisible(visible) {
+    this.taskControlVisible = Boolean(visible);
+    this.layout();
   }
 
   layout() {
@@ -524,28 +637,52 @@ export class BrowserLiteManager {
     };
   }
 
-  showSettings() {
-    for (const entry of this.instances.values()) entry.state.setVisible(false);
-    this.viewMode = "settings";
-    this.hostWindow.setTitle(this.installation?.isComplete() ? "Browser Lite — 设置" : "Browser Lite — 安装");
-    this.hostWindow.setContentSize(this.settingsContentSize[0], this.settingsContentSize[1]);
+  hasNativeDockOwner() {
+    return [...this.instances.values()].some((entry) => !entry.state.stopped);
+  }
+
+  async updateControllerDock() {
+    if (!app.dock) return;
+    if (this.hasNativeDockOwner()) app.dock.hide();
+    else await app.dock.show();
+  }
+
+  async showSpaces() {
+    await Promise.all([...this.instances.values()].map((entry) => entry.state.capturePreview?.()));
+    await Promise.all([...this.instances.values()].map((entry) => entry.state.setVisible(false)));
+    this.taskControlVisible = false;
+    this.viewMode = "spaces";
+    this.hostWindow.setTitle("Browser Lite");
+    this.hostWindow.setContentSize(...this.modeContentSizes.spaces);
+    await this.updateControllerDock();
     this.hostWindow.show();
+    app.focus({ steal: true });
     this.hostWindow.focus();
     this.onChanged?.();
   }
 
-  showInstance(instanceId) {
+  async showSettings() {
+    await Promise.all([...this.instances.values()].map((entry) => entry.state.setVisible(false)));
+    this.taskControlVisible = false;
+    this.viewMode = "settings";
+    this.hostWindow.setTitle(this.installation?.isComplete() ? "Browser Lite — 设置" : "Browser Lite — 安装");
+    this.hostWindow.setContentSize(...this.modeContentSizes.settings);
+    await this.updateControllerDock();
+    this.hostWindow.show();
+    app.focus({ steal: true });
+    this.hostWindow.focus();
+    this.onChanged?.();
+  }
+
+  async showInstance(instanceId) {
     const id = safeInstanceId(instanceId ?? this.activeInstanceId);
     const entry = this.instances.get(id);
     if (!entry) return false;
-    for (const [otherId, other] of this.instances) other.state.setVisible(otherId === id);
+    app.dock?.hide();
+    await Promise.all([...this.instances].map(([otherId, other]) => other.state.setVisible(otherId === id)));
     this.activeInstanceId = id;
     this.viewMode = "browser";
-    this.hostWindow.setTitle(`Browser Lite — ${id}`);
-    this.hostWindow.setContentSize(entry.state.config.width, entry.state.config.height + APP_BAR_HEIGHT);
-    entry.state.layout();
-    this.hostWindow.show();
-    this.hostWindow.focus();
+    this.hostWindow.hide();
     this.onChanged?.();
     return true;
   }
@@ -555,23 +692,33 @@ export class BrowserLiteManager {
     let entry = this.instances.get(id);
     if (!entry) {
       await this.installation?.prepareInstance(id);
-      const { createBrowserLiteServer } = await runtimeModule();
+      const { BrowserLiteState, createBrowserLiteServer } = await runtimeModule();
       const profileDir = join(app.getPath("userData"), "Instances", id);
+      const chromeBin = nativeChromiumBinary();
+      const controlToken = randomBytes(24).toString("hex");
       const config = {
         host: "127.0.0.1",
         port: Number(options.port ?? 0),
         instanceId: id,
         profileDir,
         dataRoot: app.getPath("userData"),
-        hostWindow: this.hostWindow,
-        browserBounds: () => this.browserBounds(),
-        onActivate: (activeId) => this.showInstance(activeId),
-        startUrl: await this.installation?.startUrl(),
+        startUrl: "chrome://newtab/",
+        profileDirectory: this.installation?.profileDirectory?.() || "Default",
+        ...(chromeBin ? { chromeBin, bundledChromium: true } : { bundledChromium: false }),
+        onChanged: () => this.onChanged?.(),
+        onNativeBrowserExit: (details) => {
+          console.info("Browser Lite native Chromium exited; closing its controller", details);
+          app.quit();
+        },
+        appVersion: app.getVersion(),
+        controlToken,
+        getSpaceCount: () => Number(this.getSpaceCount?.() || 0),
+        onShowSpaces: () => this.showSpaces(),
         width: Math.max(320, Number(options.width) || 1280),
         height: Math.max(240, Number(options.height) || 800),
       };
-      const state = new ElectronBrowserLiteState(config, { onChanged: () => this.onChanged?.() });
-      await state.start();
+      const state = new BrowserLiteState(config);
+      const extensionStartup = await this.installation?.extensionStartupState(id);
       const server = createBrowserLiteServer(state);
       await new Promise((resolveListen, rejectListen) => {
         server.once("error", rejectListen);
@@ -579,13 +726,35 @@ export class BrowserLiteManager {
       });
       const address = server.address();
       config.port = typeof address === "object" && address ? address.port : config.port;
+      config.extensionPath = await this.installation?.prepareRuntimeExtension(id, config.port, controlToken);
+      try {
+        app.dock?.hide();
+        await state.start();
+        await this.installation?.seedRuntimeCookies(id, state);
+        if (this.installation?.state?.mode === "imported" && typeof state.resetImportedExtensionStartupTabs === "function") {
+          const cleanup = await state.resetImportedExtensionStartupTabs(extensionStartup?.onboardingUrls);
+          await this.installation?.markExtensionStartupInitialized(id, cleanup);
+        }
+        await state.setVisible(false);
+      } catch (error) {
+        await new Promise((resolveClose) => server.close(resolveClose));
+        if (this.viewMode !== "browser") await app.dock?.show();
+        throw error;
+      }
       entry = { id, state, server, baseUrl: `http://${config.host}:${config.port}` };
       this.instances.set(id, entry);
       this.onChanged?.();
     } else {
       if (Number(options.width) >= 320) entry.state.config.width = Number(options.width);
       if (Number(options.height) >= 240) entry.state.config.height = Number(options.height);
+      const wasStopped = entry.state.stopped;
+      app.dock?.hide();
       await entry.state.resume();
+      if (wasStopped && this.installation?.state?.mode === "imported" && typeof entry.state.resetImportedExtensionStartupTabs === "function") {
+        const extensionStartup = await this.installation.extensionStartupState(id);
+        const cleanup = await entry.state.resetImportedExtensionStartupTabs(extensionStartup?.onboardingUrls);
+        await this.installation.markExtensionStartupInitialized(id, cleanup);
+      }
     }
     return entry;
   }
@@ -611,14 +780,15 @@ export class BrowserLiteManager {
     const id = safeInstanceId(instanceId);
     const entry = this.instances.get(id);
     if (entry) await entry.state.pause();
-    if (this.viewMode === "browser" && this.activeInstanceId === id) this.showSettings();
+    if (this.viewMode === "browser" && this.activeInstanceId === id) await this.showSpaces();
   }
 
   async stop(instanceId) {
     const id = safeInstanceId(instanceId);
     const entry = this.instances.get(id);
     if (entry) await entry.state.stop();
-    if (this.viewMode === "browser" && this.activeInstanceId === id) this.showSettings();
+    if (this.viewMode === "browser" && this.activeInstanceId === id) await this.showSpaces();
+    else await this.updateControllerDock();
   }
 
   async remove(instanceId) {
@@ -630,8 +800,8 @@ export class BrowserLiteManager {
     this.instances.delete(id);
     if (this.activeInstanceId === id) {
       this.activeInstanceId = null;
-      this.showSettings();
-    }
+      await this.showSpaces();
+    } else await this.updateControllerDock();
     this.onChanged?.();
   }
 
@@ -645,7 +815,11 @@ export class BrowserLiteManager {
   async list() {
     const result = [];
     for (const [id, entry] of this.instances) {
-      result.push({ id, baseUrl: entry.baseUrl, ...(await entry.state.runtimeStatus()) });
+      try {
+        result.push({ id, baseUrl: entry.baseUrl, ...(await entry.state.runtimeStatus()) });
+      } catch (error) {
+        result.push({ id, baseUrl: entry.baseUrl, ready: false, error: error.message || String(error) });
+      }
     }
     return result;
   }
@@ -657,7 +831,7 @@ export class BrowserLiteManager {
     }
     this.instances.clear();
     this.activeInstanceId = null;
-    this.viewMode = "settings";
+    this.viewMode = "spaces";
   }
 
   async resetForReinstall() {

@@ -248,7 +248,7 @@ _ensure_postgres() {
 _ensure_object_storage() {
     echo "[s3] 确保内置 S3 兼容对象存储运行中..."
     docker compose up -d minio
-    docker compose up minio-init
+    docker compose run --rm minio-init
     echo "[s3] ready"
 }
 

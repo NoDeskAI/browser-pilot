@@ -8,136 +8,159 @@
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body class="booting">
+    <a class="skip-link" href="#main-content">跳到主要内容</a>
+
     <section id="installer" class="installer hidden" aria-labelledby="installer-title">
       <div class="installer-card">
-        <div class="installer-brand"><span aria-hidden="true"></span>Browser Lite</div>
-        <p class="eyebrow">WELCOME</p>
-        <h1 id="installer-title">把你的浏览器带过来</h1>
-        <p class="installer-copy">选择本机 Chrome Profile。Browser Lite 会复制登录状态、书签和历史记录，不会修改 Chrome 中的任何数据。</p>
+        <div class="installer-brand"><span class="app-glyph" aria-hidden="true">◈</span><strong>Browser Lite</strong></div>
+        <h1 id="installer-title">开始使用 Browser Lite</h1>
+        <p class="installer-copy">选择本机 ego lite 或 Chrome Profile。Browser Lite 会创建独立副本，不修改原浏览器中的数据。</p>
         <div id="chrome-running" class="installer-warning hidden">
-          <strong>导入时需要暂时退出 Chrome</strong>
-          <span>点击导入后 Browser Lite 会正常退出 Chrome，完成后你可以重新打开。</span>
+          <strong>导入前需要暂时退出原浏览器</strong>
+          <span>导入完成后可以立即重新打开。</span>
         </div>
         <div id="profile-list" class="profile-list"></div>
         <div class="import-options">
-          <label class="check-row"><input id="import-login-state" type="checkbox" checked /><span><strong>登录状态</strong><small>Cookie、Local Storage、IndexedDB；macOS 可能询问一次 Chrome Safe Storage</small></span></label>
-          <label class="check-row"><input id="import-bookmarks" type="checkbox" checked /><span><strong>书签</strong><small>导入到 Browser Lite 起始页</small></span></label>
+          <label class="check-row"><input id="import-login-state" type="checkbox" checked /><span><strong>登录状态</strong><small>Cookie、Local Storage、IndexedDB</small></span></label>
+          <label class="check-row"><input id="import-bookmarks" type="checkbox" checked /><span><strong>书签</strong><small>显示在书签栏中</small></span></label>
           <label class="check-row"><input id="import-history" type="checkbox" checked /><span><strong>最近历史</strong><small>最近 500 条记录</small></span></label>
-          <div class="check-row unsupported"><span class="fake-check">—</span><span><strong>密码与扩展</strong><small>当前版本暂不支持，不会显示假成功</small></span></div>
+          <label class="check-row"><input id="import-extensions" type="checkbox" checked /><span><strong>扩展与 Tab 组</strong><small>保留扩展、固定顺序和已保存的 Tab 组</small></span></label>
+          <div class="check-row unsupported"><span class="fake-check">—</span><span><strong>密码</strong><small>暂不支持</small></span></div>
         </div>
-        <p id="installer-error" class="error installer-error"></p>
+        <p id="installer-error" class="error installer-error" role="alert"></p>
         <div class="installer-actions">
           <button id="install-fresh" class="secondary" type="button">全新开始</button>
-          <button id="install-import" type="button">导入并开始使用</button>
+          <button id="install-import" class="primary" type="button">导入并开始使用</button>
         </div>
-        <p class="privacy-note">所有导入都在这台 Mac 本地完成，不上传浏览器数据。</p>
+        <p class="privacy-note">浏览数据只保存在本机。</p>
       </div>
     </section>
-    <div class="shell">
-      <header class="hero">
-        <div class="brand-mark" aria-hidden="true"><span></span></div>
-        <div>
-          <p class="eyebrow">SETTINGS</p>
-          <h1>Browser Lite</h1>
-          <p class="subtitle">Mac 远程浏览器节点设置</p>
-        </div>
-        <div id="connection-pill" class="pill offline">未配对</div>
+
+    <main id="main-content" class="spaces-overview">
+      <header class="spaces-topbar">
+        <button id="spaces-title" class="spaces-title" type="button" aria-label="任务空间列表">0 Spaces <span aria-hidden="true">⌄</span></button>
+        <button id="overview-space-count" class="round-count notification-count" type="button" title="返回 Space 总览" aria-label="返回 Space 总览">0</button>
       </header>
+      <section id="task-spaces" class="space-gallery" aria-live="polite">
+        <div class="empty-space">正在读取 Space…</div>
+      </section>
+      <div class="shortcut-hint" aria-label="快捷键提示"><span class="keyboard-glyph" aria-hidden="true">⌨</span><span>按住 <b>⌥</b> 并重复按 <b>S</b> 快速切换 Space。</span></div>
+    </main>
 
-      <main>
-        <section class="card node-card">
-          <div class="section-heading">
-            <div>
-              <p class="eyebrow">NODE CONNECTION</p>
-              <h2>连接 Browser Pilot</h2>
-            </div>
-            <span id="node-id" class="mono subtle"></span>
-          </div>
-          <form id="pair-form" class="pair-form">
-            <label>
-              <span>Browser Pilot 地址</span>
-              <input id="server-url" type="url" placeholder="https://bpilot.nodeskai.com" value="https://bpilot.nodeskai.com" required />
-            </label>
-            <label>
-              <span>配对码</span>
-              <input id="pairing-code" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{10}" minlength="10" maxlength="10" placeholder="10 位一次性配对码" required />
-            </label>
-            <button id="pair-button" type="submit">配对节点</button>
-          </form>
-          <div id="paired-state" class="paired-state hidden">
-            <div>
-              <strong id="node-name">Mac node</strong>
-              <p id="node-server" class="subtle"></p>
-              <p id="node-error" class="error"></p>
-            </div>
-            <button id="unpair-button" class="secondary" type="button">解除配对</button>
-          </div>
-        </section>
+    <header id="browser-chrome" class="browser-chrome" role="region" aria-label="Browser Lite 浏览器控制栏">
+      <div class="tab-strip">
+        <strong id="workspace-title" class="sr-only">Browser Lite</strong>
+        <div id="browser-tabs" class="browser-tabs" role="tablist"></div>
+        <button id="new-tab" class="chrome-icon add-tab" type="button" aria-label="新建标签页">＋</button>
+        <span class="tab-strip-spacer"></span>
+        <button id="browser-space-count" class="round-count notification-count" type="button" title="返回 Space 总览" aria-label="返回 Space 总览">0</button>
+      </div>
+      <div class="navigation-bar">
+        <button id="nav-back" class="chrome-icon" type="button" aria-label="后退">‹</button>
+        <button id="nav-forward" class="chrome-icon" type="button" aria-label="前进">›</button>
+        <button id="nav-reload" class="chrome-icon reload" type="button" aria-label="重新加载">↻</button>
+        <form id="address-form" class="address-form">
+          <span class="site-controls" aria-hidden="true">⌁</span>
+          <label class="sr-only" for="address-input">网址或搜索</label>
+          <input id="address-input" autocomplete="off" spellcheck="false" placeholder="在 Google 中搜索，或者输入一个网址" />
+        </form>
+        <button class="chrome-icon star-control" type="button" aria-label="收藏此标签页">☆</button>
+        <button class="chrome-icon" type="button" aria-label="扩展程序">◫</button>
+        <button class="chrome-icon profile-control" type="button" aria-label="个人资料">逍</button>
+        <button class="chrome-icon menu-dots" type="button" aria-label="更多">⋮</button>
+      </div>
+      <div id="browser-bookmarks" class="bookmarks-bar"></div>
+    </header>
 
-        <section class="card">
-          <div class="section-heading">
-            <div>
-              <p class="eyebrow">RUNTIME INSTANCES</p>
-              <h2>运行实例</h2>
-            </div>
-            <button id="open-default" class="secondary" type="button">打开浏览器</button>
-          </div>
-          <div id="instances" class="instance-list">
-            <div class="empty">正在读取实例…</div>
-          </div>
-        </section>
+    <section id="task-control-bar" class="task-control-bar hidden" aria-label="Agent 任务控制">
+      <div class="task-control-copy"><span class="task-spinner" aria-hidden="true"></span><strong id="task-control-name">任务</strong></div>
+      <span id="agent-state" class="agent-state"></span>
+      <button id="return-control" class="task-control-action hidden" type="button">交还给 Agent</button>
+      <button id="take-control" class="task-control-action hidden" type="button">接管</button>
+      <button id="terminate-task" class="task-control-action terminate" type="button">终止任务</button>
+    </section>
 
-        <section class="card import-summary-card">
-          <div class="section-heading">
-            <div>
-              <p class="eyebrow">BROWSER DATA</p>
-              <h2>浏览器数据</h2>
-            </div>
-            <button id="reimport-browser-data" class="secondary" type="button">重新导入</button>
-          </div>
-          <p id="import-source" class="import-source"></p>
-          <div class="import-stats">
-            <span><strong id="imported-cookies">0</strong> Cookie</span>
-            <span><strong id="imported-bookmarks">0</strong> 书签</span>
-            <span><strong id="imported-history">0</strong> 历史</span>
-          </div>
-        </section>
+    <header id="settings-chrome" class="settings-chrome" role="region" aria-label="设置页浏览器控制栏">
+      <div class="tab-strip">
+        <span class="tab-search inert"><span aria-hidden="true">⌄</span></span>
+        <div class="settings-tab active"><span class="settings-tab-icon" aria-hidden="true">⚙</span><span>设置</span><span aria-hidden="true">×</span></div>
+        <span class="add-tab">＋</span><span class="tab-strip-spacer"></span><button id="settings-space-count" class="round-count notification-count" type="button" title="返回 Space 总览" aria-label="返回 Space 总览">0</button>
+      </div>
+      <div class="navigation-bar">
+        <span class="chrome-icon muted">‹</span><span class="chrome-icon muted">›</span><span class="chrome-icon">↻</span>
+        <div class="settings-address"><span aria-hidden="true">⌁</span><span>chrome://settings/</span></div>
+        <span class="chrome-icon">☆</span><span class="chrome-icon">◫</span><span class="chrome-icon menu-dots">⋮</span>
+      </div>
+      <div id="settings-bookmarks" class="bookmarks-bar"></div>
+    </header>
 
-        <section class="environment-grid">
-          <article class="metric">
-            <span>App</span><strong id="app-version">—</strong>
-          </article>
-          <article class="metric">
-            <span>Chromium</span><strong id="chromium-version">—</strong>
-          </article>
-          <article class="metric">
-            <span>Isolation</span><strong>Persistent partition</strong>
-          </article>
-          <article class="metric">
-            <span>Control</span><strong>WebDriver + CDP</strong>
-          </article>
-        </section>
+    <section id="settings-page" class="settings-page" aria-labelledby="settings-heading">
+      <aside class="settings-sidebar">
+        <div class="settings-brand"><span class="ego-mark" aria-hidden="true">e</span><strong>设置</strong></div>
+        <nav aria-label="设置分类">
+          <button class="settings-nav-item active" data-settings-page="profile" type="button"><span>◉</span>个人资料</button>
+          <button class="settings-nav-item" type="button"><span>▤</span>自动填充和密码</button>
+          <button class="settings-nav-item" type="button"><span>⌾</span>隐私与安全</button>
+          <button class="settings-nav-item" type="button"><span>⌁</span>性能</button>
+          <button class="settings-nav-item" type="button"><span>◐</span>外观</button>
+          <button class="settings-nav-item" type="button"><span>⌕</span>搜索引擎</button>
+          <button class="settings-nav-item" type="button"><span>◫</span>默认浏览器</button>
+          <button class="settings-nav-item" type="button"><span>⌂</span>起始页面</button>
+          <div class="nav-divider"></div>
+          <button class="settings-nav-item" type="button"><span>文</span>语言</button>
+          <button class="settings-nav-item" type="button"><span>↓</span>下载内容</button>
+          <button class="settings-nav-item" type="button"><span>⌨</span>快捷键</button>
+          <button class="settings-nav-item" type="button"><span>◌</span>无障碍</button>
+          <button class="settings-nav-item" type="button"><span>⌘</span>系统</button>
+          <button class="settings-nav-item" type="button"><span>↺</span>重置设置</button>
+          <div class="nav-divider"></div>
+          <button class="settings-nav-item" type="button"><span>⊞</span>扩展程序</button>
+          <button class="settings-nav-item" data-settings-page="about" type="button"><span>ⓘ</span>关于 Browser Lite</button>
+        </nav>
+      </aside>
 
-        <section class="card danger-card">
-          <div class="section-heading">
-            <div>
-              <p class="eyebrow">MAINTENANCE</p>
-              <h2>测试与卸载</h2>
-            </div>
-          </div>
-          <p class="maintenance-copy">重置会保留 Browser Pilot 配对，只清空 Browser Lite 浏览数据并重新进入安装向导。彻底卸载会取消配对和开机启动，并把 App 与本地数据移到废纸篓。</p>
-          <div class="maintenance-actions">
-            <button id="reset-installation" class="secondary" type="button">重置安装流程</button>
-            <button id="uninstall-app" class="danger" type="button">彻底卸载</button>
-          </div>
-        </section>
-      </main>
-    </div>
-    <nav class="browser-toolbar" aria-label="Browser Lite controls">
-      <div class="brand-compact"><span aria-hidden="true"></span><strong>Browser Lite</strong></div>
-      <span id="active-instance" class="browser-instance mono"></span>
-      <button id="show-settings" class="toolbar-settings" type="button">设置</button>
-    </nav>
+      <div class="settings-content">
+        <div class="settings-search"><span aria-hidden="true">⌕</span><input id="settings-search-input" type="search" placeholder="搜索设置" /></div>
+        <div id="settings-profile-page" class="settings-subpage">
+          <h1 id="settings-heading">个人资料</h1>
+          <section class="profile-identity">
+            <div class="profile-avatar" aria-hidden="true">B</div>
+            <strong id="profile-display-name">Browser Lite</strong>
+            <span id="import-source">本机独立 Profile</span>
+          </section>
+          <section class="settings-card setting-list chromium-setting-list">
+            <button class="setting-row settings-link-row" type="button"><span class="row-leading-icon">✎</span><span class="setting-copy"><strong>自定义个人资料</strong></span><span class="row-chevron">›</span></button>
+            <button class="setting-row settings-link-row" data-settings-page="about" type="button"><span class="row-leading-icon">↻</span><span class="setting-copy"><strong>同步功能和 Browser Pilot 服务</strong><span id="connection-pill">未配对</span></span><span class="row-chevron">›</span></button>
+            <button id="reimport-browser-data" class="setting-row settings-link-row" type="button"><span class="row-leading-icon">⇩</span><span class="setting-copy"><strong>从其他浏览器导入</strong></span><span class="row-chevron">›</span></button>
+            <div class="setting-row keep-signed-in"><span class="row-leading-icon">✓</span><span class="setting-copy"><strong>保持登录状态最新（Beta）</strong><span>让导入的浏览器登录状态在本机保持可用</span></span><span class="toggle-switch on" aria-label="已开启"></span></div>
+          </section>
+        </div>
+
+        <div id="settings-about-page" class="settings-subpage hidden">
+          <h1>关于 Browser Lite</h1>
+          <h2>Browser Pilot</h2>
+          <section class="settings-card setting-list">
+            <div class="setting-row node-heading"><div class="setting-copy"><strong>远程节点</strong><span>允许 Browser Pilot 在独立 Space 内控制网页</span></div><span id="node-id" class="mono subtle"></span></div>
+            <form id="pair-form" class="setting-row pair-form">
+              <label><span>服务地址</span><input id="server-url" type="url" value="https://bpilot.nodeskai.com" required /></label>
+              <label><span>10 位配对码</span><input id="pairing-code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{10}" minlength="10" maxlength="10" required /></label>
+              <button id="pair-button" class="primary" type="submit">配对</button>
+            </form>
+            <div id="paired-state" class="setting-row paired-state hidden"><div class="setting-copy"><strong id="node-name">Mac node</strong><span id="node-server"></span><span id="node-error" class="error" role="alert"></span></div><button id="unpair-button" class="secondary" type="button">解除配对</button></div>
+          </section>
+          <h2>浏览数据</h2>
+          <section class="settings-card setting-list">
+            <div class="setting-row import-stats"><span><strong id="imported-cookies">0</strong><small>Cookie</small></span><span><strong id="imported-bookmarks">0</strong><small>书签</small></span><span><strong id="imported-history">0</strong><small>历史</small></span></div>
+          </section>
+          <h2>版本与维护</h2>
+          <section class="settings-card setting-list">
+            <div class="setting-row"><div class="setting-copy"><strong>版本</strong><span>App <b id="app-version">—</b> · Chromium <b id="chromium-version">—</b></span></div><span class="update-state">Browser Lite 已是最新版本</span></div>
+            <details class="maintenance-card"><summary>重置与卸载</summary><p>重置会清空 Browser Lite 浏览数据并保留配对。彻底卸载会解除配对，并把 App 与数据移到废纸篓。</p><div class="maintenance-actions"><button id="reset-installation" class="secondary" type="button">重置安装</button><button id="uninstall-app" class="danger" type="button">彻底卸载</button></div></details>
+          </section>
+        </div>
+      </div>
+    </section>
+
     <script type="module" src="renderer.mjs"></script>
   </body>
 </html>

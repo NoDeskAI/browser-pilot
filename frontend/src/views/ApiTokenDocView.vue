@@ -174,9 +174,10 @@ curl -X POST http://localhost:9222/api/browser/type \\
 | | \`POST /api/browser/switch-tab\` | 切换标签页 |
 | | \`GET /api/browser/screenshot\` | 截图 |
 | Docker | \`POST /api/docker/navigate\` | 容器级导航 |
-| | \`POST /api/docker/clipboard\` | 剪贴板操作 |
+| | \`POST /api/docker/clipboard\` | 剪贴板操作（legacy Docker-only） |
 | | \`POST /api/docker/browser-lang\` | 切换浏览器语言 |
 | 会话 | \`GET /api/sessions/{id}\` | 查看会话详情 |
+| | \`POST /api/sessions/{id}/clipboard\` | 远端剪贴板发送/读取 |
 | | \`POST /api/sessions/{id}/container/start\` | 启动容器 |
 | | \`POST /api/sessions/{id}/container/stop\` | 停止容器 |
 | | \`POST /api/sessions/{id}/container/pause\` | 休眠容器 |
@@ -369,9 +370,10 @@ Session-scoped tokens can only call the following endpoints, and the \`sessionId
 | | \`POST /api/browser/switch-tab\` | Switch tab |
 | | \`GET /api/browser/screenshot\` | Take screenshot |
 | Docker | \`POST /api/docker/navigate\` | Container-level navigation |
-| | \`POST /api/docker/clipboard\` | Clipboard operations |
+| | \`POST /api/docker/clipboard\` | Clipboard operations (legacy Docker-only) |
 | | \`POST /api/docker/browser-lang\` | Switch browser language |
 | Session | \`GET /api/sessions/{id}\` | View session details |
+| | \`POST /api/sessions/{id}/clipboard\` | Paste/read remote clipboard |
 | | \`POST /api/sessions/{id}/container/start\` | Start container |
 | | \`POST /api/sessions/{id}/container/stop\` | Stop container |
 | | \`POST /api/sessions/{id}/container/pause\` | Hibernate container |

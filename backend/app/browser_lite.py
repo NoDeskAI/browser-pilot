@@ -25,6 +25,12 @@ router = APIRouter(prefix="/api/browser-lite", tags=["browser-lite"])
 
 PAIRING_TTL_SECONDS = 10 * 60
 COMMAND_TIMEOUT_SECONDS = 45
+TASK_SPACE_METHODS = frozenset({
+    "createTab", "listTabs", "listTaskSpaces", "deleteSpaces", "listProfiles", "snapshot",
+    "createTaskSpace", "claimTaskSpace", "closeTaskSpace", "useTaskSpace", "handOffTaskSpace",
+    "takeOverTaskSpace", "completeTaskSpace", "markTaskSpaceError", "setAgentTaskState",
+    "getBrowserVersion", "sendCDPMessage", "animationHighlightMouseToPosition",
+})
 PAIRING_RATE_LIMIT_WINDOW_SECONDS = 60
 PAIRING_RATE_LIMIT_ATTEMPTS = 30
 _pairing_attempts: dict[str, list[float]] = {}
@@ -69,6 +75,19 @@ class NodeConnection:
 
 
 _connections: dict[str, NodeConnection] = {}
+
+
+class BrowserLiteNodeError(RuntimeError):
+    def __init__(self, message: str, *, error_code: str | None = None, details: Any = None):
+        super().__init__(message)
+        self.error_code = error_code
+        self.details = details
+
+
+class TaskSpaceBody(BaseModel):
+    sessionId: str
+    method: str = Field(min_length=1, max_length=80)
+    args: list[Any] = Field(default_factory=list, max_length=20)
 
 
 def node_is_online(node_id: str | None) -> bool:
@@ -141,7 +160,11 @@ async def _send_local_command(
     finally:
         connection.pending.pop(request_id, None)
     if not response.get("ok"):
-        raise RuntimeError(response.get("error") or f"Browser Lite node request failed: {action}")
+        raise BrowserLiteNodeError(
+            response.get("error") or f"Browser Lite node request failed: {action}",
+            error_code=response.get("errorCode"),
+            details=response.get("details"),
+        )
     return response.get("result")
 
 
@@ -333,6 +356,38 @@ async def webdriver_request(
     }
 
 
+async def task_space_command(
+    session_id: str,
+    method: str,
+    *args: Any,
+    timeout: float = COMMAND_TIMEOUT_SECONDS,
+) -> Any:
+    if method not in TASK_SPACE_METHODS:
+        raise ValueError(f"Unknown Browser Lite task-space method: {method}")
+    return await session_command(
+        session_id,
+        "task_space",
+        payload={"method": method, "args": list(args)},
+        timeout=timeout,
+    )
+
+
+@router.post("/task-spaces/command")
+async def task_space_api(body: TaskSpaceBody, user: CurrentUser = Depends(get_current_user)):
+    node = await session_node(body.sessionId)
+    if node.get("tenant_id") != user.tenant_id:
+        raise HTTPException(status_code=404, detail="Browser Lite session not found")
+    try:
+        return await task_space_command(body.sessionId, body.method, *body.args)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except BrowserLiteNodeError as exc:
+        raise HTTPException(
+            status_code=409 if exc.error_code in {"EGO_TASK_SPACE_USER_IN_CONTROL", "EGO_TASK_SPACE_INACTIVE"} else 502,
+            detail={"message": str(exc), "errorCode": exc.error_code, "details": exc.details},
+        ) from exc
+
+
 async def session_is_browser_lite(session_id: str) -> bool:
     row = await get_pool().fetchrow(
         "SELECT COALESCE(browser_runtime, 'standard_chrome') AS browser_runtime FROM sessions WHERE id = $1",
@@ -501,14 +556,21 @@ async def connect_node(websocket: WebSocket):
             elif message_type in {"heartbeat", "hello"}:
                 await _set_node_status(node_id, "online")
                 if message_type == "hello":
+                    capabilities = message.get("capabilities")
+                    if not isinstance(capabilities, list) or not all(isinstance(value, str) for value in capabilities):
+                        capabilities = []
+                    capabilities = capabilities[:30]
                     await get_pool().execute(
                         """
                         UPDATE browser_lite_nodes
-                        SET app_version = $1, chromium_version = $2, updated_at = NOW()
-                        WHERE id = $3
+                        SET app_version = $1, chromium_version = $2,
+                            capabilities = CASE WHEN $3::jsonb = '[]'::jsonb THEN capabilities ELSE $3::jsonb END,
+                            updated_at = NOW()
+                        WHERE id = $4
                         """,
                         str(message.get("appVersion") or ""),
                         str(message.get("chromiumVersion") or ""),
+                        capabilities,
                         node_id,
                     )
     except WebSocketDisconnect:
