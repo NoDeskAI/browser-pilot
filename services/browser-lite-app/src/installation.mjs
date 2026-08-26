@@ -777,7 +777,8 @@ void updateBadge();
   }
 
   async seedRuntimeCookies(instanceId, state) {
-    const marker = join(this.instanceProfilePath(instanceId), ".browser-lite-cookies-seeded");
+    const runtimeKind = state?.runtimeKind === "embedded" ? "embedded" : "native";
+    const marker = join(this.instanceProfilePath(instanceId), `.browser-lite-${runtimeKind}-cookies-seeded-v1`);
     if (await pathExists(marker)) return 0;
     const cookies = await this.loadCookieSeed().catch(() => []);
     let imported;
@@ -817,7 +818,7 @@ void updateBadge();
   }
 
   async startUrl() {
-    return "chrome://newtab/";
+    return "about:blank";
   }
 
   async resetData({ preservePairing = true } = {}) {

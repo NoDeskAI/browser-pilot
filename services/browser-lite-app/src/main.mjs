@@ -309,7 +309,7 @@ app.on("before-quit", (event) => {
   globalShortcut.unregisterAll();
   nodeAgent?.disconnect();
   Promise.resolve(manager?.shutdown()).catch((error) => {
-    console.error("Browser Lite failed to stop Chromium cleanly", error);
+    console.error("Browser Lite failed to stop embedded browser views cleanly", error);
   }).finally(() => {
     shutdownComplete = true;
     app.quit();
@@ -317,7 +317,6 @@ app.on("before-quit", (event) => {
 });
 
 async function bootstrap() {
-  app.dock?.hide();
   if (app.isPackaged && !isTestBuild) {
     app.setLoginItemSettings({ openAtLogin: true, openAsHidden: true });
   }
@@ -351,6 +350,7 @@ async function bootstrap() {
   else await manager.showSettings();
   if (installation.isComplete() && app.isPackaged && !isTestBuild && app.getLoginItemSettings().wasOpenedAtLogin) {
     dashboardWindow.hide();
+    app.dock?.hide();
   }
   emitState();
 }

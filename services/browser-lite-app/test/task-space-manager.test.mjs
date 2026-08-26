@@ -197,7 +197,7 @@ test("WebDriver requests hard stop while the user controls an agent space", asyn
   );
 });
 
-test("closing a Space stops native Chromium instead of only minimizing it", async () => {
+test("closing a Space stops its embedded browser view instead of only hiding it", async () => {
   const taskSpaces = createTaskSpaces();
   const created = await taskSpaces.createUserTaskSpace("close-me");
   await taskSpaces.closeForUser(created.id);

@@ -6,12 +6,12 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
-test("app manifest is arm64 DMG buildable with a native Chromium runtime", async () => {
+test("app manifest is arm64 DMG buildable with embedded Electron Chromium", async () => {
   const manifest = JSON.parse(await readFile(join(ROOT, "package.json"), "utf8"));
   assert.equal(manifest.main, "src/main.mjs");
   assert.match(manifest.devDependencies.electron, /^43\./);
   assert.equal(manifest.scripts["build:dmg"], "node scripts/build-dmg.mjs");
-  assert.equal(manifest.version, "0.5.0");
+  assert.equal(manifest.version, "0.5.1");
 });
 
 test("renderer has a restrictive content security policy", async () => {
@@ -28,15 +28,18 @@ test("sandboxed preload uses the Electron-supported CommonJS format", async () =
   assert.match(preload, /contextBridge\.exposeInMainWorld/);
 });
 
-test("spaces and settings use the controller window while Spaces open native Chromium", async () => {
+test("Spaces stay inside the single Browser Lite window", async () => {
   const main = await readFile(join(ROOT, "src", "main.mjs"), "utf8");
   const runtime = await readFile(join(ROOT, "src", "electron-runtime.mjs"), "utf8");
   const html = await readFile(join(ROOT, "src", "renderer", "index.html"), "utf8");
   assert.equal((main.match(/new BrowserWindow\(/g) || []).length, 1);
   assert.doesNotMatch(runtime, /new BrowserWindow\(/);
-  assert.match(runtime, /const state = new BrowserLiteState\(config\)/);
-  assert.match(runtime, /this\.hostWindow\.hide\(\)/);
-  assert.match(runtime, /startUrl: "chrome:\/\/newtab\/"/);
+  assert.match(runtime, /const state = new ElectronBrowserLiteState\(config/);
+  assert.match(runtime, /new WebContentsView\(/);
+  assert.match(runtime, /this\.config\.hostWindow\.contentView\.addChildView\(view\)/);
+  assert.match(runtime, /startUrl: "about:blank"/);
+  assert.doesNotMatch(runtime, /this\.hostWindow\.hide\(\)/);
+  assert.doesNotMatch(runtime, /nativeChromiumBinary|onNativeBrowserExit|--load-extension/);
   assert.match(main, /browser-lite:show-settings/);
   assert.match(main, /browser-lite:show-spaces/);
   assert.doesNotMatch(html, /id="show-spaces"/);
@@ -54,7 +57,7 @@ test("Dock and status item restore the main workspace while right click exposes 
   assert.doesNotMatch(main, /tray\.setContextMenu/);
 });
 
-test("renderer follows the Ego Lite overview and the runtime exposes native Chromium previews", async () => {
+test("renderer follows the Ego Lite overview and embedded views expose previews", async () => {
   const html = await readFile(join(ROOT, "src", "renderer", "index.html"), "utf8");
   const css = await readFile(join(ROOT, "src", "renderer", "styles.css"), "utf8");
   const runtime = await readFile(join(ROOT, "src", "electron-runtime.mjs"), "utf8");
@@ -67,11 +70,12 @@ test("renderer follows the Ego Lite overview and the runtime exposes native Chro
   assert.match(css, /\.spaces-topbar\s*>\s*\.round-count\s*\{[^}]*top:\s*9px;\s*right:\s*14px/);
   assert.match(css, /\.tab-strip>\.round-count\s*\{[^}]*top:9px;\s*right:14px/);
   assert.match(css, /--toolbar-height:\s*112px/);
-  assert.match(runtime, /nativeChromiumBinary\(\)/);
-  assert.match(runtime, /BrowserLiteState/);
+  assert.match(runtime, /ElectronBrowserLiteState/);
+  assert.match(runtime, /window\.webContents\.debugger\.sendCommand/);
+  assert.match(runtime, /view\.setVisible\(this\.visible && id === this\.activeTargetId\)/);
 });
 
-test("Task Space workspace delegates tabs and navigation to native Chromium", async () => {
+test("Task Space workspace delegates tabs and navigation to embedded views", async () => {
   const main = await readFile(join(ROOT, "src", "main.mjs"), "utf8");
   const preload = await readFile(join(ROOT, "src", "preload.cjs"), "utf8");
   const renderer = await readFile(join(ROOT, "src", "renderer", "renderer.mjs"), "utf8");
@@ -94,7 +98,7 @@ test("Task Space workspace delegates tabs and navigation to native Chromium", as
   assert.match(runtime, /TASK_CONTROL_RESERVE/);
   assert.match(css, /prefers-reduced-motion/);
   assert.match(css, /focus-visible/);
-  assert.match(runtime, /new BrowserLiteState\(config\)/);
+  assert.match(runtime, /new ElectronBrowserLiteState\(config/);
   assert.match(await readFile(join(ROOT, "src", "task-space-manager.mjs"), "utf8"), /await state\.stopLoading\(\)/);
 });
 
@@ -115,7 +119,7 @@ test("first launch requires an installation decision before browser startup", as
   assert.match(installation, /SELECT url, title FROM top_sites ORDER BY url_rank ASC LIMIT 7/);
   assert.match(installation, /captureChromiumSeed/);
   assert.match(installation, /Chromium User Data/);
-  assert.match(installation, /return "chrome:\/\/newtab\/"/);
+  assert.match(installation, /return "about:blank"/);
   assert.doesNotMatch(installation, /data:text\/html/);
   assert.doesNotMatch(installation, /radial-gradient\(circle at 80% -10%/);
   assert.match(html, /id="installer"/);
@@ -124,33 +128,26 @@ test("first launch requires an installation decision before browser startup", as
   assert.match(html, /<strong>密码<\/strong><small>暂不支持<\/small>/);
 });
 
-test("native Chromium pins a Space-count button that returns to the overview", async () => {
+test("the Browser Lite shell owns the stable Space-count button", async () => {
   const main = await readFile(join(ROOT, "src", "main.mjs"), "utf8");
-  const installation = await readFile(join(ROOT, "src", "installation.mjs"), "utf8");
-  const runtime = await readFile(join(ROOT, "..", "browser-lite-runtime", "browser-lite.mjs"), "utf8");
+  const html = await readFile(join(ROOT, "src", "renderer", "index.html"), "utf8");
+  const renderer = await readFile(join(ROOT, "src", "renderer", "renderer.mjs"), "utf8");
+  const runtime = await readFile(join(ROOT, "src", "electron-runtime.mjs"), "utf8");
+  const build = await readFile(join(ROOT, "scripts", "build-dmg.mjs"), "utf8");
   assert.match(main, /globalShortcut\.register\("Alt\+S"/);
-  assert.match(installation, /pinned_extensions[\s\S]*filter\(\(id\) => id !== BROWSER_LITE_EXTENSION_ID\)[\s\S]*BROWSER_LITE_EXTENSION_ID/);
-  assert.match(installation, /importedPinnedExtensions/);
-  assert.match(installation, /CHROMIUM_SESSION_ITEMS\.has\(first\)/);
-  assert.match(installation, /chrome\.action\.onClicked/);
-  assert.match(installation, /chrome\.action\.setBadgeText/);
-  assert.match(runtime, /\/browser-lite\/show-spaces/);
-  assert.match(runtime, /\/browser-lite\/space-count/);
-  assert.match(runtime, /--load-extension=/);
-  assert.match(installation, /importedExtensionPaths/);
-  assert.match(await readFile(join(ROOT, "scripts", "build-dmg.mjs"), "utf8"), /BROWSER_LITE_CHROMIUM_APP/);
-  assert.match(await readFile(join(ROOT, "src", "electron-runtime.mjs"), "utf8"), /seedRuntimeCookies/);
-  assert.match(await readFile(join(ROOT, "src", "electron-runtime.mjs"), "utf8"), /resetImportedExtensionStartupTabs/);
-  assert.match(await readFile(join(ROOT, "src", "electron-runtime.mjs"), "utf8"), /wasStopped[\s\S]*onboardingUrls/);
+  assert.match(html, /id="browser-space-count"/);
+  assert.match(renderer, /countButton\.addEventListener\("click"[\s\S]*showSpaces\(\)/);
+  assert.match(runtime, /await app\.dock\?\.show\(\);[\s\S]*this\.hostWindow\.show\(\)/);
+  assert.doesNotMatch(runtime, /prepareRuntimeExtension|extensionPath|controlToken/);
+  assert.doesNotMatch(build, /BROWSER_LITE_CHROMIUM_APP|bundledChromiumRoot|brandBundledChromium/);
 });
 
-test("native Chromium matches Ego Lite bookmark chrome without testing disclaimers", async () => {
-  const installation = await readFile(join(ROOT, "src", "installation.mjs"), "utf8");
-  const runtime = await readFile(join(ROOT, "..", "browser-lite-runtime", "browser-lite.mjs"), "utf8");
-  assert.match(installation, /bookmark_bar\.show_on_all_tabs = true/);
-  assert.match(installation, /profile\.exit_type = "Normal"/);
-  assert.match(installation, /profile\.exited_cleanly = true/);
-  assert.match(runtime, /"--disable-infobars"/);
+test("embedded Browser Lite keeps bookmarks and browser chrome in its shell", async () => {
+  const html = await readFile(join(ROOT, "src", "renderer", "index.html"), "utf8");
+  const renderer = await readFile(join(ROOT, "src", "renderer", "renderer.mjs"), "utf8");
+  assert.match(html, /id="browser-chrome"/);
+  assert.match(html, /id="browser-bookmarks"/);
+  assert.match(renderer, /elements\.browserBookmarks\.innerHTML = markup/);
 });
 
 test("settings expose recoverable reset and uninstall flows", async () => {
@@ -191,31 +188,24 @@ test("task-space capability is refreshed on reconnect and uses an allowlisted co
 
 test("DMG staging preserves Electron framework relative symlinks", async () => {
   const source = await readFile(join(ROOT, "scripts", "build-dmg.mjs"), "utf8");
-  assert.match(source, /EGO_COMPATIBLE_CHROMIUM_VERSION = "150\.0\.7871\.224"/);
-  assert.match(source, /verifyChromiumVersion\(chromiumAppPath\)/);
   assert.match(source, /verbatimSymlinks:\s*true/);
   assert.match(source, /BROWSER_LITE_TEST_BUILD: "1"/);
   assert.match(source, /Browser-Lite-\$\{packageManifest\.version\}-arm64\.dmg/);
   assert.match(source, /"--force", "--deep", "--sign", identity \|\| "-"/);
 });
 
-test("Electron is a background controller while bundled Chromium owns the Browser Lite Dock identity", async () => {
+test("Browser Lite owns its Dock identity and never packages an external Chromium app", async () => {
   const build = await readFile(join(ROOT, "scripts", "build-dmg.mjs"), "utf8");
   const main = await readFile(join(ROOT, "src", "main.mjs"), "utf8");
-  assert.match(build, /LSUIElement:\s*true/);
-  assert.match(build, /async function brandBundledChromium/);
-  assert.match(build, /com\.nodeskai\.browserlite\.chromium/);
-  assert.match(build, /CFBundleIconFile/);
-  assert.match(build, /join\(bundledChromiumRoot, `\$\{APP_NAME\}\.app`\)/);
-  assert.doesNotMatch(build, /LSUIElement[^\n]*Google Chrome for Testing/);
+  assert.match(build, /LSUIElement:\s*false/);
+  assert.match(build, /chromiumRuntime: "embedded Electron WebContentsView"/);
+  assert.doesNotMatch(build, /brandBundledChromium|com\.nodeskai\.browserlite\.chromium|Google Chrome for Testing/);
   assert.match(main, /app\.dock\?\.hide\(\)/);
-  assert.match(main, /app\.focus\(\{ steal: true \}\)/);
+  assert.match(main, /wasOpenedAtLogin[\s\S]*dashboardWindow\.hide\(\);[\s\S]*app\.dock\?\.hide\(\)/);
   const runtime = await readFile(join(ROOT, "src", "electron-runtime.mjs"), "utf8");
-  assert.match(runtime, /chromium", "Browser Lite\.app", "Contents", "MacOS", "Google Chrome for Testing"/);
-  assert.match(runtime, /async updateControllerDock\(\)/);
-  assert.match(runtime, /if \(this\.hasNativeDockOwner\(\)\) app\.dock\.hide\(\)/);
-  assert.match(runtime, /else await app\.dock\.show\(\)/);
-  assert.equal((runtime.match(/app\.focus\(\{ steal: true \}\)/g) || []).length, 2);
+  assert.match(runtime, /new WebContentsView\(/);
+  assert.match(runtime, /await app\.dock\?\.show\(\)/);
+  assert.doesNotMatch(runtime, /nativeChromiumBinary|updateControllerDock|hostWindow\.hide\(\)/);
 });
 
 test("packaged app registers as a persistent login item", async () => {
@@ -225,22 +215,17 @@ test("packaged app registers as a persistent login item", async () => {
   assert.match(source, /installation\.isComplete\(\) && app\.isPackaged && !isTestBuild/);
 });
 
-test("application exit waits for native Chromium instances to stop", async () => {
+test("application exit waits for embedded views and local servers to stop", async () => {
   const source = await readFile(join(ROOT, "src", "main.mjs"), "utf8");
   const manager = await readFile(join(ROOT, "src", "electron-runtime.mjs"), "utf8");
-  const runtime = await readFile(join(ROOT, "..", "browser-lite-runtime", "browser-lite.mjs"), "utf8");
   assert.match(source, /app\.on\("before-quit", \(event\) =>/);
   assert.match(source, /event\.preventDefault\(\)/);
   assert.match(source, /Promise\.resolve\(manager\?\.shutdown\(\)\)/);
   assert.match(source, /shutdownComplete = true;[\s\S]*app\.quit\(\)/);
   assert.doesNotMatch(source, /app\.on\("will-quit"[\s\S]*manager\?\.shutdown/);
-  assert.match(runtime, /process\.kill\(chromePid, "SIGTERM"\)/);
-  assert.match(runtime, /process\.kill\(chromePid, "SIGKILL"\)/);
-  assert.match(runtime, /async stop\(\)[\s\S]*this\.stopped = true;[\s\S]*Browser\.close/);
-  assert.match(runtime, /async ensureConnected\(\)[\s\S]*if \(this\.stopped\) throw/);
-  const ensureConnected = runtime.match(/async ensureConnected\(\) \{[\s\S]*?\n  \}\n\n  async targets/)?.[0] || "";
-  assert.doesNotMatch(ensureConnected, /await this\.start\(\)/);
-  assert.match(manager, /onNativeBrowserExit:[\s\S]*app\.quit\(\)/);
+  assert.match(manager, /async stop\(\)[\s\S]*this\.destroyView\(targetId\)/);
+  assert.match(manager, /async shutdown\(\)[\s\S]*entry\.state\.stop\(\)[\s\S]*entry\.server\.close/);
+  assert.doesNotMatch(manager, /onNativeBrowserExit|process\.kill|Browser\.close/);
 });
 
 test("packaged app supports one-time command-line pairing without accepting a node token", async () => {

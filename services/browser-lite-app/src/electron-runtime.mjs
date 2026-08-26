@@ -1,35 +1,13 @@
 import { app, session, WebContentsView } from "electron";
-import { createServer } from "node:http";
-import { existsSync } from "node:fs";
-import { mkdir } from "node:fs/promises";
-import { randomBytes } from "node:crypto";
+import { mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 
-let runtimeModulePromise;
-
-async function runtimeModule() {
-  if (!runtimeModulePromise) {
-    const modulePath = app.isPackaged
-      ? join(process.resourcesPath, "browser-lite-runtime", "browser-lite.mjs")
-      : join(app.getAppPath(), "..", "browser-lite-runtime", "browser-lite.mjs");
-    runtimeModulePromise = import(modulePath);
-  }
-  return runtimeModulePromise;
-}
+import { createBrowserLiteServer } from "./webdriver-server.mjs";
 
 function safeInstanceId(value) {
   const normalized = String(value ?? "browser_lite").replace(/[^A-Za-z0-9._-]/g, "-");
   if (!/^[A-Za-z0-9]/.test(normalized)) return `instance-${normalized}`;
   return normalized.slice(0, 64);
-}
-
-function nativeChromiumBinary() {
-  const bundledCandidates = [
-    join(process.resourcesPath, "chromium", "Browser Lite.app", "Contents", "MacOS", "Google Chrome for Testing"),
-    join(process.resourcesPath, "chromium", "Google Chrome for Testing.app", "Contents", "MacOS", "Google Chrome for Testing"),
-    join(process.resourcesPath, "chromium", "Chromium.app", "Contents", "MacOS", "Chromium"),
-  ];
-  return bundledCandidates.find((candidate) => existsSync(candidate));
 }
 
 export const APP_BAR_HEIGHT = 112;
@@ -40,12 +18,13 @@ function targetIdFor(view) {
 }
 
 function userVisibleUrl(url, startUrl) {
-  return url === startUrl && url.startsWith("data:text/html") ? "" : url;
+  return url === "about:blank" || url === startUrl ? "" : url;
 }
 
 export class ElectronBrowserLiteState {
   constructor(config, { onChanged } = {}) {
     this.config = config;
+    this.runtimeKind = "embedded";
     this.sessionId = `browser-lite-${config.instanceId}`;
     this.browserVersion = `Chromium/${process.versions.chrome}`;
     this.startedAt = null;
@@ -171,7 +150,10 @@ export class ElectronBrowserLiteState {
     for (const [id, view] of this.liveWindows()) {
       try { view.setVisible(this.visible && id === this.activeTargetId); } catch { this.windows.delete(id); }
     }
-    if (this.visible) this.windowForTarget()?.webContents.focus();
+    if (this.visible) {
+      this.layout();
+      this.windowForTarget()?.webContents.focus();
+    }
   }
 
   destroyView(targetId) {
@@ -303,7 +285,8 @@ export class ElectronBrowserLiteState {
     if (!window) throw new Error(`Unknown Browser Lite target: ${selectedTarget}`);
     this.activeTargetId = selectedTarget;
     this.onActivate?.(this.config.instanceId, selectedTarget);
-    window.webContents.focus();
+    if (this.visible) this.setVisible(true, selectedTarget);
+    else window.webContents.focus();
     return selectedTarget;
   }
 
@@ -517,13 +500,66 @@ export class ElectronBrowserLiteState {
     }));
   }
 
-  async addCookie(cookie) {
-    const params = { name: cookie.name, value: cookie.value, url: await this.currentUrl() };
-    for (const key of ["domain", "path", "secure", "httpOnly", "sameSite"]) {
+  cookieParams(cookie, fallbackUrl = "") {
+    if (!cookie || typeof cookie.name !== "string" || typeof cookie.value !== "string") {
+      throw new Error("cookie must include string name and value");
+    }
+    const domainUrl = cookie.domain
+      ? `${cookie.secure ? "https" : "http"}://${String(cookie.domain).replace(/^\./, "")}${cookie.path || "/"}`
+      : "";
+    const params = {
+      name: cookie.name,
+      value: cookie.value,
+      url: cookie.url || fallbackUrl || domainUrl,
+    };
+    for (const key of ["domain", "path", "secure", "httpOnly"]) {
       if (cookie[key] !== undefined) params[key] = cookie[key];
     }
-    if (cookie.expiry !== undefined) params.expires = Number(cookie.expiry);
-    await this.sendPage("Network.setCookie", params);
+    const sameSite = {
+      no_restriction: "None",
+      lax: "Lax",
+      strict: "Strict",
+      None: "None",
+      Lax: "Lax",
+      Strict: "Strict",
+    }[cookie.sameSite];
+    if (sameSite) params.sameSite = sameSite;
+    if (cookie.expiry !== undefined || cookie.expirationDate !== undefined) {
+      params.expires = Number(cookie.expiry ?? cookie.expirationDate);
+    }
+    return params;
+  }
+
+  async addCookie(cookie) {
+    const params = this.cookieParams(cookie, cookie?.url ? "" : await this.currentUrl());
+    const result = await this.sendPage("Network.setCookie", params);
+    if (result.success === false) throw new Error("Embedded Chromium rejected cookie");
+  }
+
+  async addCookies(cookies) {
+    if (!Array.isArray(cookies)) throw new Error("cookies must be an array");
+    const needsFallbackUrl = cookies.some((cookie) => !cookie?.url && !cookie?.domain);
+    const fallbackUrl = needsFallbackUrl ? await this.currentUrl() : "";
+    const normalized = [];
+    for (const cookie of cookies) {
+      try { normalized.push(this.cookieParams(cookie, fallbackUrl)); } catch {}
+    }
+    let imported = 0;
+    for (let offset = 0; offset < normalized.length; offset += 100) {
+      const chunk = normalized.slice(offset, offset + 100);
+      try {
+        await this.sendPage("Network.setCookies", { cookies: chunk });
+        imported += chunk.length;
+      } catch {
+        for (const params of chunk) {
+          try {
+            const result = await this.sendPage("Network.setCookie", params);
+            if (result.success !== false) imported += 1;
+          } catch {}
+        }
+      }
+    }
+    return imported;
   }
 
   async deleteCookie(name = undefined) {
@@ -564,6 +600,7 @@ export class ElectronBrowserLiteState {
     const partitionSession = session.fromPartition(this.partition);
     await partitionSession.clearCache();
     await partitionSession.clearStorageData();
+    await rm(this.config.profileDir, { recursive: true, force: true });
   }
 
   async runtimeStatus() {
@@ -580,7 +617,8 @@ export class ElectronBrowserLiteState {
       browserVersion: this.browserVersion,
       chromiumVersion: process.versions.chrome,
       electronVersion: process.versions.electron,
-      bundledChromium: true,
+      bundledChromium: false,
+      embedded: true,
       startedAt: this.startedAt,
       activeTargetId: this.activeTargetId,
       tabCount: targets.length,
@@ -637,16 +675,6 @@ export class BrowserLiteManager {
     };
   }
 
-  hasNativeDockOwner() {
-    return [...this.instances.values()].some((entry) => !entry.state.stopped);
-  }
-
-  async updateControllerDock() {
-    if (!app.dock) return;
-    if (this.hasNativeDockOwner()) app.dock.hide();
-    else await app.dock.show();
-  }
-
   async showSpaces() {
     await Promise.all([...this.instances.values()].map((entry) => entry.state.capturePreview?.()));
     await Promise.all([...this.instances.values()].map((entry) => entry.state.setVisible(false)));
@@ -654,7 +682,7 @@ export class BrowserLiteManager {
     this.viewMode = "spaces";
     this.hostWindow.setTitle("Browser Lite");
     this.hostWindow.setContentSize(...this.modeContentSizes.spaces);
-    await this.updateControllerDock();
+    await app.dock?.show();
     this.hostWindow.show();
     app.focus({ steal: true });
     this.hostWindow.focus();
@@ -667,7 +695,7 @@ export class BrowserLiteManager {
     this.viewMode = "settings";
     this.hostWindow.setTitle(this.installation?.isComplete() ? "Browser Lite — 设置" : "Browser Lite — 安装");
     this.hostWindow.setContentSize(...this.modeContentSizes.settings);
-    await this.updateControllerDock();
+    await app.dock?.show();
     this.hostWindow.show();
     app.focus({ steal: true });
     this.hostWindow.focus();
@@ -678,11 +706,15 @@ export class BrowserLiteManager {
     const id = safeInstanceId(instanceId ?? this.activeInstanceId);
     const entry = this.instances.get(id);
     if (!entry) return false;
-    app.dock?.hide();
-    await Promise.all([...this.instances].map(([otherId, other]) => other.state.setVisible(otherId === id)));
     this.activeInstanceId = id;
     this.viewMode = "browser";
-    this.hostWindow.hide();
+    this.hostWindow.setTitle(`Browser Lite — ${id}`);
+    await app.dock?.show();
+    this.hostWindow.show();
+    app.focus({ steal: true });
+    this.hostWindow.focus();
+    this.layout();
+    await Promise.all([...this.instances].map(([otherId, other]) => other.state.setVisible(otherId === id)));
     this.onChanged?.();
     return true;
   }
@@ -692,33 +724,23 @@ export class BrowserLiteManager {
     let entry = this.instances.get(id);
     if (!entry) {
       await this.installation?.prepareInstance(id);
-      const { BrowserLiteState, createBrowserLiteServer } = await runtimeModule();
       const profileDir = join(app.getPath("userData"), "Instances", id);
-      const chromeBin = nativeChromiumBinary();
-      const controlToken = randomBytes(24).toString("hex");
       const config = {
         host: "127.0.0.1",
         port: Number(options.port ?? 0),
         instanceId: id,
         profileDir,
         dataRoot: app.getPath("userData"),
-        startUrl: "chrome://newtab/",
+        startUrl: "about:blank",
         profileDirectory: this.installation?.profileDirectory?.() || "Default",
-        ...(chromeBin ? { chromeBin, bundledChromium: true } : { bundledChromium: false }),
+        hostWindow: this.hostWindow,
+        browserBounds: () => this.browserBounds(),
         onChanged: () => this.onChanged?.(),
-        onNativeBrowserExit: (details) => {
-          console.info("Browser Lite native Chromium exited; closing its controller", details);
-          app.quit();
-        },
         appVersion: app.getVersion(),
-        controlToken,
-        getSpaceCount: () => Number(this.getSpaceCount?.() || 0),
-        onShowSpaces: () => this.showSpaces(),
         width: Math.max(320, Number(options.width) || 1280),
         height: Math.max(240, Number(options.height) || 800),
       };
-      const state = new BrowserLiteState(config);
-      const extensionStartup = await this.installation?.extensionStartupState(id);
+      const state = new ElectronBrowserLiteState(config, { onChanged: config.onChanged });
       const server = createBrowserLiteServer(state);
       await new Promise((resolveListen, rejectListen) => {
         server.once("error", rejectListen);
@@ -726,19 +748,12 @@ export class BrowserLiteManager {
       });
       const address = server.address();
       config.port = typeof address === "object" && address ? address.port : config.port;
-      config.extensionPath = await this.installation?.prepareRuntimeExtension(id, config.port, controlToken);
       try {
-        app.dock?.hide();
         await state.start();
         await this.installation?.seedRuntimeCookies(id, state);
-        if (this.installation?.state?.mode === "imported" && typeof state.resetImportedExtensionStartupTabs === "function") {
-          const cleanup = await state.resetImportedExtensionStartupTabs(extensionStartup?.onboardingUrls);
-          await this.installation?.markExtensionStartupInitialized(id, cleanup);
-        }
         await state.setVisible(false);
       } catch (error) {
         await new Promise((resolveClose) => server.close(resolveClose));
-        if (this.viewMode !== "browser") await app.dock?.show();
         throw error;
       }
       entry = { id, state, server, baseUrl: `http://${config.host}:${config.port}` };
@@ -747,14 +762,7 @@ export class BrowserLiteManager {
     } else {
       if (Number(options.width) >= 320) entry.state.config.width = Number(options.width);
       if (Number(options.height) >= 240) entry.state.config.height = Number(options.height);
-      const wasStopped = entry.state.stopped;
-      app.dock?.hide();
       await entry.state.resume();
-      if (wasStopped && this.installation?.state?.mode === "imported" && typeof entry.state.resetImportedExtensionStartupTabs === "function") {
-        const extensionStartup = await this.installation.extensionStartupState(id);
-        const cleanup = await entry.state.resetImportedExtensionStartupTabs(extensionStartup?.onboardingUrls);
-        await this.installation.markExtensionStartupInitialized(id, cleanup);
-      }
     }
     return entry;
   }
@@ -788,7 +796,6 @@ export class BrowserLiteManager {
     const entry = this.instances.get(id);
     if (entry) await entry.state.stop();
     if (this.viewMode === "browser" && this.activeInstanceId === id) await this.showSpaces();
-    else await this.updateControllerDock();
   }
 
   async remove(instanceId) {
@@ -801,7 +808,7 @@ export class BrowserLiteManager {
     if (this.activeInstanceId === id) {
       this.activeInstanceId = null;
       await this.showSpaces();
-    } else await this.updateControllerDock();
+    }
     this.onChanged?.();
   }
 
