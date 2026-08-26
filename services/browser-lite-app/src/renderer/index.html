@@ -51,6 +51,7 @@
       <div class="tab-strip">
         <strong id="workspace-title" class="sr-only">Browser Lite</strong>
         <div id="browser-tabs" class="browser-tabs" role="tablist"></div>
+        <button id="new-tab-group" class="chrome-icon add-tab-group" type="button" aria-label="将当前标签页添加到新标签组" title="新建标签组">●＋</button>
         <button id="new-tab" class="chrome-icon add-tab" type="button" aria-label="新建标签页">＋</button>
         <span class="tab-strip-spacer"></span>
         <button id="browser-space-count" class="round-count notification-count" type="button" title="返回 Space 总览" aria-label="返回 Space 总览">0</button>
@@ -65,11 +66,13 @@
           <input id="address-input" autocomplete="off" spellcheck="false" placeholder="在 Google 中搜索，或者输入一个网址" />
         </form>
         <button class="chrome-icon star-control" type="button" aria-label="收藏此标签页">☆</button>
-        <button class="chrome-icon" type="button" aria-label="扩展程序">◫</button>
+        <div id="pinned-extensions" class="pinned-extensions" aria-label="已固定的扩展程序"></div>
+        <button id="extensions-menu-button" class="chrome-icon extensions-control" type="button" aria-label="扩展程序" title="扩展程序">♟</button>
         <button class="chrome-icon profile-control" type="button" aria-label="个人资料">逍</button>
         <button class="chrome-icon menu-dots" type="button" aria-label="更多">⋮</button>
       </div>
-      <div id="browser-bookmarks" class="bookmarks-bar"></div>
+      <div id="browser-bookmarks" class="bookmarks-bar" role="toolbar" aria-label="书签栏"></div>
+      <div id="chrome-popover" class="chrome-popover hidden" role="dialog" aria-live="polite"></div>
     </header>
 
     <section id="task-control-bar" class="task-control-bar hidden" aria-label="Agent 任务控制">

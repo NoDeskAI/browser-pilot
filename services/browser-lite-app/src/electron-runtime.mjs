@@ -12,6 +12,7 @@ function safeInstanceId(value) {
 
 export const APP_BAR_HEIGHT = 112;
 export const TASK_CONTROL_RESERVE = 105;
+export const CHROME_MENU_RESERVE = 286;
 
 function targetIdFor(view) {
   return `electron-${view.webContents.id}`;
@@ -19,6 +20,37 @@ function targetIdFor(view) {
 
 function userVisibleUrl(url, startUrl) {
   return url === "about:blank" || url === startUrl ? "" : url;
+}
+
+const TAB_GROUP_COLORS = new Set(["grey", "blue", "red", "yellow", "green", "pink", "purple", "cyan", "orange"]);
+
+function restoredUrl(value) {
+  try {
+    const url = new URL(String(value || "about:blank"));
+    return ["http:", "https:", "about:", "chrome-extension:"].includes(url.protocol) ? url.toString() : "about:blank";
+  } catch {
+    return "about:blank";
+  }
+}
+
+function closeServer(server) {
+  return new Promise((resolveClose) => {
+    let finished = false;
+    let timeoutId;
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timeoutId);
+      resolveClose();
+    };
+    timeoutId = setTimeout(finish, 1_500);
+    try {
+      server.close(finish);
+      server.closeAllConnections?.();
+    } catch {
+      finish();
+    }
+  });
 }
 
 export class ElectronBrowserLiteState {
@@ -40,6 +72,13 @@ export class ElectronBrowserLiteState {
     this.visible = false;
     this.preview = { capturedAt: 0, dataUrl: "" };
     this.partition = `persist:browser-lite-${safeInstanceId(config.instanceId)}`;
+    this.extensionDescriptors = [];
+    this.extensionRuntime = new Map();
+    this.extensionsLoaded = false;
+    this.tabGroups = new Map();
+    this.tabGroupByTarget = new Map();
+    this.nextTabGroupId = 1;
+    this.sessionStateRestored = false;
   }
 
   async start() {
@@ -64,7 +103,7 @@ export class ElectronBrowserLiteState {
     this.onChanged?.();
   }
 
-  async createWindow(url = "about:blank") {
+  async createWindow(url = "about:blank", { groupId = "" } = {}) {
     const view = new WebContentsView({
       webPreferences: {
         partition: this.partition,
@@ -84,9 +123,11 @@ export class ElectronBrowserLiteState {
       + `AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${process.versions.chrome} Safari/537.36`,
     );
     this.windows.set(targetId, view);
+    if (groupId && this.tabGroups.has(groupId)) this.tabGroupByTarget.set(targetId, groupId);
     this.activeTargetId = targetId;
     view.webContents.on("destroyed", () => {
       this.windows.delete(targetId);
+      this.removeTargetFromGroup(targetId);
       if (this.activeTargetId === targetId) this.activeTargetId = [...this.windows.keys()].at(-1) ?? null;
       this.notifyChanged();
     });
@@ -108,6 +149,12 @@ export class ElectronBrowserLiteState {
     if (this.visible) this.setVisible(true, targetId);
     this.notifyChanged();
     return { targetId, window: view };
+  }
+
+  removeTargetFromGroup(targetId) {
+    const groupId = this.tabGroupByTarget.get(targetId);
+    this.tabGroupByTarget.delete(targetId);
+    if (groupId && ![...this.tabGroupByTarget.values()].includes(groupId)) this.tabGroups.delete(groupId);
   }
 
   liveWindows() {
@@ -161,6 +208,7 @@ export class ElectronBrowserLiteState {
     if (!view) return false;
     this.config.hostWindow.contentView.removeChildView(view);
     this.windows.delete(targetId);
+    this.removeTargetFromGroup(targetId);
     if (!view.webContents.isDestroyed()) view.webContents.close();
     if (this.activeTargetId === targetId) this.activeTargetId = [...this.windows.keys()].at(-1) ?? null;
     if (this.visible && this.activeTargetId) this.setVisible(true, this.activeTargetId);
@@ -180,7 +228,158 @@ export class ElectronBrowserLiteState {
       url: window.webContents.getURL(),
       attached: window.webContents.debugger.isAttached(),
       active: targetId === this.activeTargetId,
+      groupId: this.tabGroupByTarget.get(targetId) || "",
     }));
+  }
+
+  tabGroupsState() {
+    return [...this.tabGroups.values()].map((group) => ({
+      ...group,
+      targetIds: [...this.tabGroupByTarget]
+        .filter(([, groupId]) => groupId === group.id)
+        .map(([targetId]) => targetId),
+    }));
+  }
+
+  createTabGroup({ targetId = this.activeTargetId, name = "新建标签组", color = "blue" } = {}) {
+    if (!targetId || !this.windows.has(targetId)) throw new Error("请选择要分组的标签页");
+    this.removeTargetFromGroup(targetId);
+    const id = `group-${this.nextTabGroupId++}`;
+    this.tabGroups.set(id, {
+      id,
+      name: String(name || "新建标签组").trim().slice(0, 40) || "新建标签组",
+      color: TAB_GROUP_COLORS.has(color) ? color : "blue",
+      collapsed: false,
+    });
+    this.tabGroupByTarget.set(targetId, id);
+    this.notifyChanged();
+    return id;
+  }
+
+  toggleTabGroup(groupId) {
+    const group = this.tabGroups.get(String(groupId));
+    if (!group) throw new Error("标签组不存在");
+    group.collapsed = !group.collapsed;
+    this.notifyChanged();
+  }
+
+  updateTabGroup({ groupId, name, color } = {}) {
+    const group = this.tabGroups.get(String(groupId));
+    if (!group) throw new Error("标签组不存在");
+    if (name !== undefined) group.name = String(name).trim().slice(0, 40) || "新建标签组";
+    if (color !== undefined && TAB_GROUP_COLORS.has(color)) group.color = color;
+    this.notifyChanged();
+  }
+
+  moveTabToGroup({ targetId, groupId = "" } = {}) {
+    const id = String(targetId || "");
+    if (!this.windows.has(id)) throw new Error("标签页不存在");
+    if ((this.tabGroupByTarget.get(id) || "") === String(groupId || "")) return;
+    this.removeTargetFromGroup(id);
+    if (groupId) {
+      if (!this.tabGroups.has(String(groupId))) throw new Error("标签组不存在");
+      this.tabGroupByTarget.set(id, String(groupId));
+    }
+    this.notifyChanged();
+  }
+
+  removeTabGroup(groupId) {
+    const id = String(groupId || "");
+    if (!this.tabGroups.has(id)) return;
+    for (const [targetId, assignedGroupId] of this.tabGroupByTarget) {
+      if (assignedGroupId === id) this.tabGroupByTarget.delete(targetId);
+    }
+    this.tabGroups.delete(id);
+    this.notifyChanged();
+  }
+
+  async exportSessionState() {
+    const tabs = (await this.targets()).map((tab) => ({
+      url: restoredUrl(tab.url),
+      active: tab.active,
+      groupId: tab.groupId || "",
+    }));
+    return { version: 1, tabs, groups: this.tabGroupsState().map(({ targetIds, ...group }) => group) };
+  }
+
+  async restoreSessionState(snapshot) {
+    if (this.sessionStateRestored) return;
+    this.sessionStateRestored = true;
+    if (!Array.isArray(snapshot?.tabs) || snapshot.tabs.length === 0) return;
+    for (const [targetId] of this.liveWindows()) this.destroyView(targetId);
+    this.tabGroups.clear();
+    this.tabGroupByTarget.clear();
+    for (const saved of snapshot.groups || []) {
+      const id = String(saved?.id || "");
+      if (!id) continue;
+      this.tabGroups.set(id, {
+        id,
+        name: String(saved?.name || "新建标签组").slice(0, 40),
+        color: TAB_GROUP_COLORS.has(saved?.color) ? saved.color : "blue",
+        collapsed: Boolean(saved?.collapsed),
+      });
+      const numericId = Number(id.replace(/^group-/, ""));
+      if (Number.isSafeInteger(numericId)) this.nextTabGroupId = Math.max(this.nextTabGroupId, numericId + 1);
+    }
+    let activeTargetId = "";
+    for (const saved of snapshot.tabs.slice(0, 100)) {
+      const created = await this.createWindow(restoredUrl(saved?.url), { groupId: String(saved?.groupId || "") });
+      if (saved?.active) activeTargetId = created.targetId;
+    }
+    if (activeTargetId) await this.activate(activeTargetId);
+    this.notifyChanged();
+  }
+
+  async loadExtensions(descriptors = []) {
+    if (this.extensionsLoaded) return;
+    this.extensionsLoaded = true;
+    this.extensionDescriptors = descriptors.map((descriptor) => ({ ...descriptor }));
+    const partitionSession = session.fromPartition(this.partition);
+    for (const descriptor of this.extensionDescriptors) {
+      if (!descriptor.enabled) {
+        this.extensionRuntime.set(descriptor.id, { status: "disabled", error: "" });
+        continue;
+      }
+      let loadOperation;
+      try {
+        loadOperation = partitionSession.extensions.loadExtension(descriptor.path, { allowFileAccess: false });
+        let timeoutId;
+        const loaded = await Promise.race([
+          loadOperation,
+          new Promise((_, reject) => {
+            timeoutId = setTimeout(() => reject(new Error("扩展加载超时")), 2_500);
+          }),
+        ]).finally(() => clearTimeout(timeoutId));
+        this.extensionRuntime.set(descriptor.id, { status: "loaded", error: "", extension: loaded });
+      } catch (error) {
+        const message = String(error?.message || error).slice(0, 240);
+        this.extensionRuntime.set(descriptor.id, { status: "error", error: message });
+        if (message === "扩展加载超时") {
+          void loadOperation?.then((loaded) => {
+            this.extensionRuntime.set(descriptor.id, { status: "loaded", error: "", extension: loaded });
+            this.notifyChanged();
+          }).catch(() => {});
+        }
+      }
+    }
+    this.notifyChanged();
+  }
+
+  extensionsState() {
+    return this.extensionDescriptors.map(({ path, ...descriptor }) => ({
+      ...descriptor,
+      status: this.extensionRuntime.get(descriptor.id)?.status || "available",
+      error: this.extensionRuntime.get(descriptor.id)?.error || "",
+    }));
+  }
+
+  async openExtension(extensionId) {
+    const id = String(extensionId || "");
+    const descriptor = this.extensionDescriptors.find((candidate) => candidate.id === id);
+    if (!descriptor) throw new Error("扩展程序不存在");
+    if (this.extensionRuntime.get(id)?.status !== "loaded") throw new Error("这个扩展未能在当前 Space 中加载");
+    if (!descriptor.defaultPopup) throw new Error("这个扩展没有可打开的弹出页");
+    return this.createWindow(`chrome-extension://${id}/${descriptor.defaultPopup.replace(/^\/+/, "")}`);
   }
 
   navigationState() {
@@ -590,6 +789,9 @@ export class ElectronBrowserLiteState {
     this.visible = false;
     for (const [targetId] of this.liveWindows()) this.destroyView(targetId);
     this.activeTargetId = null;
+    this.tabGroups.clear();
+    this.tabGroupByTarget.clear();
+    this.sessionStateRestored = false;
     this.startPromise = null;
     this.stopped = true;
     this.notifyChanged();
@@ -640,6 +842,7 @@ export class BrowserLiteManager {
     this.viewMode = "spaces";
     this.activeInstanceId = null;
     this.taskControlVisible = false;
+    this.chromeMenuOpen = false;
     this.modeContentSizes = {
       spaces: [1280, 760],
       settings: [1280, 800],
@@ -655,11 +858,17 @@ export class BrowserLiteManager {
   browserBounds() {
     const [width, contentHeight] = this.hostWindow.getContentSize();
     const footer = this.taskControlVisible ? TASK_CONTROL_RESERVE : 0;
-    return { x: 0, y: APP_BAR_HEIGHT, width, height: Math.max(240, contentHeight - APP_BAR_HEIGHT - footer) };
+    const menu = this.chromeMenuOpen ? CHROME_MENU_RESERVE : 0;
+    return { x: 0, y: APP_BAR_HEIGHT + menu, width, height: Math.max(240, contentHeight - APP_BAR_HEIGHT - footer - menu) };
   }
 
   setTaskControlVisible(visible) {
     this.taskControlVisible = Boolean(visible);
+    this.layout();
+  }
+
+  setChromeMenuOpen(open) {
+    this.chromeMenuOpen = Boolean(open && this.viewMode === "browser");
     this.layout();
   }
 
@@ -676,22 +885,28 @@ export class BrowserLiteManager {
   }
 
   async showSpaces() {
-    await Promise.all([...this.instances.values()].map((entry) => entry.state.capturePreview?.()));
-    await Promise.all([...this.instances.values()].map((entry) => entry.state.setVisible(false)));
+    await Promise.all([...this.instances.values()].map(async (entry) => {
+      try { await entry.state.capturePreview?.(); } catch {}
+      try { entry.state.setVisible(false); } catch {}
+    }));
     this.taskControlVisible = false;
+    this.chromeMenuOpen = false;
     this.viewMode = "spaces";
-    this.hostWindow.setTitle("Browser Lite");
-    this.hostWindow.setContentSize(...this.modeContentSizes.spaces);
-    await app.dock?.show();
-    this.hostWindow.show();
-    app.focus({ steal: true });
-    this.hostWindow.focus();
+    try { this.hostWindow.setTitle("Browser Lite"); } catch (error) { throw new Error(`Space 总览设置标题失败: ${error.message || error}`); }
+    try { this.hostWindow.setContentSize(...this.modeContentSizes.spaces); } catch (error) { throw new Error(`Space 总览调整窗口失败: ${error.message || error}`); }
+    try { await app.dock?.show(); } catch (error) { throw new Error(`Space 总览恢复 Dock 失败: ${error.message || error}`); }
+    try { this.hostWindow.show(); } catch (error) { throw new Error(`Space 总览显示窗口失败: ${error.message || error}`); }
+    try { app.focus({ steal: true }); } catch {}
+    try { this.hostWindow.focus(); } catch (error) { throw new Error(`Space 总览聚焦窗口失败: ${error.message || error}`); }
     this.onChanged?.();
   }
 
   async showSettings() {
-    await Promise.all([...this.instances.values()].map((entry) => entry.state.setVisible(false)));
+    await Promise.all([...this.instances.values()].map(async (entry) => {
+      try { entry.state.setVisible(false); } catch {}
+    }));
     this.taskControlVisible = false;
+    this.chromeMenuOpen = false;
     this.viewMode = "settings";
     this.hostWindow.setTitle(this.installation?.isComplete() ? "Browser Lite — 设置" : "Browser Lite — 安装");
     this.hostWindow.setContentSize(...this.modeContentSizes.settings);
@@ -714,7 +929,9 @@ export class BrowserLiteManager {
     app.focus({ steal: true });
     this.hostWindow.focus();
     this.layout();
-    await Promise.all([...this.instances].map(([otherId, other]) => other.state.setVisible(otherId === id)));
+    await Promise.all([...this.instances].map(async ([otherId, other]) => {
+      try { other.state.setVisible(otherId === id); } catch {}
+    }));
     this.onChanged?.();
     return true;
   }
@@ -749,11 +966,13 @@ export class BrowserLiteManager {
       const address = server.address();
       config.port = typeof address === "object" && address ? address.port : config.port;
       try {
+        const extensionLoading = state.loadExtensions(await this.installation?.runtimeExtensions?.() || []);
         await state.start();
         await this.installation?.seedRuntimeCookies(id, state);
         await state.setVisible(false);
+        void extensionLoading.catch(() => {});
       } catch (error) {
-        await new Promise((resolveClose) => server.close(resolveClose));
+        await closeServer(server);
         throw error;
       }
       entry = { id, state, server, baseUrl: `http://${config.host}:${config.port}` };
@@ -803,7 +1022,7 @@ export class BrowserLiteManager {
     const entry = this.instances.get(id);
     if (!entry) return;
     await entry.state.remove();
-    await new Promise((resolveClose) => entry.server.close(resolveClose));
+    await closeServer(entry.server);
     this.instances.delete(id);
     if (this.activeInstanceId === id) {
       this.activeInstanceId = null;
@@ -834,7 +1053,7 @@ export class BrowserLiteManager {
   async shutdown() {
     for (const entry of this.instances.values()) {
       await entry.state.stop();
-      await new Promise((resolveClose) => entry.server.close(resolveClose));
+      await closeServer(entry.server);
     }
     this.instances.clear();
     this.activeInstanceId = null;

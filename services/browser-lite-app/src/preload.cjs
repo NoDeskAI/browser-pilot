@@ -19,6 +19,7 @@ contextBridge.exposeInMainWorld("browserLite", Object.freeze({
   returnTaskSpace: (id) => ipcRenderer.invoke("browser-lite:return-task-space", id),
   closeTaskSpace: (id) => ipcRenderer.invoke("browser-lite:close-task-space", id),
   taskSpaceBrowserAction: (id, action, payload) => ipcRenderer.invoke("browser-lite:task-space-browser-action", id, action, payload),
+  setChromeMenuOpen: (open) => ipcRenderer.invoke("browser-lite:set-chrome-menu-open", Boolean(open)),
   onState: (callback) => {
     const listener = (_event, state) => callback(state);
     ipcRenderer.on("browser-lite:state", listener);

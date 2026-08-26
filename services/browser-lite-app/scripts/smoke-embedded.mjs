@@ -67,12 +67,19 @@ async function waitForState(client, predicateExpression, timeout = 8_000) {
 
 const client = await connect(await controllerTarget());
 try {
+  await waitForState(client, `!document.body.classList.contains('booting')`, 20_000);
+  await delay(500);
   const before = await client.evaluate(`({
     bodyClass: document.body.className,
     visibility: document.visibilityState,
     spaceCards: document.querySelectorAll('[data-action="open-space"]').length,
   })`);
   assert.equal(before.visibility, "visible");
+  if (!/spaces-mode/.test(before.bodyClass)) {
+    await client.evaluate(`window.browserLite.showSpaces()`);
+    await waitForState(client, `document.body.classList.contains('spaces-mode')`);
+    before.bodyClass = await client.evaluate(`document.body.className`);
+  }
   assert.match(before.bodyClass, /spaces-mode/);
   assert.ok(before.spaceCards > 0, "Mac mini must have at least one existing Space");
 
@@ -90,6 +97,50 @@ try {
   assert.notEqual(opened.countDisplay, "none");
   assert.notEqual(opened.browserChromeDisplay, "none");
   assert.ok(Number(opened.count) > 0);
+
+  const chromeSurface = await client.evaluate(`({
+    bookmarks: document.querySelectorAll('#browser-bookmarks [data-action="open-bookmark"]').length,
+    bookmarkFolders: document.querySelectorAll('#browser-bookmarks [data-action="open-bookmark-folder"]').length,
+    extensionPins: document.querySelectorAll('#pinned-extensions [data-extension-id]').length,
+    importedExtensions: Number(document.querySelector('#extensions-menu-button')?.dataset.extensionCount || 0),
+  })`);
+  assert.ok(chromeSurface.bookmarks > 0, "Imported bookmark buttons were not rendered");
+  assert.ok(chromeSurface.bookmarkFolders > 0, "Imported bookmark folders were not rendered");
+  assert.ok(chromeSurface.importedExtensions > 0, "Imported extensions were not exposed");
+
+  await client.evaluate(`document.querySelector('#extensions-menu-button').click()`);
+  await waitForState(client, `document.querySelectorAll('#chrome-popover .extension-row').length > 0`);
+  const extensionMenuRows = await client.evaluate(`document.querySelectorAll('#chrome-popover .extension-row').length`);
+  assert.ok(extensionMenuRows > 0);
+  await client.evaluate(`document.querySelector('#chrome-popover [data-action="close-popover"]').click()`);
+
+  await client.evaluate(`document.querySelector('#browser-bookmarks [data-action="open-bookmark-folder"]').click()`);
+  await waitForState(client, `document.querySelectorAll('#chrome-popover .popover-row').length > 0`);
+  const bookmarkMenuRows = await client.evaluate(`document.querySelectorAll('#chrome-popover .popover-row').length`);
+  assert.ok(bookmarkMenuRows > 0);
+  await client.evaluate(`document.querySelector('#chrome-popover [data-action="close-popover"]').click()`);
+
+  await waitForState(client, `Boolean(document.querySelector('.browser-tab.active'))`, 12_000);
+  const hadGroups = await client.evaluate(`document.querySelectorAll('[data-tab-group-id]').length > 0`);
+  if (!hadGroups) {
+    const groupMenuOpened = await client.evaluate(`(() => {
+      document.querySelector('#new-tab-group').click();
+      return Boolean(document.querySelector('#tab-group-form'));
+    })()`);
+    assert.equal(groupMenuOpened, true, "Tab group editor did not open from the browser chrome");
+    await client.evaluate(`(() => {
+      const form = document.querySelector('#tab-group-form');
+      form.elements.name.value = 'Mac mini 验收';
+      form.querySelector('input[value="purple"]').checked = true;
+      form.requestSubmit();
+    })()`);
+    await waitForState(client, `document.querySelectorAll('[data-tab-group-id]').length > 0`);
+  }
+  const groupBeforeToggle = await client.evaluate(`document.querySelector('[data-action="toggle-tab-group"]').getAttribute('aria-expanded')`);
+  await client.evaluate(`document.querySelector('[data-action="toggle-tab-group"]').click()`);
+  await waitForState(client, `document.querySelector('[data-action="toggle-tab-group"]').getAttribute('aria-expanded') !== ${JSON.stringify(groupBeforeToggle)}`);
+  const tabGroups = await client.evaluate(`window.browserLite.getState().then(state => state.taskSpaces.activeTaskSpace.tabGroups)`);
+  assert.ok(tabGroups.length > 0, "Tab group state was not persisted to the Space");
 
   const appState = await client.evaluate(`window.browserLite.getState()`);
   const activeInstance = appState.instances.find((instance) => (
@@ -123,6 +174,10 @@ try {
   process.stdout.write(`${JSON.stringify({
     before,
     opened,
+    chromeSurface,
+    extensionMenuRows,
+    bookmarkMenuRows,
+    tabGroups,
     returned,
     targetCount: currentTargets.length,
     webdriverEmbedded: session.value.capabilities["browser-lite:embedded"],

@@ -118,6 +118,48 @@ function collectBookmarks(node, result = []) {
   return result;
 }
 
+function bookmarkNode(node, icons, budget, depth = 0) {
+  if (!node || typeof node !== "object" || budget.remaining <= 0) return null;
+  budget.remaining -= 1;
+  const name = String(node.name || "书签");
+  if (node.type === "url") {
+    const url = webUrl(node.url);
+    if (!url) return null;
+    return {
+      id: String(node.id || `${name}:${url}`),
+      type: "url",
+      name,
+      url,
+      iconDataUrl: depth === 0 ? icons.get(url) || "" : "",
+    };
+  }
+  const children = (node.children || [])
+    .map((child) => bookmarkNode(child, icons, budget, depth + 1))
+    .filter(Boolean);
+  return {
+    id: String(node.id || name),
+    type: "folder",
+    name,
+    children,
+  };
+}
+
+function extensionMessageName(manifest, messages) {
+  const rawName = String(manifest?.name || "扩展程序");
+  const match = rawName.match(/^__MSG_(.+)__$/i);
+  if (!match) return rawName;
+  const key = Object.keys(messages || {}).find((candidate) => candidate.toLocaleLowerCase() === match[1].toLocaleLowerCase());
+  return String(messages?.[key]?.message || match[1]);
+}
+
+function extensionIconPath(manifest) {
+  const icons = manifest?.action?.default_icon || manifest?.browser_action?.default_icon || manifest?.icons || {};
+  if (typeof icons === "string") return icons;
+  return Object.entries(icons)
+    .filter(([, value]) => typeof value === "string")
+    .sort(([left], [right]) => Math.abs(Number(left) - 32) - Math.abs(Number(right) - 32))[0]?.[1] || "";
+}
+
 function readDatabase(path, callback, fallback) {
   let database;
   try {
@@ -224,6 +266,8 @@ export class BrowserLiteInstallation {
     this.state = null;
     this.busy = false;
     this.lastError = "";
+    this.bookmarkCache = null;
+    this.extensionCache = null;
   }
 
   async load() {
@@ -297,6 +341,8 @@ export class BrowserLiteInstallation {
   async publicState() {
     const profiles = this.isComplete() ? [] : await this.profiles();
     const metadata = this.isComplete() ? await this.metadata() : {};
+    const bookmarkModel = this.isComplete() ? await this.bookmarkModel() : { bookmarkBar: [], otherBookmarks: [] };
+    const runtimeExtensions = this.isComplete() ? await this.runtimeExtensions() : [];
     return {
       version: INSTALLATION_VERSION,
       complete: this.isComplete(),
@@ -307,10 +353,10 @@ export class BrowserLiteInstallation {
       completedAt: this.state?.completedAt ?? null,
       source: this.state?.source ?? null,
       result: this.state?.result ?? null,
-      bookmarks: (metadata.bookmarks || []).slice(0, 18).map((bookmark) => ({
-        name: String(bookmark?.name || "书签"),
-        url: String(bookmark?.url || ""),
-      })),
+      bookmarks: bookmarkModel.bookmarkBar,
+      bookmarkBar: bookmarkModel.bookmarkBar,
+      otherBookmarks: bookmarkModel.otherBookmarks,
+      extensions: runtimeExtensions.map(({ path, ...extension }) => extension),
       chromeRunning: !this.isComplete() && (await Promise.all(
         Object.values(BROWSER_SOURCES).map((source) => this.sourceRunning(source)),
       )).some(Boolean),
@@ -323,6 +369,126 @@ export class BrowserLiteInstallation {
         extensions: true,
       },
     };
+  }
+
+  async bookmarkIcons(profilePath) {
+    const databasePath = join(profilePath, "Favicons");
+    if (!await pathExists(databasePath)) return new Map();
+    return readDatabase(databasePath, (database) => {
+      const rows = database.prepare(`
+        SELECT icon_mapping.page_url AS pageUrl, favicon_bitmaps.image_data AS imageData,
+               favicon_bitmaps.width AS width
+        FROM icon_mapping
+        JOIN favicon_bitmaps ON favicon_bitmaps.icon_id = icon_mapping.icon_id
+        WHERE favicon_bitmaps.image_data IS NOT NULL AND favicon_bitmaps.width BETWEEN 16 AND 64
+        ORDER BY icon_mapping.page_url, ABS(favicon_bitmaps.width - 16)
+        LIMIT 2500
+      `).all();
+      const icons = new Map();
+      let totalBytes = 0;
+      for (const row of rows) {
+        const url = webUrl(row.pageUrl);
+        const data = Buffer.from(row.imageData || []);
+        if (!url || icons.has(url) || data.length === 0 || data.length > 64_000 || totalBytes + data.length > 4_000_000) continue;
+        icons.set(url, `data:image/png;base64,${data.toString("base64")}`);
+        totalBytes += data.length;
+      }
+      return icons;
+    }, new Map());
+  }
+
+  async bookmarkModel() {
+    if (this.bookmarkCache) return this.bookmarkCache;
+    const profilePath = join(this.chromiumSeedRoot, this.profileDirectory());
+    const bookmarksFile = await readJson(join(profilePath, "Bookmarks"), {});
+    const icons = await this.bookmarkIcons(profilePath);
+    const budget = { remaining: 5000 };
+    const serializeChildren = (root) => (root?.children || [])
+      .map((child) => bookmarkNode(child, icons, budget))
+      .filter(Boolean);
+    let bookmarkBar = serializeChildren(bookmarksFile?.roots?.bookmark_bar);
+    const otherBookmarks = [
+      ...serializeChildren(bookmarksFile?.roots?.other),
+      ...serializeChildren(bookmarksFile?.roots?.synced),
+    ];
+    if (!bookmarkBar.length) {
+      const metadata = await this.metadata();
+      bookmarkBar = (metadata.bookmarks || []).slice(0, 5000).map((bookmark, index) => ({
+        id: `legacy-${index}`,
+        type: "url",
+        name: String(bookmark?.name || bookmark?.url || "书签"),
+        url: webUrl(bookmark?.url),
+        iconDataUrl: icons.get(webUrl(bookmark?.url)) || "",
+      })).filter((bookmark) => bookmark.url);
+    }
+    this.bookmarkCache = { bookmarkBar, otherBookmarks };
+    return this.bookmarkCache;
+  }
+
+  async runtimeExtensions() {
+    if (this.extensionCache) return this.extensionCache;
+    const profilePath = join(this.chromiumSeedRoot, this.profileDirectory());
+    const extensionRoot = join(profilePath, "Extensions");
+    const [preferences, securePreferences] = await Promise.all([
+      readJson(join(profilePath, "Preferences"), {}),
+      readJson(join(profilePath, "Secure Preferences"), {}),
+    ]);
+    const pinned = preferences.extensions?.pinned_extensions
+      ?? preferences.account_values?.extensions?.pinned_extensions
+      ?? [];
+    const pinnedOrder = new Map(pinned.map((id, index) => [String(id), index]));
+    const extensionSettings = {
+      ...(preferences.extensions?.settings || {}),
+      ...(securePreferences.extensions?.settings || {}),
+    };
+    const descriptors = [];
+    const extensionIds = await readdir(extensionRoot, { withFileTypes: true }).catch(() => []);
+    for (const extensionId of extensionIds) {
+      if (!extensionId.isDirectory()) continue;
+      const versionsRoot = join(extensionRoot, extensionId.name);
+      const versions = (await readdir(versionsRoot, { withFileTypes: true }).catch(() => []))
+        .filter((entry) => entry.isDirectory())
+        .sort((left, right) => right.name.localeCompare(left.name, undefined, { numeric: true }));
+      let current = null;
+      for (const version of versions) {
+        if (await pathExists(join(versionsRoot, version.name, "manifest.json"))) {
+          current = version;
+          break;
+        }
+      }
+      if (!current) continue;
+      const path = join(versionsRoot, current.name);
+      const manifest = await readJson(join(path, "manifest.json"), null);
+      if (!manifest) continue;
+      const locale = String(manifest.default_locale || "");
+      const messages = locale ? await readJson(join(path, "_locales", locale, "messages.json"), {}) : {};
+      const iconRelativePath = extensionIconPath(manifest);
+      const iconPath = iconRelativePath ? resolve(path, iconRelativePath) : "";
+      let iconDataUrl = "";
+      if (iconPath && (iconPath === resolve(path) || iconPath.startsWith(`${resolve(path)}/`))) {
+        const icon = await readFile(iconPath).catch(() => null);
+        if (icon && icon.length <= 128_000) iconDataUrl = `data:image/png;base64,${icon.toString("base64")}`;
+      }
+      const enabled = extensionSettings[extensionId.name]?.state !== 0;
+      descriptors.push({
+        id: extensionId.name,
+        name: extensionMessageName(manifest, messages),
+        version: String(manifest.version || current.name),
+        manifestVersion: Number(manifest.manifest_version) || 0,
+        defaultPopup: String(manifest.action?.default_popup || manifest.browser_action?.default_popup || ""),
+        iconDataUrl,
+        pinned: pinnedOrder.has(extensionId.name),
+        enabled,
+        path,
+      });
+    }
+    descriptors.sort((left, right) => (
+      Number(!left.pinned) - Number(!right.pinned)
+      || (pinnedOrder.get(left.id) ?? Number.MAX_SAFE_INTEGER) - (pinnedOrder.get(right.id) ?? Number.MAX_SAFE_INTEGER)
+      || left.name.localeCompare(right.name)
+    ));
+    this.extensionCache = descriptors;
+    return descriptors;
   }
 
   profilePath(profileId) {
@@ -522,6 +688,8 @@ export class BrowserLiteInstallation {
       reopenSource = await this.quitSource(source);
       await rm(this.seedRoot, { recursive: true, force: true });
       await mkdir(this.seedRoot, { recursive: true, mode: 0o700 });
+      this.bookmarkCache = null;
+      this.extensionCache = null;
 
       const options = {
         loginState: payload.loginState !== false,
@@ -608,6 +776,8 @@ export class BrowserLiteInstallation {
   async freshStart() {
     if (this.busy) throw new Error("安装正在进行");
     await rm(this.seedRoot, { recursive: true, force: true });
+    this.bookmarkCache = null;
+    this.extensionCache = null;
     this.state = {
       version: INSTALLATION_VERSION,
       complete: true,
@@ -822,6 +992,8 @@ void updateBadge();
   }
 
   async resetData({ preservePairing = true } = {}) {
+    this.bookmarkCache = null;
+    this.extensionCache = null;
     const preserved = new Set([
       "installation-key.bin",
       "chrome-safe-storage.enc.json",

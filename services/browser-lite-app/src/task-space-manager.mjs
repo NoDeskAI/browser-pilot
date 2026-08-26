@@ -91,6 +91,23 @@ function persistedPreview(value) {
   return preview.length <= 8_000_000 && /^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(preview) ? preview : "";
 }
 
+function persistedBrowserSession(value) {
+  if (!value || typeof value !== "object") return { version: 1, tabs: [], groups: [] };
+  const groups = (Array.isArray(value.groups) ? value.groups : []).slice(0, 50).map((group) => ({
+    id: String(group?.id || ""),
+    name: String(group?.name || "新建标签组").slice(0, 40),
+    color: String(group?.color || "blue"),
+    collapsed: Boolean(group?.collapsed),
+  })).filter((group) => group.id);
+  const groupIds = new Set(groups.map((group) => group.id));
+  const tabs = (Array.isArray(value.tabs) ? value.tabs : []).slice(0, 100).map((tab) => ({
+    url: String(tab?.url || "about:blank").slice(0, 8192),
+    active: Boolean(tab?.active),
+    groupId: groupIds.has(String(tab?.groupId || "")) ? String(tab.groupId) : "",
+  }));
+  return { version: 1, tabs, groups };
+}
+
 function interactiveNode(node) {
   const role = node?.role?.value;
   return [
@@ -175,6 +192,7 @@ export class BrowserLiteTaskSpaceManager {
           recentTabs: Array.isArray(value.recentTabs)
             ? value.recentTabs.slice(-5).map((tab) => ({ title: String(tab?.title || ""), url: String(tab?.url || "") }))
             : [],
+          browserSession: persistedBrowserSession(value.browserSession),
           previewDataUrl: persistedPreview(value.previewDataUrl),
           taskId: String(value.taskId || value.name),
           instanceId: String(value.instanceId || taskInstanceId(id)),
@@ -265,7 +283,8 @@ export class BrowserLiteTaskSpaceManager {
     const id = this.nextSpaceId++;
     const instanceId = taskInstanceId(id);
     try {
-      await this.browserManager.ensure(instanceId);
+      const entry = await this.browserManager.ensure(instanceId);
+      await entry.state.restoreSessionState?.(null);
     } catch (error) {
       throw bridgeError(EGO_ERROR.BROWSER_UNAVAILABLE, error.message || "No active browser", { cause: String(error) });
     }
@@ -278,6 +297,7 @@ export class BrowserLiteTaskSpaceManager {
       profileName: selectedProfile.name,
       recentTabTitles: [],
       recentTabs: [],
+      browserSession: { version: 1, tabs: [], groups: [] },
       previewDataUrl: "",
       taskId: taskName,
       instanceId,
@@ -299,7 +319,7 @@ export class BrowserLiteTaskSpaceManager {
       const selectedId = this.selectedSpaceId;
       const selected = selectedId ? this.spaces.get(selectedId) : null;
       if (selected && selected.status === "active") {
-        await this.browserManager.ensure(selected.instanceId);
+        await this.ensureSpaceRuntime(selected);
         return selected;
       }
       const created = await this.createSpace(name || `Browser Pilot ${context}`, undefined, OWNERSHIP_AGENT);
@@ -322,20 +342,32 @@ export class BrowserLiteTaskSpaceManager {
   async workspaceState() {
     const activeInstanceId = this.browserManager.activeInstanceId;
     const taskSpaces = [];
-    let previewChanged = false;
+    let persistedStateChanged = false;
     for (const space of this.spaces.values()) {
       const state = this.browserManager.instances?.get(space.instanceId)?.state;
       let tabs = [];
+      let tabGroups = [];
+      let extensions = [];
       let navigation = null;
-      if (state && space.status !== "error") {
+      if (state && space.status === "active") {
         try {
           tabs = (await state.targets()).map((tab) => ({
             targetId: tab.targetId,
             title: tab.title || "新标签页",
             url: tab.url || "about:blank",
             active: tab.targetId === state.activeTargetId,
+            groupId: tab.groupId || "",
           }));
+          tabGroups = state.tabGroupsState?.() || [];
+          extensions = state.extensionsState?.() || [];
           navigation = await state.navigationState?.() || null;
+          if (state.sessionStateRestored !== false && typeof state.exportSessionState === "function") {
+            const browserSession = persistedBrowserSession(await state.exportSessionState());
+            if (JSON.stringify(browserSession) !== JSON.stringify(space.browserSession)) {
+              space.browserSession = browserSession;
+              persistedStateChanged = true;
+            }
+          }
         } catch {}
       }
       let previewDataUrl = space.previewDataUrl || "";
@@ -344,7 +376,7 @@ export class BrowserLiteTaskSpaceManager {
         if (capturedPreview && capturedPreview !== space.previewDataUrl) {
           space.previewDataUrl = capturedPreview;
           previewDataUrl = capturedPreview;
-          previewChanged = true;
+          persistedStateChanged = true;
         }
       }
       taskSpaces.push({
@@ -358,10 +390,12 @@ export class BrowserLiteTaskSpaceManager {
         loaded: Boolean(state),
         previewDataUrl,
         tabs,
+        tabGroups,
+        extensions,
         navigation,
       });
     }
-    if (previewChanged) await this.persist();
+    if (persistedStateChanged) await this.persist();
     const activeTaskSpace = taskSpaces.find((space) => space.active) || null;
     return { taskSpaces, activeTaskSpace };
   }
@@ -377,7 +411,7 @@ export class BrowserLiteTaskSpaceManager {
         space.delegatedToUser = true;
         space.agentTaskState = "User in control";
       }
-      await this.browserManager.ensure(space.instanceId);
+      await this.ensureSpaceRuntime(space);
       this.browserManager.setTaskControlVisible?.(space.ownership !== OWNERSHIP_USER);
       await this.browserManager.showInstance(space.instanceId);
       await this.refreshRecentTabs(space);
@@ -406,6 +440,7 @@ export class BrowserLiteTaskSpaceManager {
     const id = requireNumericId(value, "Task space ID must be numeric.");
     return this.runSerialized("ui", async () => {
       const space = this.requireSpace(id);
+      await this.refreshRecentTabs(space);
       await this.browserManager.stop(space.instanceId);
       space.status = "closed";
       for (const [contextId, selectedId] of this.selectedSpaceIds) {
@@ -445,7 +480,7 @@ export class BrowserLiteTaskSpaceManager {
       if (![OWNERSHIP_USER, OWNERSHIP_AGENT_DELEGATED_TO_USER].includes(space.ownership)) {
         throw bridgeError(EGO_ERROR.TASK_SPACE_UNAVAILABLE, "Open the task space for user control first.");
       }
-      const entry = await this.browserManager.ensure(space.instanceId);
+      const entry = await this.ensureSpaceRuntime(space);
       const state = entry.state;
       if (action === "navigate") await state.navigate(navigationUrl(payload));
       else if (action === "back") await state.goBack();
@@ -459,6 +494,21 @@ export class BrowserLiteTaskSpaceManager {
       else if (action === "closeTab") {
         const targetId = requireNonEmptyString(payload, "Target ID is required.");
         await state.destroyView(targetId);
+      } else if (action === "createTabGroup") {
+        if (!payload || typeof payload !== "object") throw bridgeError(EGO_ERROR.INVALID_ARGUMENT, "标签组参数无效");
+        state.createTabGroup(payload);
+      } else if (action === "toggleTabGroup") {
+        state.toggleTabGroup(requireNonEmptyString(payload, "标签组 ID 不能为空"));
+      } else if (action === "updateTabGroup") {
+        if (!payload || typeof payload !== "object") throw bridgeError(EGO_ERROR.INVALID_ARGUMENT, "标签组参数无效");
+        state.updateTabGroup(payload);
+      } else if (action === "moveTabToGroup") {
+        if (!payload || typeof payload !== "object") throw bridgeError(EGO_ERROR.INVALID_ARGUMENT, "标签页分组参数无效");
+        state.moveTabToGroup(payload);
+      } else if (action === "removeTabGroup") {
+        state.removeTabGroup(requireNonEmptyString(payload, "标签组 ID 不能为空"));
+      } else if (action === "openExtension") {
+        await state.openExtension(requireNonEmptyString(payload, "扩展程序 ID 不能为空"));
       } else {
         throw bridgeError(EGO_ERROR.INVALID_ARGUMENT, `Unknown user browser action: ${action}`);
       }
@@ -466,7 +516,12 @@ export class BrowserLiteTaskSpaceManager {
       await this.browserManager.showInstance(space.instanceId);
       await this.refreshRecentTabs(space, state);
       await this.persist();
-      return { taskSpace: publicTaskSpace(space), navigation: await state.navigationState(), tabs: await state.targets() };
+      return {
+        taskSpace: publicTaskSpace(space),
+        navigation: await state.navigationState(),
+        tabs: await state.targets(),
+        tabGroups: state.tabGroupsState?.() || [],
+      };
     });
   }
 
@@ -493,7 +548,7 @@ export class BrowserLiteTaskSpaceManager {
     space.status = "active";
     space.error = "";
     this.selectedSpaceId = id;
-    await this.browserManager.ensure(space.instanceId);
+    await this.ensureSpaceRuntime(space);
     await this.refreshRecentTabs(space);
     await this.persist();
     return publicTaskSpace(space);
@@ -584,7 +639,7 @@ export class BrowserLiteTaskSpaceManager {
     if (!space.delegatedToUser || space.ownership !== OWNERSHIP_AGENT_DELEGATED_TO_USER) {
       throw bridgeError(EGO_ERROR.TASK_SPACE_UNAVAILABLE, `Task space ${space.id} is not under user control.`);
     }
-    await this.browserManager.ensure(space.instanceId);
+    await this.ensureSpaceRuntime(space);
     space.ownership = OWNERSHIP_AGENT;
     space.delegatedToUser = false;
     space.agentTaskState = "";
@@ -826,7 +881,7 @@ export class BrowserLiteTaskSpaceManager {
 
   async selectedAgentRuntime() {
     const space = this.requireSelectedAgentSpace();
-    const entry = await this.browserManager.ensure(space.instanceId);
+    const entry = await this.ensureSpaceRuntime(space);
     if (!entry?.state) throw bridgeError(EGO_ERROR.CDP_CHANNEL_UNAVAILABLE, "CDP agent host is not available.");
     return { space, state: entry.state };
   }
@@ -844,6 +899,17 @@ export class BrowserLiteTaskSpaceManager {
         .map((target) => target.title)
         .filter(Boolean)
         .slice(-5);
+      if (typeof state.exportSessionState === "function") {
+        space.browserSession = persistedBrowserSession(await state.exportSessionState());
+      }
     } catch {}
+  }
+
+  async ensureSpaceRuntime(space) {
+    const entry = await this.browserManager.ensure(space.instanceId);
+    if (typeof entry?.state?.restoreSessionState === "function") {
+      await entry.state.restoreSessionState(space.browserSession);
+    }
+    return entry;
   }
 }

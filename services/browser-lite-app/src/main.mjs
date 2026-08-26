@@ -289,6 +289,10 @@ function registerIpc() {
     emitState();
     return getPublicState();
   });
+  ipcMain.handle("browser-lite:set-chrome-menu-open", async (_event, open) => {
+    manager.setChromeMenuOpen(Boolean(open));
+    return { open: manager.chromeMenuOpen };
+  });
 }
 
 app.on("second-instance", (_event, argv, _workingDirectory, additionalData) => {

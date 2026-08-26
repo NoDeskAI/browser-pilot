@@ -8,11 +8,13 @@ const elements = Object.fromEntries([
   "nav-back", "nav-forward", "nav-reload", "address-form", "address-input", "agent-state",
   "return-control", "take-control", "terminate-task", "task-control-bar", "task-control-name",
   "settings-search-input", "settings-profile-page", "settings-about-page", "profile-display-name",
-  "browser-bookmarks", "settings-bookmarks", "settings-space-count",
+  "browser-bookmarks", "settings-bookmarks", "settings-space-count", "new-tab-group", "pinned-extensions",
+  "extensions-menu-button", "chrome-popover",
 ].map((id) => [id.replace(/-([a-z])/g, (_, letter) => letter.toUpperCase()), document.querySelector(`#${id}`)]));
 
 let currentState = null;
 let addressEditing = false;
+let popoverKind = "";
 
 function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>'"]/g, (character) => ({
@@ -56,14 +58,54 @@ function safePreview(space) {
   return /^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(value) ? value : "";
 }
 
-function renderBookmarks(installation) {
-  const bookmarks = installation.bookmarks || [];
+function safeDataImage(value) {
+  const image = String(value || "");
+  return /^data:image\/(?:png|jpeg|gif|webp);base64,[A-Za-z0-9+/=]+$/.test(image) ? image : "";
+}
+
+function bookmarkIcon(bookmark) {
+  const image = safeDataImage(bookmark?.iconDataUrl);
+  if (image) return `<img class="bookmark-favicon" src="${image}" alt="" />`;
+  if (bookmark?.type === "folder") return '<span class="bookmark-folder-icon" aria-hidden="true"></span>';
+  return `<span class="bookmark-fallback" aria-hidden="true">${escapeHtml(String(bookmark?.name || "网").slice(0, 1).toLocaleUpperCase())}</span>`;
+}
+
+function bookmarkButton(bookmark) {
+  const action = bookmark.type === "folder" ? "open-bookmark-folder" : "open-bookmark";
+  const data = bookmark.type === "folder"
+    ? `data-bookmark-id="${escapeHtml(bookmark.id)}"`
+    : `data-bookmark-url="${escapeHtml(bookmark.url)}"`;
+  return `<button class="bookmark-chip ${bookmark.type === "folder" ? "folder" : ""}" data-action="${action}" ${data} type="button" title="${escapeHtml(bookmark.name)}">${bookmarkIcon(bookmark)}<span>${escapeHtml(bookmark.name)}</span></button>`;
+}
+
+function renderBookmarks(installation, taskSpaceState) {
+  const bookmarks = installation.bookmarkBar || installation.bookmarks || [];
+  const groups = taskSpaceState?.activeTaskSpace?.tabGroups || [];
+  const visible = bookmarks.slice(0, 14);
   const markup = [
-    '<span class="bookmark-chip"><span aria-hidden="true">▦</span>应用</span>',
-    ...bookmarks.map((bookmark) => `<span class="bookmark-chip" title="${escapeHtml(bookmark.url)}"><span class="bookmark-dot" aria-hidden="true"></span>${escapeHtml(bookmark.name)}</span>`),
+    ...groups.map((group) => `<button class="saved-tab-group group-color-${escapeHtml(group.color)}" data-action="saved-tab-group" data-group-id="${escapeHtml(group.id)}" type="button" title="标签页分组：${escapeHtml(group.name)}"><span class="saved-group-dot"></span><span>${escapeHtml(group.name)}</span></button>`),
+    groups.length ? '<span class="bookmark-separator" aria-hidden="true"></span>' : "",
+    ...visible.map(bookmarkButton),
+    bookmarks.length > visible.length ? `<button class="bookmark-overflow" data-action="bookmark-overflow" type="button" aria-label="显示 ${bookmarks.length - visible.length} 个隐藏书签">»</button>` : "",
+    '<span class="bookmark-separator bookmark-tail-separator" aria-hidden="true"></span>',
+    '<button class="bookmark-all" data-action="all-bookmarks" type="button"><span class="bookmark-folder-icon" aria-hidden="true"></span><span>所有书签</span></button>',
   ].join("");
   elements.browserBookmarks.innerHTML = markup;
   elements.settingsBookmarks.innerHTML = markup;
+}
+
+function renderExtensions(space, installation) {
+  const extensions = space?.extensions?.length ? space.extensions : installation.extensions || [];
+  const pinned = extensions.filter((extension) => extension.pinned).slice(0, 7);
+  elements.pinnedExtensions.innerHTML = pinned.map((extension) => {
+    const image = safeDataImage(extension.iconDataUrl);
+    const icon = image
+      ? `<img src="${image}" alt="" />`
+      : `<span aria-hidden="true">${escapeHtml(extension.name.slice(0, 1).toLocaleUpperCase())}</span>`;
+    return `<button class="extension-pin ${extension.status === "error" ? "extension-error" : ""}" data-extension-id="${escapeHtml(extension.id)}" type="button" title="${escapeHtml(extension.name)}">${icon}</button>`;
+  }).join("");
+  elements.extensionsMenuButton.dataset.extensionCount = String(extensions.length);
+  elements.extensionsMenuButton.title = `扩展程序（${extensions.length}）`;
 }
 
 function renderTaskSpaces(taskSpaceState) {
@@ -94,10 +136,21 @@ function renderTaskSpaces(taskSpaceState) {
   elements.taskSpaces.innerHTML = cards.join("");
 }
 
-function renderBrowser(taskSpaceState) {
+function tabMarkup(tab) {
+  let favicon = "e";
+  try { favicon = new URL(tab.url).hostname.slice(0, 1).toLocaleUpperCase() || "e"; } catch {}
+  return `<div class="browser-tab ${tab.active ? "active" : ""}" role="tab" aria-selected="${tab.active}" data-target-id="${escapeHtml(tab.targetId)}" data-group-id="${escapeHtml(tab.groupId || "")}">
+    <button data-action="activate-tab" type="button" title="${escapeHtml(tab.url)}"><span class="tab-favicon">${escapeHtml(favicon)}</span><span>${escapeHtml(tab.title || "新标签页")}</span></button>
+    <button data-action="close-tab" type="button" aria-label="关闭标签页">×</button>
+  </div>`;
+}
+
+function renderBrowser(taskSpaceState, installation) {
   const space = taskSpaceState?.activeTaskSpace || null;
   if (!space) {
     elements.taskControlBar.classList.add("hidden");
+    elements.browserTabs.innerHTML = "";
+    renderExtensions(null, installation);
     return;
   }
   elements.workspaceTitle.textContent = space.name;
@@ -112,17 +165,25 @@ function renderBrowser(taskSpaceState) {
   elements.navBack.disabled = !navigation.canGoBack;
   elements.navForward.disabled = !navigation.canGoForward;
   elements.navReload.textContent = navigation.loading ? "×" : "↻";
-  elements.browserTabs.innerHTML = (space.tabs || []).map((tab) => `
-    <div class="browser-tab ${tab.active ? "active" : ""}" role="tab" aria-selected="${tab.active}" data-target-id="${escapeHtml(tab.targetId)}">
-      <button data-action="activate-tab" type="button" title="${escapeHtml(tab.url)}"><span class="tab-favicon">e</span><span>${escapeHtml(tab.title || "新标签页")}</span></button>
-      <button data-action="close-tab" type="button" aria-label="关闭标签页">×</button>
-    </div>
-  `).join("");
+  const tabs = space.tabs || [];
+  const groups = space.tabGroups || [];
+  const groupedIds = new Set();
+  const groupedMarkup = groups.map((group) => {
+    const groupTabs = tabs.filter((tab) => tab.groupId === group.id);
+    for (const tab of groupTabs) groupedIds.add(tab.targetId);
+    return `<div class="tab-group group-color-${escapeHtml(group.color)}" data-tab-group-id="${escapeHtml(group.id)}">
+      <button class="tab-group-pill" data-action="toggle-tab-group" data-group-id="${escapeHtml(group.id)}" type="button" aria-expanded="${!group.collapsed}" title="${group.collapsed ? "展开" : "折叠"} ${escapeHtml(group.name)}"><span class="tab-group-dot"></span><span>${escapeHtml(group.name)}</span></button>
+      <button class="tab-group-edit" data-action="edit-tab-group" data-group-id="${escapeHtml(group.id)}" type="button" aria-label="编辑 ${escapeHtml(group.name)}">⌄</button>
+      ${group.collapsed ? "" : groupTabs.map(tabMarkup).join("")}
+    </div>`;
+  }).join("");
+  const ungroupedMarkup = tabs.filter((tab) => !groupedIds.has(tab.targetId)).map(tabMarkup).join("");
+  elements.browserTabs.innerHTML = groupedMarkup + ungroupedMarkup;
+  renderExtensions(space, installation);
 }
 
 function renderSettings(state) {
   const installation = state.installation || {};
-  renderBookmarks(installation);
   const importResult = installation.result || {};
   elements.importSource.textContent = installation.mode === "imported"
     ? `来自 ${installation.source?.browser || "浏览器"} · ${installation.source?.profileDirectory || ""}`
@@ -167,7 +228,8 @@ function render(state) {
   elements.overviewSpaceCount.disabled = inSpacesOverview;
   elements.overviewSpaceCount.title = inSpacesOverview ? "当前位于 Space 总览" : "返回 Space 总览";
   elements.overviewSpaceCount.setAttribute("aria-current", inSpacesOverview ? "page" : "false");
-  renderBrowser(state.taskSpaces);
+  renderBookmarks(installation, state.taskSpaces);
+  renderBrowser(state.taskSpaces, installation);
   renderSettings(state);
 }
 
@@ -193,6 +255,119 @@ async function run(button, label, operation) {
   }
 }
 
+function activeSpace() {
+  return currentState?.taskSpaces?.activeTaskSpace || null;
+}
+
+function allBookmarkNodes() {
+  const installation = currentState?.installation || {};
+  return [...(installation.bookmarkBar || installation.bookmarks || []), ...(installation.otherBookmarks || [])];
+}
+
+function findBookmark(id, nodes = allBookmarkNodes()) {
+  for (const bookmark of nodes) {
+    if (String(bookmark.id) === String(id)) return bookmark;
+    const found = bookmark.children?.length ? findBookmark(id, bookmark.children) : null;
+    if (found) return found;
+  }
+  return null;
+}
+
+function bookmarkMenuItems(bookmarks) {
+  const visible = bookmarks.slice(0, 80);
+  const markup = visible.map((bookmark) => {
+    const action = bookmark.type === "folder" ? "popover-bookmark-folder" : "popover-bookmark";
+    const data = bookmark.type === "folder"
+      ? `data-bookmark-id="${escapeHtml(bookmark.id)}"`
+      : `data-bookmark-url="${escapeHtml(bookmark.url)}"`;
+    return `<button class="popover-row" data-action="${action}" ${data} type="button">${bookmarkIcon(bookmark)}<span>${escapeHtml(bookmark.name)}</span>${bookmark.type === "folder" ? '<span class="row-arrow">›</span>' : ""}</button>`;
+  }).join("");
+  return markup + (bookmarks.length > visible.length ? `<p class="popover-note">还有 ${bookmarks.length - visible.length} 项，请从子文件夹继续查看。</p>` : "");
+}
+
+function openPopover(title, content, kind) {
+  popoverKind = kind;
+  elements.chromePopover.innerHTML = `<div class="popover-heading"><strong>${escapeHtml(title)}</strong><button data-action="close-popover" type="button" aria-label="关闭">×</button></div><div class="popover-content">${content}</div>`;
+  elements.chromePopover.classList.remove("hidden");
+  void window.browserLite.setChromeMenuOpen(true);
+}
+
+function closePopover() {
+  if (elements.chromePopover.classList.contains("hidden")) return;
+  popoverKind = "";
+  elements.chromePopover.classList.add("hidden");
+  elements.chromePopover.innerHTML = "";
+  void window.browserLite.setChromeMenuOpen(false);
+}
+
+function openBookmarkFolder(bookmark) {
+  if (!bookmark) return;
+  openPopover(bookmark.name || "书签", bookmarkMenuItems(bookmark.children || []), "bookmarks");
+}
+
+function currentExtensions() {
+  const space = activeSpace();
+  return space?.extensions?.length ? space.extensions : currentState?.installation?.extensions || [];
+}
+
+function extensionIcon(extension) {
+  const image = safeDataImage(extension.iconDataUrl);
+  return image
+    ? `<img class="extension-menu-icon" src="${image}" alt="" />`
+    : `<span class="extension-menu-fallback" aria-hidden="true">${escapeHtml(extension.name.slice(0, 1).toLocaleUpperCase())}</span>`;
+}
+
+function extensionStatus(extension) {
+  if (extension.status === "loaded") return "已启用";
+  if (extension.status === "disabled") return "已停用";
+  if (extension.status === "error") return "不兼容";
+  return "等待加载";
+}
+
+function openExtensionsMenu() {
+  const extensions = currentExtensions();
+  const content = extensions.length ? extensions.map((extension) => `<button class="popover-row extension-row" data-action="extension-details" data-extension-id="${escapeHtml(extension.id)}" type="button">${extensionIcon(extension)}<span><strong>${escapeHtml(extension.name)}</strong><small>${escapeHtml(extensionStatus(extension))} · v${escapeHtml(extension.version)}</small></span>${extension.pinned ? '<span class="pin-mark" title="已固定">●</span>' : ""}</button>`).join("") : '<p class="popover-empty">没有导入扩展程序</p>';
+  openPopover("扩展程序", content, "extensions");
+}
+
+function openExtensionDetails(extensionId) {
+  const extension = currentExtensions().find((candidate) => candidate.id === extensionId);
+  if (!extension) return;
+  const canOpen = extension.status === "loaded" && extension.defaultPopup;
+  const warning = extension.error ? `<p class="popover-warning">${escapeHtml(extension.error)}</p>` : "";
+  openPopover(extension.name, `<div class="extension-detail">${extensionIcon(extension)}<div><strong>v${escapeHtml(extension.version)}</strong><span>${escapeHtml(extensionStatus(extension))}</span></div></div>${warning}<button class="popover-primary" data-action="open-extension" data-extension-id="${escapeHtml(extension.id)}" type="button" ${canOpen ? "" : "disabled"}>${extension.defaultPopup ? "打开扩展" : "此扩展没有弹出页"}</button>`, "extensions");
+}
+
+const GROUP_COLORS = ["grey", "blue", "red", "yellow", "green", "pink", "purple", "cyan", "orange"];
+
+function groupForm(group = null, targetId = "") {
+  const color = group?.color || "blue";
+  return `<form id="tab-group-form" data-group-id="${escapeHtml(group?.id || "")}" data-target-id="${escapeHtml(targetId)}">
+    <label class="popover-label">名称<input name="name" maxlength="40" value="${escapeHtml(group?.name || "新建标签组")}" autocomplete="off" /></label>
+    <fieldset class="group-colors"><legend>颜色</legend>${GROUP_COLORS.map((value) => `<label class="group-color-${value}" title="${value}"><input type="radio" name="color" value="${value}" ${value === color ? "checked" : ""} /><span></span></label>`).join("")}</fieldset>
+    <div class="popover-actions">${group ? '<button class="popover-danger" data-action="remove-tab-group" type="button">取消分组</button>' : ""}<button class="popover-primary" type="submit">${group ? "保存" : "创建"}</button></div>
+  </form>`;
+}
+
+function openNewGroupMenu() {
+  const space = activeSpace();
+  const activeTab = space?.tabs?.find((tab) => tab.active);
+  const targetId = activeTab?.targetId || document.querySelector(".browser-tab.active")?.dataset.targetId || "";
+  if (!targetId) return;
+  openPopover("新建标签组", groupForm(null, targetId), "tab-group");
+}
+
+function openGroupEditor(groupId) {
+  const group = activeSpace()?.tabGroups?.find((candidate) => candidate.id === groupId);
+  if (group) openPopover("编辑标签组", groupForm(group), "tab-group");
+}
+
+function openTabGroupAssignment(targetId) {
+  const groups = activeSpace()?.tabGroups || [];
+  const rows = groups.map((group) => `<button class="popover-row group-color-${escapeHtml(group.color)}" data-action="assign-tab-group" data-target-id="${escapeHtml(targetId)}" data-group-id="${escapeHtml(group.id)}" type="button"><span class="tab-group-dot"></span><span>${escapeHtml(group.name)}</span></button>`).join("");
+  openPopover("将标签页加入分组", `${rows}<button class="popover-row" data-action="assign-tab-group" data-target-id="${escapeHtml(targetId)}" data-group-id="" type="button"><span class="ungroup-icon">—</span><span>从分组中移除</span></button>`, "tab-group");
+}
+
 elements.taskSpaces.addEventListener("click", async (event) => {
   const button = event.target.closest("button[data-action]");
   if (!button) return;
@@ -212,10 +387,97 @@ elements.taskSpaces.addEventListener("click", async (event) => {
 
 elements.browserTabs.addEventListener("click", async (event) => {
   const button = event.target.closest("button[data-action]");
+  const space = activeSpace();
+  if (!button || !space) return;
+  if (button.dataset.action === "toggle-tab-group") {
+    await run(button, null, () => window.browserLite.taskSpaceBrowserAction(space.id, "toggleTabGroup", button.dataset.groupId));
+    return;
+  }
+  if (button.dataset.action === "edit-tab-group") {
+    openGroupEditor(button.dataset.groupId);
+    return;
+  }
   const tab = event.target.closest("[data-target-id]");
-  const space = currentState?.taskSpaces?.activeTaskSpace;
-  if (!button || !tab || !space) return;
+  if (!tab) return;
   await run(button, null, () => window.browserLite.taskSpaceBrowserAction(space.id, button.dataset.action === "close-tab" ? "closeTab" : "activateTab", tab.dataset.targetId));
+});
+
+elements.browserTabs.addEventListener("contextmenu", (event) => {
+  const tab = event.target.closest("[data-target-id]");
+  if (!tab) return;
+  event.preventDefault();
+  openTabGroupAssignment(tab.dataset.targetId);
+});
+
+elements.newTabGroup.addEventListener("click", openNewGroupMenu);
+
+elements.browserBookmarks.addEventListener("click", async (event) => {
+  const button = event.target.closest("button[data-action]");
+  const space = activeSpace();
+  if (!button) return;
+  if (button.dataset.action === "open-bookmark" && space) {
+    closePopover();
+    await run(button, null, () => window.browserLite.taskSpaceBrowserAction(space.id, "navigate", button.dataset.bookmarkUrl));
+  } else if (button.dataset.action === "open-bookmark-folder") {
+    openBookmarkFolder(findBookmark(button.dataset.bookmarkId));
+  } else if (button.dataset.action === "bookmark-overflow") {
+    const bookmarks = currentState?.installation?.bookmarkBar || currentState?.installation?.bookmarks || [];
+    openPopover("隐藏的书签", bookmarkMenuItems(bookmarks.slice(14)), "bookmarks");
+  } else if (button.dataset.action === "all-bookmarks") {
+    openPopover("所有书签", bookmarkMenuItems(allBookmarkNodes()), "bookmarks");
+  } else if (button.dataset.action === "saved-tab-group" && space) {
+    await run(button, null, () => window.browserLite.taskSpaceBrowserAction(space.id, "toggleTabGroup", button.dataset.groupId));
+  }
+});
+
+elements.extensionsMenuButton.addEventListener("click", openExtensionsMenu);
+elements.pinnedExtensions.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-extension-id]");
+  if (button) openExtensionDetails(button.dataset.extensionId);
+});
+
+elements.chromePopover.addEventListener("click", async (event) => {
+  const button = event.target.closest("button[data-action]");
+  if (!button) return;
+  const space = activeSpace();
+  if (button.dataset.action === "close-popover") closePopover();
+  else if (button.dataset.action === "popover-bookmark-folder") openBookmarkFolder(findBookmark(button.dataset.bookmarkId));
+  else if (button.dataset.action === "popover-bookmark" && space) {
+    closePopover();
+    await run(button, null, () => window.browserLite.taskSpaceBrowserAction(space.id, "navigate", button.dataset.bookmarkUrl));
+  } else if (button.dataset.action === "extension-details") openExtensionDetails(button.dataset.extensionId);
+  else if (button.dataset.action === "open-extension" && space) {
+    const extensionId = button.dataset.extensionId;
+    closePopover();
+    await run(button, null, () => window.browserLite.taskSpaceBrowserAction(space.id, "openExtension", extensionId));
+  } else if (button.dataset.action === "assign-tab-group" && space) {
+    const payload = { targetId: button.dataset.targetId, groupId: button.dataset.groupId || "" };
+    closePopover();
+    await run(button, null, () => window.browserLite.taskSpaceBrowserAction(space.id, "moveTabToGroup", payload));
+  } else if (button.dataset.action === "remove-tab-group" && space) {
+    const form = button.closest("form");
+    const groupId = form?.dataset.groupId;
+    closePopover();
+    if (groupId) await run(button, null, () => window.browserLite.taskSpaceBrowserAction(space.id, "removeTabGroup", groupId));
+  }
+});
+
+elements.chromePopover.addEventListener("submit", async (event) => {
+  if (event.target.id !== "tab-group-form") return;
+  event.preventDefault();
+  const space = activeSpace();
+  const activeTab = space?.tabs?.find((tab) => tab.active);
+  const targetId = event.target.dataset.targetId || activeTab?.targetId || "";
+  if (!space || !targetId) return;
+  const form = new FormData(event.target);
+  const groupId = event.target.dataset.groupId;
+  const payload = { name: String(form.get("name") || "新建标签组"), color: String(form.get("color") || "blue") };
+  closePopover();
+  if (groupId) {
+    await run(null, null, () => window.browserLite.taskSpaceBrowserAction(space.id, "updateTabGroup", { ...payload, groupId }));
+  } else {
+    await run(null, null, () => window.browserLite.taskSpaceBrowserAction(space.id, "createTabGroup", { ...payload, targetId }));
+  }
 });
 
 elements.addressInput.addEventListener("focus", () => { addressEditing = true; elements.addressInput.select(); });
@@ -316,6 +578,11 @@ elements.settingsSearchInput.addEventListener("input", () => {
 });
 
 window.addEventListener("keydown", async (event) => {
+  if (event.key === "Escape" && !elements.chromePopover.classList.contains("hidden")) {
+    event.preventDefault();
+    closePopover();
+    return;
+  }
   if (!event.altKey || event.key.toLocaleLowerCase() !== "s") return;
   event.preventDefault();
   const spaces = currentState?.taskSpaces?.taskSpaces || [];
@@ -326,6 +593,12 @@ window.addEventListener("keydown", async (event) => {
   } else {
     await run(null, null, () => window.browserLite.showSpaces());
   }
+});
+
+document.addEventListener("click", (event) => {
+  if (elements.chromePopover.classList.contains("hidden")) return;
+  if (event.target.closest("#chrome-popover, #browser-bookmarks, #extensions-menu-button, #pinned-extensions, #new-tab-group, [data-action='edit-tab-group']")) return;
+  closePopover();
 });
 
 window.browserLite.onState(render);

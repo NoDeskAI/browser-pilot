@@ -1,6 +1,6 @@
 {
   "name": "browser-lite-app",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "Browser Pilot native macOS browser node",
   "private": true,
   "type": "module",

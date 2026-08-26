@@ -10,6 +10,8 @@ class FakeBrowserState {
   constructor() {
     this.activeTargetId = "tab-1";
     this.commands = [];
+    this.sessionStateRestored = false;
+    this.restoredSession = null;
   }
 
   async targets() {
@@ -33,6 +35,10 @@ class FakeBrowserState {
   async ensurePage() { return this.activeTargetId; }
   async currentUrl() { return "https://example.com/"; }
   async title() { return "Example"; }
+  async restoreSessionState(snapshot) {
+    this.restoredSession = snapshot;
+    this.sessionStateRestored = true;
+  }
 }
 
 class FakeBrowserManager {
@@ -156,6 +162,30 @@ test("task spaces persist without browser data or CDP payloads", async () => {
     const restored = new BrowserLiteTaskSpaceManager(new FakeBrowserManager(), { statePath });
     await restored.load();
     assert.equal((await restored.listTaskSpaces()).taskSpaces[0].name, "persistent");
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("saved tab groups restore before a fresh runtime may write session state", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "browser-lite-tab-groups-"));
+  const statePath = join(directory, "task-spaces.json");
+  try {
+    const first = new BrowserLiteTaskSpaceManager(new FakeBrowserManager(), { statePath });
+    const created = await first.createUserTaskSpace("grouped");
+    first.spaces.get(created.id).browserSession = {
+      version: 1,
+      tabs: [{ url: "about:blank", active: true, groupId: "group-1" }],
+      groups: [{ id: "group-1", name: "保留组", color: "purple", collapsed: true }],
+    };
+    await first.persist();
+
+    const restored = new BrowserLiteTaskSpaceManager(new FakeBrowserManager(), { statePath });
+    await restored.load();
+    await restored.openForUser(created.id);
+    const state = restored.browserManager.instances.get("task-space-1").state;
+    assert.equal(state.restoredSession.groups[0].name, "保留组");
+    assert.equal(restored.spaces.get(created.id).browserSession.groups[0].collapsed, true);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

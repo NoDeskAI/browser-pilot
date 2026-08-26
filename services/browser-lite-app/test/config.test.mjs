@@ -11,7 +11,7 @@ test("app manifest is arm64 DMG buildable with embedded Electron Chromium", asyn
   assert.equal(manifest.main, "src/main.mjs");
   assert.match(manifest.devDependencies.electron, /^43\./);
   assert.equal(manifest.scripts["build:dmg"], "node scripts/build-dmg.mjs");
-  assert.equal(manifest.version, "0.5.1");
+  assert.equal(manifest.version, "0.5.2");
 });
 
 test("renderer has a restrictive content security policy", async () => {
@@ -148,6 +148,13 @@ test("embedded Browser Lite keeps bookmarks and browser chrome in its shell", as
   assert.match(html, /id="browser-chrome"/);
   assert.match(html, /id="browser-bookmarks"/);
   assert.match(renderer, /elements\.browserBookmarks\.innerHTML = markup/);
+  assert.match(html, /id="extensions-menu-button"/);
+  assert.match(html, /id="new-tab-group"/);
+  assert.match(renderer, /openBookmarkFolder/);
+  assert.match(renderer, /openExtensionsMenu/);
+  assert.match(renderer, /createTabGroup/);
+  assert.match(await readFile(join(ROOT, "src", "installation.mjs"), "utf8"), /runtimeExtensions/);
+  assert.match(await readFile(join(ROOT, "src", "electron-runtime.mjs"), "utf8"), /extensions\.loadExtension/);
 });
 
 test("settings expose recoverable reset and uninstall flows", async () => {
@@ -224,7 +231,8 @@ test("application exit waits for embedded views and local servers to stop", asyn
   assert.match(source, /shutdownComplete = true;[\s\S]*app\.quit\(\)/);
   assert.doesNotMatch(source, /app\.on\("will-quit"[\s\S]*manager\?\.shutdown/);
   assert.match(manager, /async stop\(\)[\s\S]*this\.destroyView\(targetId\)/);
-  assert.match(manager, /async shutdown\(\)[\s\S]*entry\.state\.stop\(\)[\s\S]*entry\.server\.close/);
+  assert.match(manager, /async shutdown\(\)[\s\S]*entry\.state\.stop\(\)[\s\S]*closeServer\(entry\.server\)/);
+  assert.match(manager, /server\.closeAllConnections\?\.\(\)/);
   assert.doesNotMatch(manager, /onNativeBrowserExit|process\.kill|Browser\.close/);
 });
 
