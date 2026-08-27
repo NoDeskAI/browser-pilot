@@ -161,6 +161,8 @@ export class BrowserLiteTaskSpaceManager {
     this.dispatchContext = "default";
     this.nextSpaceId = 1;
     this.dispatchQueue = Promise.resolve();
+    this.persistQueue = Promise.resolve();
+    this.previewRefreshes = new Map();
   }
 
   get selectedSpaceId() {
@@ -230,8 +232,6 @@ export class BrowserLiteTaskSpaceManager {
 
   async persist() {
     if (!this.statePath) return;
-    await mkdir(dirname(this.statePath), { recursive: true, mode: 0o700 });
-    const temporaryPath = `${this.statePath}.tmp`;
     const serialized = {
       version: 1,
       nextSpaceId: this.nextSpaceId,
@@ -239,8 +239,15 @@ export class BrowserLiteTaskSpaceManager {
       selectedSpaceIds: Object.fromEntries(this.selectedSpaceIds),
       spaces: [...this.spaces.values()],
     };
-    await writeFile(temporaryPath, `${JSON.stringify(serialized, null, 2)}\n`, { mode: 0o600 });
-    await rename(temporaryPath, this.statePath);
+    const writeState = async () => {
+      await mkdir(dirname(this.statePath), { recursive: true, mode: 0o700 });
+      const temporaryPath = `${this.statePath}.tmp`;
+      await writeFile(temporaryPath, `${JSON.stringify(serialized, null, 2)}\n`, { mode: 0o600 });
+      await rename(temporaryPath, this.statePath);
+    };
+    const result = this.persistQueue.then(writeState, writeState);
+    this.persistQueue = result.then(() => undefined, () => undefined);
+    return result;
   }
 
   async profiles() {
@@ -371,13 +378,8 @@ export class BrowserLiteTaskSpaceManager {
         } catch {}
       }
       let previewDataUrl = space.previewDataUrl || "";
-      if (state && this.browserManager.viewMode === "spaces") {
-        const capturedPreview = persistedPreview(await state.previewDataUrl?.() || "");
-        if (capturedPreview && capturedPreview !== space.previewDataUrl) {
-          space.previewDataUrl = capturedPreview;
-          previewDataUrl = capturedPreview;
-          persistedStateChanged = true;
-        }
+      if (state && this.browserManager.viewMode === "spaces" && !navigation?.loading) {
+        this.refreshPreviewInBackground(space, state);
       }
       taskSpaces.push({
         ...publicTaskSpace(space),
@@ -398,6 +400,22 @@ export class BrowserLiteTaskSpaceManager {
     if (persistedStateChanged) await this.persist();
     const activeTaskSpace = taskSpaces.find((space) => space.active) || null;
     return { taskSpaces, activeTaskSpace };
+  }
+
+  refreshPreviewInBackground(space, state) {
+    if (this.previewRefreshes.has(space.id) || typeof state.previewDataUrl !== "function") return;
+    const refresh = Promise.resolve()
+      .then(() => state.previewDataUrl())
+      .then(async (value) => {
+        const previewDataUrl = persistedPreview(value || "");
+        if (!previewDataUrl || previewDataUrl === space.previewDataUrl) return;
+        space.previewDataUrl = previewDataUrl;
+        await this.persist();
+        this.browserManager.onChanged?.();
+      })
+      .catch(() => {})
+      .finally(() => this.previewRefreshes.delete(space.id));
+    this.previewRefreshes.set(space.id, refresh);
   }
 
   async openForUser(value) {

@@ -102,7 +102,7 @@ export class ElectronBrowserLiteState {
     this.onChanged?.();
   }
 
-  async createWindow(url = "about:blank", { groupId = "" } = {}) {
+  async createWindow(url = "about:blank", { groupId = "", waitForLoad = true } = {}) {
     const view = new WebContentsView({
       webPreferences: {
         partition: this.partition,
@@ -145,11 +145,15 @@ export class ElectronBrowserLiteState {
       return { action: "deny" };
     });
     if (!view.webContents.debugger.isAttached()) view.webContents.debugger.attach("1.3");
-    try {
-      await view.webContents.loadURL(url);
-    } catch (error) {
-      if (view.webContents.isDestroyed()) throw error;
-    }
+    const loadPage = async () => {
+      try {
+        await view.webContents.loadURL(url);
+      } catch (error) {
+        if (view.webContents.isDestroyed()) throw error;
+      }
+    };
+    if (waitForLoad) await loadPage();
+    else void loadPage().catch(() => {});
     if (this.visible) this.setVisible(true, targetId);
     this.notifyChanged();
     return { targetId, window: view };
@@ -327,7 +331,10 @@ export class ElectronBrowserLiteState {
     }
     let activeTargetId = "";
     for (const saved of snapshot.tabs.slice(0, 100)) {
-      const created = await this.createWindow(restoredUrl(saved?.url), { groupId: String(saved?.groupId || "") });
+      const created = await this.createWindow(restoredUrl(saved?.url), {
+        groupId: String(saved?.groupId || ""),
+        waitForLoad: false,
+      });
       if (saved?.active) activeTargetId = created.targetId;
     }
     if (activeTargetId) await this.activate(activeTargetId);

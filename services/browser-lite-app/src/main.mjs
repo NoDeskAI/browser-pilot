@@ -22,6 +22,14 @@ let bootstrapReady = false;
 let resolveBootstrapReady;
 const bootstrapReadyPromise = new Promise((resolveReady) => { resolveBootstrapReady = resolveReady; });
 const isTestBuild = process.env.BROWSER_LITE_TEST_BUILD === "1";
+const startupTraceEnabled = process.env.BROWSER_LITE_STARTUP_TRACE === "1";
+const startupTraceStartedAt = Date.now();
+let publicStateSequence = 0;
+
+function traceStartup(phase, details = "") {
+  if (!startupTraceEnabled) return;
+  console.log(`[startup +${Date.now() - startupTraceStartedAt}ms] ${phase}${details ? ` ${details}` : ""}`);
+}
 
 // Ad-hoc signed test builds must stay unattended across upgrades. Chromium's
 // own cookie encryption otherwise asks macOS Keychain to trust each new ad-hoc
@@ -42,7 +50,9 @@ if (!hasSingleInstanceLock) app.quit();
 function emitState() {
   if (!bootstrapReady) return;
   if (dashboardWindow && !dashboardWindow.isDestroyed()) {
-    void getPublicState().then((state) => dashboardWindow.webContents.send("browser-lite:state", state));
+    void getPublicState()
+      .then((state) => dashboardWindow.webContents.send("browser-lite:state", state))
+      .catch((error) => console.error("Browser Lite failed to publish state", error));
   }
 }
 
@@ -97,7 +107,14 @@ async function startNodeAgent() {
 }
 
 async function getPublicState() {
+  const sequence = ++publicStateSequence;
+  traceStartup("public-state:start", `#${sequence}`);
   const taskSpaceState = taskSpaces ? await taskSpaces.workspaceState() : { taskSpaces: [], activeTaskSpace: null };
+  traceStartup("public-state:spaces", `#${sequence}`);
+  const instances = manager ? await manager.list() : [];
+  traceStartup("public-state:instances", `#${sequence}`);
+  const installationState = installation ? await installation.publicState() : { complete: false, required: true, profiles: [] };
+  traceStartup("public-state:installation", `#${sequence}`);
   return {
     app: {
       name: app.getName(),
@@ -107,10 +124,10 @@ async function getPublicState() {
       packaged: app.isPackaged,
     },
     node: nodeAgent?.publicState() ?? null,
-    instances: manager ? await manager.list() : [],
+    instances,
     taskSpaces: taskSpaceState,
     workspace: manager?.workspaceState() ?? { mode: "spaces", activeInstanceId: null, browserAvailable: false },
-    installation: installation ? await installation.publicState() : { complete: false, required: true, profiles: [] },
+    installation: installationState,
   };
 }
 
@@ -331,9 +348,12 @@ async function bootstrap() {
   if (app.isPackaged && !isTestBuild) {
     app.setLoginItemSettings({ openAtLogin: true, openAsHidden: true });
   }
+  registerIpc();
   createDashboardWindow();
+  traceStartup("dashboard-created");
   installation = new BrowserLiteInstallation();
   await installation.load();
+  traceStartup("installation-loaded");
   dashboardWindow.setTitle(installation.isComplete() ? "Browser Lite — 设置" : "Browser Lite — 安装");
   manager = new BrowserLiteManager({ hostWindow: dashboardWindow, installation, onChanged: emitState });
   taskSpaces = new BrowserLiteTaskSpaceManager(manager, {
@@ -348,24 +368,28 @@ async function bootstrap() {
   });
   manager.getSpaceCount = () => taskSpaces?.spaces?.size || 0;
   await taskSpaces.load();
+  traceStartup("task-spaces-loaded");
   nodeAgent = new BrowserLiteNodeAgent(manager, { onChanged: emitState, taskSpaces });
-  registerIpc();
   createTray();
   globalShortcut.register("Alt+S", () => {
     void manager.showSpaces().then(emitState).catch((error) => console.error("Browser Lite failed to show Spaces", error));
   });
   if (installation.isComplete()) {
     await taskSpaces.startActiveSpaces();
+    traceStartup("active-spaces-started");
     await startNodeAgent();
+    traceStartup("node-agent-started");
   }
   if (installation.isComplete()) await manager.showSpaces();
   else await manager.showSettings();
+  traceStartup("workspace-shown");
   if (installation.isComplete() && app.isPackaged && !isTestBuild && app.getLoginItemSettings().wasOpenedAtLogin) {
     dashboardWindow.hide();
     app.dock?.hide();
   }
   bootstrapReady = true;
   resolveBootstrapReady();
+  traceStartup("bootstrap-ready");
   emitState();
 }
 

@@ -9,12 +9,43 @@ const elements = Object.fromEntries([
   "return-control", "take-control", "terminate-task", "task-control-bar", "task-control-name",
   "settings-search-input", "settings-profile-page", "settings-about-page", "profile-display-name",
   "browser-bookmarks", "settings-bookmarks", "settings-space-count", "pinned-extensions",
-  "extensions-menu-button", "chrome-popover",
+  "extensions-menu-button", "chrome-popover", "startup-loading", "startup-title", "startup-message",
 ].map((id) => [id.replace(/-([a-z])/g, (_, letter) => letter.toUpperCase()), document.querySelector(`#${id}`)]));
 
 let currentState = null;
 let addressEditing = false;
 let popoverKind = "";
+const bootStartedAt = performance.now();
+let bootRevealTimer = null;
+let bootTransitionTimer = null;
+let bootRevealScheduled = false;
+
+function revealApplication() {
+  if (!document.body.classList.contains("booting") || bootRevealScheduled) return;
+  bootRevealScheduled = true;
+  const revealDelay = Math.max(0, 420 - (performance.now() - bootStartedAt));
+  bootRevealTimer = setTimeout(() => {
+    document.body.classList.add("boot-transitioning");
+    document.body.classList.remove("booting", "boot-error");
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      document.body.classList.add("boot-ready");
+    }));
+    bootTransitionTimer = setTimeout(() => {
+      document.body.classList.remove("boot-transitioning", "boot-ready");
+      document.body.classList.add("booted");
+      elements.startupLoading.setAttribute("aria-hidden", "true");
+    }, 300);
+  }, revealDelay);
+}
+
+function showStartupError(error) {
+  clearTimeout(bootRevealTimer);
+  clearTimeout(bootTransitionTimer);
+  console.error("Browser Lite controller failed to start", error);
+  document.body.classList.add("boot-error");
+  elements.startupTitle.textContent = "Browser Lite 启动失败";
+  elements.startupMessage.textContent = "启动状态无法读取，请重新打开 Browser Lite。";
+}
 
 function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>'"]/g, (character) => ({
@@ -230,11 +261,12 @@ function renderSettings(state) {
 }
 
 function render(state) {
+  const wasBooting = document.body.classList.contains("booting");
   currentState = state;
   const installation = state.installation || {};
   const inSpacesOverview = state.workspace?.mode === "spaces";
   renderInstaller(installation);
-  document.body.classList.remove("booting", "spaces-mode", "browser-mode", "settings-mode");
+  document.body.classList.remove("spaces-mode", "browser-mode", "settings-mode");
   if (!installation.required) document.body.classList.add(`${state.workspace?.mode || "spaces"}-mode`);
   renderTaskSpaces(state.taskSpaces);
   elements.overviewSpaceCount.disabled = inSpacesOverview;
@@ -243,6 +275,7 @@ function render(state) {
   renderBookmarks(installation, state.taskSpaces);
   renderBrowser(state.taskSpaces, installation);
   renderSettings(state);
+  if (wasBooting) revealApplication();
 }
 
 async function refresh() {
@@ -628,4 +661,8 @@ document.addEventListener("click", (event) => {
 });
 
 window.browserLite.onState(render);
-await refresh();
+try {
+  await refresh();
+} catch (error) {
+  showStartupError(error);
+}

@@ -11,7 +11,7 @@ test("app manifest is arm64 DMG buildable with embedded Electron Chromium", asyn
   assert.equal(manifest.main, "src/main.mjs");
   assert.match(manifest.devDependencies.electron, /^43\./);
   assert.equal(manifest.scripts["build:dmg"], "node scripts/build-dmg.mjs");
-  assert.equal(manifest.version, "0.5.5");
+  assert.equal(manifest.version, "0.5.6");
 });
 
 test("renderer has a restrictive content security policy", async () => {
@@ -46,10 +46,24 @@ test("Spaces stay inside the single Browser Lite window", async () => {
   assert.match(main, /browser-lite:show-settings/);
   assert.match(main, /browser-lite:show-spaces/);
   assert.match(main, /await taskSpaces\.startActiveSpaces\(\)/);
+  assert.match(main, /async function bootstrap\(\)[\s\S]*registerIpc\(\);[\s\S]*createDashboardWindow\(\);/);
   assert.match(main, /await bootstrapReadyPromise/);
   assert.match(main, /bootstrapReady = true;[\s\S]*resolveBootstrapReady\(\)/);
   assert.doesNotMatch(html, /id="show-spaces"/);
   assert.match(html, /id="settings-page"/);
+});
+
+test("startup shows a loading surface and restored pages cannot block embedded runtime readiness", async () => {
+  const html = await readFile(join(ROOT, "src", "renderer", "index.html"), "utf8");
+  const css = await readFile(join(ROOT, "src", "renderer", "styles.css"), "utf8");
+  const renderer = await readFile(join(ROOT, "src", "renderer", "renderer.mjs"), "utf8");
+  const runtime = await readFile(join(ROOT, "src", "electron-runtime.mjs"), "utf8");
+  assert.match(html, /id="startup-loading"[\s\S]*正在准备所有 Space/);
+  assert.match(css, /\.boot-transitioning\.boot-ready \.startup-loading[\s\S]*scale\(1\.07\)/);
+  assert.match(renderer, /function revealApplication\(\)[\s\S]*420 - \(performance\.now\(\) - bootStartedAt\)[\s\S]*requestAnimationFrame[\s\S]*booted/);
+  assert.match(renderer, /try \{[\s\S]*await refresh\(\);[\s\S]*showStartupError/);
+  assert.match(runtime, /createWindow\(restoredUrl\(saved\?\.url\)[\s\S]*waitForLoad: false/);
+  assert.match(runtime, /if \(waitForLoad\) await loadPage\(\);[\s\S]*else void loadPage\(\)/);
 });
 
 test("Dock and status item restore the main workspace while right click exposes settings", async () => {

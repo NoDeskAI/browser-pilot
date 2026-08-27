@@ -214,6 +214,37 @@ test("all persisted active Spaces start before the overview becomes interactive"
   }
 });
 
+test("concurrent state writes remain atomic", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "browser-lite-persist-queue-"));
+  const statePath = join(directory, "task-spaces.json");
+  try {
+    const taskSpaces = new BrowserLiteTaskSpaceManager(new FakeBrowserManager(), { statePath });
+    await taskSpaces.createUserTaskSpace("first");
+    taskSpaces.spaces.get(1).name = "updated";
+    await Promise.all([taskSpaces.persist(), taskSpaces.persist(), taskSpaces.persist()]);
+    const serialized = JSON.parse(await readFile(statePath, "utf8"));
+    assert.equal(serialized.spaces[0].name, "updated");
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("workspace state never waits for a fresh page preview", async () => {
+  const browserManager = new FakeBrowserManager();
+  browserManager.viewMode = "spaces";
+  browserManager.activeInstanceId = null;
+  const taskSpaces = new BrowserLiteTaskSpaceManager(browserManager);
+  const created = await taskSpaces.createUserTaskSpace("preview");
+  const state = browserManager.instances.get(`task-space-${created.id}`).state;
+  state.navigationState = () => ({ loading: false });
+  state.previewDataUrl = () => new Promise(() => {});
+  const result = await Promise.race([
+    taskSpaces.workspaceState(),
+    new Promise((_, reject) => setTimeout(() => reject(new Error("workspaceState waited for preview")), 50)),
+  ]);
+  assert.equal(result.taskSpaces[0].previewDataUrl, "");
+});
+
 test("remote dispatch serializes lifecycle mutations", async () => {
   const taskSpaces = createTaskSpaces();
   const first = taskSpaces.dispatch("createTaskSpace", ["first"]);
