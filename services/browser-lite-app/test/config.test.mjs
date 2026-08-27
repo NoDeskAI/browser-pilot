@@ -11,7 +11,7 @@ test("app manifest is arm64 DMG buildable with embedded Electron Chromium", asyn
   assert.equal(manifest.main, "src/main.mjs");
   assert.match(manifest.devDependencies.electron, /^43\./);
   assert.equal(manifest.scripts["build:dmg"], "node scripts/build-dmg.mjs");
-  assert.equal(manifest.version, "0.5.4");
+  assert.equal(manifest.version, "0.5.5");
 });
 
 test("renderer has a restrictive content security policy", async () => {
@@ -164,7 +164,19 @@ test("embedded Browser Lite keeps bookmarks and browser chrome in its shell", as
   assert.match(renderer, /openExtensionsMenu/);
   assert.match(renderer, /createTabGroup/);
   assert.match(await readFile(join(ROOT, "src", "installation.mjs"), "utf8"), /runtimeExtensions/);
-  assert.match(await readFile(join(ROOT, "src", "electron-runtime.mjs"), "utf8"), /extensions\.loadExtension/);
+  const runtime = await readFile(join(ROOT, "src", "electron-runtime.mjs"), "utf8");
+  assert.match(runtime, /registerExtensions/);
+  assert.match(runtime, /status: "disabled"/);
+  assert.doesNotMatch(runtime, /extensions\.loadExtension|state\.loadExtensions/);
+});
+
+test("imported extensions remain listed but stay disabled in every Space", async () => {
+  const runtime = await readFile(join(ROOT, "src", "electron-runtime.mjs"), "utf8");
+  const installation = await readFile(join(ROOT, "src", "installation.mjs"), "utf8");
+  assert.match(runtime, /descriptor, enabled: false/);
+  assert.match(runtime, /extensionRuntime\.set\(descriptor\.id, \{ status: "disabled"/);
+  assert.match(runtime, /state\.registerExtensions\(await this\.installation\?\.runtimeExtensions/);
+  assert.match(installation, /enabled: false,[\s\S]*status: "disabled"/);
 });
 
 test("settings expose recoverable reset and uninstall flows", async () => {

@@ -87,10 +87,16 @@ try {
     activeSpaces: state.taskSpaces.taskSpaces.filter(space => space.status === "active").length,
     loadedActiveSpaces: state.taskSpaces.taskSpaces.filter(space => space.status === "active" && space.loaded).length,
     runningInstances: state.instances.filter(instance => instance.ready && !instance.stopped && !instance.paused).length,
+    extensionCount: state.taskSpaces.taskSpaces.filter(space => space.status === "active").flatMap(space => space.extensions || []).length,
+    loadedExtensionCount: state.taskSpaces.taskSpaces.filter(space => space.status === "active").flatMap(space => space.extensions || []).filter(extension => extension.status === "loaded").length,
+    disabledExtensionCount: state.taskSpaces.taskSpaces.filter(space => space.status === "active").flatMap(space => space.extensions || []).filter(extension => extension.status === "disabled").length,
   }))`);
   assert.ok(prewarmed.activeSpaces > 0, "Mac mini must have at least one active Space");
   assert.equal(prewarmed.loadedActiveSpaces, prewarmed.activeSpaces, "Every active Space must be prewarmed before selection");
   assert.equal(prewarmed.runningInstances, prewarmed.activeSpaces, "Every active Space must keep a running embedded runtime");
+  assert.ok(prewarmed.extensionCount > 0, "Imported extensions must remain listed");
+  assert.equal(prewarmed.loadedExtensionCount, 0, "No extension may load at Browser Lite startup");
+  assert.equal(prewarmed.disabledExtensionCount, prewarmed.extensionCount, "Every imported extension must default to disabled");
 
   const openStartedAt = Date.now();
   await client.evaluate(`document.querySelector('[data-action="open-space"]').click()`);
@@ -201,7 +207,9 @@ try {
   assert.notEqual(returned.overviewDisplay, "none");
 
   const currentTargets = await targets();
-  assert.ok(currentTargets.some((target) => target.url === "about:blank"), "Embedded Space target was not found");
+  assert.ok(currentTargets.some((target) => (
+    target.type === "page" && !/\/renderer\/index\.html(?:$|[?#])/.test(target.url || "")
+  )), "Embedded Space target was not found");
   process.stdout.write(`${JSON.stringify({
     before,
     prewarmed,

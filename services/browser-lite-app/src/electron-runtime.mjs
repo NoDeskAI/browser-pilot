@@ -74,7 +74,6 @@ export class ElectronBrowserLiteState {
     this.partition = `persist:browser-lite-${safeInstanceId(config.instanceId)}`;
     this.extensionDescriptors = [];
     this.extensionRuntime = new Map();
-    this.extensionsLoaded = false;
     this.tabGroups = new Map();
     this.tabGroupByTarget = new Map();
     this.nextTabGroupId = 1;
@@ -335,37 +334,11 @@ export class ElectronBrowserLiteState {
     this.notifyChanged();
   }
 
-  async loadExtensions(descriptors = []) {
-    if (this.extensionsLoaded) return;
-    this.extensionsLoaded = true;
-    this.extensionDescriptors = descriptors.map((descriptor) => ({ ...descriptor }));
-    const partitionSession = session.fromPartition(this.partition);
+  registerExtensions(descriptors = []) {
+    this.extensionDescriptors = descriptors.map((descriptor) => ({ ...descriptor, enabled: false }));
+    this.extensionRuntime.clear();
     for (const descriptor of this.extensionDescriptors) {
-      if (!descriptor.enabled) {
-        this.extensionRuntime.set(descriptor.id, { status: "disabled", error: "" });
-        continue;
-      }
-      let loadOperation;
-      try {
-        loadOperation = partitionSession.extensions.loadExtension(descriptor.path, { allowFileAccess: false });
-        let timeoutId;
-        const loaded = await Promise.race([
-          loadOperation,
-          new Promise((_, reject) => {
-            timeoutId = setTimeout(() => reject(new Error("扩展加载超时")), 2_500);
-          }),
-        ]).finally(() => clearTimeout(timeoutId));
-        this.extensionRuntime.set(descriptor.id, { status: "loaded", error: "", extension: loaded });
-      } catch (error) {
-        const message = String(error?.message || error).slice(0, 240);
-        this.extensionRuntime.set(descriptor.id, { status: "error", error: message });
-        if (message === "扩展加载超时") {
-          void loadOperation?.then((loaded) => {
-            this.extensionRuntime.set(descriptor.id, { status: "loaded", error: "", extension: loaded });
-            this.notifyChanged();
-          }).catch(() => {});
-        }
-      }
+      this.extensionRuntime.set(descriptor.id, { status: "disabled", error: "" });
     }
     this.notifyChanged();
   }
@@ -373,7 +346,7 @@ export class ElectronBrowserLiteState {
   extensionsState() {
     return this.extensionDescriptors.map(({ path, ...descriptor }) => ({
       ...descriptor,
-      status: this.extensionRuntime.get(descriptor.id)?.status || "available",
+      status: this.extensionRuntime.get(descriptor.id)?.status || "disabled",
       error: this.extensionRuntime.get(descriptor.id)?.error || "",
     }));
   }
@@ -973,12 +946,11 @@ export class BrowserLiteManager {
       const address = server.address();
       config.port = typeof address === "object" && address ? address.port : config.port;
       try {
-        const extensionLoading = state.loadExtensions(await this.installation?.runtimeExtensions?.() || []);
+        state.registerExtensions(await this.installation?.runtimeExtensions?.() || []);
         await state.restoreSessionState(options.sessionState);
         await state.start();
         await this.installation?.seedRuntimeCookies(id, state);
         await state.setVisible(false);
-        void extensionLoading.catch(() => {});
       } catch (error) {
         await closeServer(server);
         throw error;

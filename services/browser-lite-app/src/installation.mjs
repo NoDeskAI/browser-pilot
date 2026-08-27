@@ -356,7 +356,12 @@ export class BrowserLiteInstallation {
       bookmarks: bookmarkModel.bookmarkBar,
       bookmarkBar: bookmarkModel.bookmarkBar,
       otherBookmarks: bookmarkModel.otherBookmarks,
-      extensions: runtimeExtensions.map(({ path, ...extension }) => extension),
+      extensions: runtimeExtensions.map(({ path, ...extension }) => ({
+        ...extension,
+        enabled: false,
+        status: "disabled",
+        error: "",
+      })),
       chromeRunning: !this.isComplete() && (await Promise.all(
         Object.values(BROWSER_SOURCES).map((source) => this.sourceRunning(source)),
       )).some(Boolean),
