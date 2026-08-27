@@ -79,6 +79,13 @@ async function captureController(client, path) {
 
 const client = await connect(await controllerTarget());
 try {
+  const startupScreenshot = process.env.BROWSER_LITE_STARTUP_SCREENSHOT || "";
+  if (startupScreenshot) {
+    await waitForState(client, `document.body.classList.contains('booting') && Boolean(document.querySelector('#startup-loading'))`, 2_000, 5);
+    const startupCopy = await client.evaluate(`document.querySelector('#startup-loading').innerText`);
+    assert.doesNotMatch(startupCopy, /所有 Space 将保持运行/);
+    await captureController(client, startupScreenshot);
+  }
   await waitForState(client, `!document.body.classList.contains('booting')`, 20_000);
   await delay(500);
   const before = await client.evaluate(`({

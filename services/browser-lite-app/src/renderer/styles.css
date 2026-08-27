@@ -41,7 +41,6 @@ h1, h2, p { margin: 0; }
 .startup-mark span:nth-child(2), .startup-mark span:nth-child(3) { background: #9693ef; }
 .startup-loading h1 { font-size: 21px; font-weight: 620; letter-spacing: -.025em; }
 .startup-loading p { margin-top: 9px; color: #666a70; font-size: 12px; }
-.startup-loading small { margin-top: 13px; color: #a0a3a8; font-size: 10px; }
 .startup-dots { display: flex; gap: 5px; height: 6px; margin-top: 15px; }
 .startup-dots span { width: 5px; height: 5px; border-radius: 50%; background: #8b89e9; animation: startup-pulse 1s ease-in-out infinite; }
 .startup-dots span:nth-child(2) { animation-delay: .14s; }

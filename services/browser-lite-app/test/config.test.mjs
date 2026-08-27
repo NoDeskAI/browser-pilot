@@ -11,7 +11,7 @@ test("app manifest is arm64 DMG buildable with embedded Electron Chromium", asyn
   assert.equal(manifest.main, "src/main.mjs");
   assert.match(manifest.devDependencies.electron, /^43\./);
   assert.equal(manifest.scripts["build:dmg"], "node scripts/build-dmg.mjs");
-  assert.equal(manifest.version, "0.5.7");
+  assert.equal(manifest.version, "0.5.8");
 });
 
 test("renderer has a restrictive content security policy", async () => {
@@ -59,6 +59,7 @@ test("startup shows a loading surface and restored pages cannot block embedded r
   const renderer = await readFile(join(ROOT, "src", "renderer", "renderer.mjs"), "utf8");
   const runtime = await readFile(join(ROOT, "src", "electron-runtime.mjs"), "utf8");
   assert.match(html, /id="startup-loading"[\s\S]*正在准备所有 Space/);
+  assert.doesNotMatch(html, /所有 Space 将保持运行/);
   assert.match(css, /\.boot-transitioning\.boot-ready \.startup-loading[\s\S]*scale\(1\.07\)/);
   assert.match(renderer, /function revealApplication\(\)[\s\S]*420 - \(performance\.now\(\) - bootStartedAt\)[\s\S]*requestAnimationFrame[\s\S]*booted/);
   assert.match(renderer, /try \{[\s\S]*await refresh\(\);[\s\S]*showStartupError/);
