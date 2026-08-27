@@ -402,6 +402,20 @@ export class BrowserLiteTaskSpaceManager {
     return { taskSpaces, activeTaskSpace };
   }
 
+  async prepareSpaceReturn(value) {
+    const id = requireNumericId(value, "Task space ID must be numeric.");
+    const space = this.requireSpace(id);
+    const state = this.browserManager.instances?.get(space.instanceId)?.state;
+    if (state && this.browserManager.activeInstanceId === space.instanceId) {
+      const previewDataUrl = persistedPreview(await state.capturePreview?.() || "");
+      if (previewDataUrl && previewDataUrl !== space.previewDataUrl) {
+        space.previewDataUrl = previewDataUrl;
+        await this.persist();
+      }
+    }
+    return { spaceId: space.id, previewDataUrl: space.previewDataUrl || "" };
+  }
+
   refreshPreviewInBackground(space, state) {
     if (this.previewRefreshes.has(space.id) || typeof state.previewDataUrl !== "function") return;
     const refresh = Promise.resolve()

@@ -97,6 +97,7 @@ h1, h2, p { margin: 0; }
 .space-profile { overflow:hidden; max-width:95px; color:#c3c4c6; font-size:10px; text-overflow:ellipsis; white-space:nowrap; }
 .card-close { position:absolute; top:8px; right:8px; display:grid; place-items:center; width:24px; height:24px; border:0; border-radius:50%; padding:0; opacity:0; color:#fff; background:rgba(30,31,34,.64); font-size:15px; transition:opacity .14s ease; }
 .space-card:hover .card-close,.card-close:focus-visible { opacity:1; }
+.space-return-target .space-preview { visibility:hidden; }
 .create-space-tile { display:grid; place-items:center; width:100%; aspect-ratio:1.71875; border:1px solid #e1e2e4; border-radius:17px; color:#c8c9cb; background:#fafafa; box-shadow:none; }
 .create-space-tile:hover { border-color:#c9cbce; background:#f8f8f8; }
 .create-space-tile span { font-size:48px; font-weight:200; line-height:1; transform:translateY(-2px); }
@@ -104,6 +105,14 @@ h1, h2, p { margin: 0; }
 .shortcut-hint { position:fixed; left:50%; bottom:58px; z-index:8; display:flex; align-items:center; gap:10px; min-width:304px; height:59px; transform:translateX(-50%); border:1px solid #e2e3e5; border-radius:13px; padding:0 18px; color:#65676b; background:rgba(255,255,255,.96); box-shadow:0 3px 12px rgba(35,39,45,.10); font-size:11px; white-space:nowrap; }
 .shortcut-hint b { color:#3e4044; font-size:13px; }
 .keyboard-glyph { display:grid; place-items:center; width:22px; height:16px; border:1px solid #bfc2c5; border-radius:4px; color:#94979b; font-size:10px; line-height:1; }
+
+/* The native WebContentsView is replaced by this painted frame before it is hidden. */
+.space-return-flight { position:fixed; top:0; left:0; z-index:90; overflow:hidden; transform-origin:0 0; pointer-events:none; background:#111; box-shadow:0 8px 28px rgba(27,31,38,.18); will-change:transform,border-radius; }
+.space-return-flight .space-return-flight-chrome { position:absolute; inset:0 0 auto; z-index:3; display:block; height:var(--toolbar-height); }
+.space-return-flight-page { position:absolute; top:var(--toolbar-height); right:0; bottom:0; left:0; overflow:hidden; background:#fff; }
+.space-return-flight.has-task-control .space-return-flight-page { bottom:105px; }
+.space-return-flight-page img { display:block; width:100%; height:100%; object-fit:cover; object-position:top center; }
+.space-return-flight-task-control { z-index:4; }
 
 /* Chromium chrome and task control surface. */
 .browser-chrome,.settings-chrome { display:none; position:fixed; inset:0 0 auto; z-index:20; height:var(--toolbar-height); color:#34383d; background:#eef0f3; border-bottom:1px solid #dfe2e6; font-family:Arial,"PingFang SC","Helvetica Neue",sans-serif; -webkit-app-region:drag; }

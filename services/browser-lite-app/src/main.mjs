@@ -267,8 +267,12 @@ function registerIpc() {
     emitState();
     return getPublicState();
   });
-  ipcMain.handle("browser-lite:show-spaces", async () => {
-    await manager.showSpaces();
+  ipcMain.handle("browser-lite:prepare-space-return", async (_event, id) => {
+    await bootstrapReadyPromise;
+    return taskSpaces.prepareSpaceReturn(id);
+  });
+  ipcMain.handle("browser-lite:show-spaces", async (_event, options = {}) => {
+    await manager.showSpaces({ capturePreview: options?.capturePreview !== false });
     emitState();
     return getPublicState();
   });

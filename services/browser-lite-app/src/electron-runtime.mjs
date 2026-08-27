@@ -869,9 +869,9 @@ export class BrowserLiteManager {
     };
   }
 
-  async showSpaces() {
+  async showSpaces({ capturePreview = true } = {}) {
     await Promise.all([...this.instances.values()].map(async (entry) => {
-      if (entry.state.visible) {
+      if (capturePreview && entry.state.visible) {
         try { await entry.state.capturePreview?.(); } catch {}
       }
       try { entry.state.setVisible(false); } catch {}

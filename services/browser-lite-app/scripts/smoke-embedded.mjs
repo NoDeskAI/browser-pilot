@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import assert from "node:assert/strict";
+import { mkdir, writeFile } from "node:fs/promises";
 
 const endpoint = process.env.BROWSER_LITE_DEVTOOLS_URL || "http://127.0.0.1:9229";
 
@@ -40,6 +41,12 @@ async function connect(target) {
     socket.addEventListener("error", rejectOpen, { once: true });
   });
   return {
+    async command(method, params = {}) {
+      const id = ++sequence;
+      const response = new Promise((resolve, reject) => pending.set(id, { resolve, reject }));
+      socket.send(JSON.stringify({ id, method, params }));
+      return response;
+    },
     async evaluate(expression) {
       const id = ++sequence;
       const response = new Promise((resolve, reject) => pending.set(id, { resolve, reject }));
@@ -56,13 +63,18 @@ async function connect(target) {
   };
 }
 
-async function waitForState(client, predicateExpression, timeout = 8_000) {
+async function waitForState(client, predicateExpression, timeout = 8_000, interval = 100) {
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
     if (await client.evaluate(predicateExpression)) return;
-    await delay(100);
+    await delay(interval);
   }
   throw new Error(`Timed out waiting for: ${predicateExpression}`);
+}
+
+async function captureController(client, path) {
+  const result = await client.command("Page.captureScreenshot", { format: "png", fromSurface: true });
+  await writeFile(path, Buffer.from(result.data, "base64"));
 }
 
 const client = await connect(await controllerTarget());
@@ -98,8 +110,9 @@ try {
   assert.equal(prewarmed.loadedExtensionCount, 0, "No extension may load at Browser Lite startup");
   assert.equal(prewarmed.disabledExtensionCount, prewarmed.extensionCount, "Every imported extension must default to disabled");
 
+  const acceptanceDir = process.env.BROWSER_LITE_ACCEPTANCE_DIR || "";
   const openStartedAt = Date.now();
-  await client.evaluate(`document.querySelector('[data-action="open-space"]').click()`);
+  await client.evaluate(`(() => { const spaces = document.querySelectorAll('[data-action="open-space"]'); (spaces[${acceptanceDir ? 1 : 0}] || spaces[0]).click(); })()`);
   await waitForState(client, `document.body.classList.contains('browser-mode')`);
   const openDurationMs = Date.now() - openStartedAt;
   assert.ok(openDurationMs < 1_000, `Prewarmed Space took ${openDurationMs}ms to become visible`);
@@ -195,8 +208,37 @@ try {
     await waitForState(client, `document.querySelector(${JSON.stringify(groupSelector)}).getAttribute('aria-expanded') === ${JSON.stringify(groupBeforeToggle)}`);
   }
 
+  if (acceptanceDir) await mkdir(acceptanceDir, { recursive: true });
   await client.evaluate(`document.querySelector('#browser-space-count').click()`);
+  let returnFrames = null;
+  if (acceptanceDir) {
+    await waitForState(client, `Boolean(document.querySelector('.space-return-flight'))`, 2_000, 2);
+    const start = await client.evaluate(`(() => { const rect = document.querySelector('.space-return-flight').getBoundingClientRect(); return { left: rect.left, top: rect.top, width: rect.width, height: rect.height }; })()`);
+    await captureController(client, `${acceptanceDir}/Browser-Lite-0.5.7-return-start.png`);
+    await waitForState(client, `document.querySelector('.space-return-flight')?.dataset.phase === 'animating'`, 2_000, 2);
+    await delay(120);
+    const mid = await client.evaluate(`(() => { const rect = document.querySelector('.space-return-flight').getBoundingClientRect(); return { left: rect.left, top: rect.top, width: rect.width, height: rect.height }; })()`);
+    await captureController(client, `${acceptanceDir}/Browser-Lite-0.5.7-return-mid.png`);
+    returnFrames = { start, mid };
+  }
   await waitForState(client, `document.body.classList.contains('spaces-mode')`);
+  await waitForState(client, `window.__browserLiteLastSpaceReturn?.phase === 'complete'`);
+  const returnAnimation = await client.evaluate(`window.__browserLiteLastSpaceReturn`);
+  assert.equal(returnAnimation.transformOrigin, "0px 0px");
+  assert.ok(returnAnimation.to.width > 0 && returnAnimation.to.height > 0, "Return animation must resolve a visible Space target");
+  assert.ok(returnAnimation.to.width < returnAnimation.from.width, "Return surface must shrink to the Space preview width");
+  assert.ok(returnAnimation.to.height < returnAnimation.from.height, "Return surface must shrink to the Space preview height");
+  for (const key of ["left", "top", "width", "height"]) {
+    assert.ok(Math.abs(returnAnimation.actualEnd[key] - returnAnimation.to[key]) <= 1, `Return animation ${key} missed its Space target`);
+  }
+  if (returnFrames) {
+    for (const key of ["left", "top"]) {
+      const direction = returnAnimation.to[key] - returnFrames.start[key];
+      const progress = returnFrames.mid[key] - returnFrames.start[key];
+      assert.ok(direction === 0 || Math.sign(progress) === Math.sign(direction), `Return animation moved in the wrong ${key} direction`);
+    }
+  }
+  if (acceptanceDir) await captureController(client, `${acceptanceDir}/Browser-Lite-0.5.7-return-end.png`);
   const returned = await client.evaluate(`({
     bodyClass: document.body.className,
     visibility: document.visibilityState,
@@ -219,6 +261,8 @@ try {
     extensionMenuRows,
     bookmarkMenuRows,
     tabGroups,
+    returnAnimation,
+    returnFrames,
     returned,
     targetCount: currentTargets.length,
     webdriverEmbedded: session.value.capabilities["browser-lite:embedded"],

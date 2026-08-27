@@ -5,6 +5,7 @@ const elements = Object.fromEntries([
   "node-name", "node-server", "node-error", "unpair-button", "app-version", "chromium-version",
   "reset-installation", "uninstall-app", "reimport-browser-data", "import-source", "imported-cookies",
   "imported-bookmarks", "imported-history", "workspace-title", "browser-tabs", "new-tab", "browser-space-count",
+  "browser-chrome",
   "nav-back", "nav-forward", "nav-reload", "address-form", "address-input", "agent-state",
   "return-control", "take-control", "terminate-task", "task-control-bar", "task-control-name",
   "settings-search-input", "settings-profile-page", "settings-about-page", "profile-display-name",
@@ -19,6 +20,8 @@ const bootStartedAt = performance.now();
 let bootRevealTimer = null;
 let bootTransitionTimer = null;
 let bootRevealScheduled = false;
+let returningSpaceId = null;
+let returnFlight = null;
 
 function revealApplication() {
   if (!document.body.classList.contains("booting") || bootRevealScheduled) return;
@@ -167,7 +170,7 @@ function renderTaskSpaces(taskSpaceState) {
     const previewMarkup = preview
       ? `<img src="${preview}" alt="${escapeHtml(space.name)} 当前页面预览" />`
       : `<span class="preview-placeholder" aria-hidden="true"></span>`;
-    return `<article class="space-card ${space.selected ? "selected" : ""} ${ownershipClass(space)}" data-space-id="${space.id}">
+    return `<article class="space-card ${space.selected ? "selected" : ""} ${ownershipClass(space)} ${Number(space.id) === returningSpaceId ? "space-return-target" : ""}" data-space-id="${space.id}">
       <button class="space-preview" data-action="open-space" type="button" aria-label="打开 ${escapeHtml(space.name)}">${previewMarkup}</button>
       <button class="card-close" data-action="close-space" type="button" aria-label="关闭 ${escapeHtml(space.name)}">×</button>
       <div class="space-meta">
@@ -302,6 +305,136 @@ async function run(button, label, operation) {
 
 function activeSpace() {
   return currentState?.taskSpaces?.activeTaskSpace || null;
+}
+
+function afterTwoFrames() {
+  return new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+}
+
+function inertClone(source, className) {
+  const clone = source.cloneNode(true);
+  clone.removeAttribute("id");
+  clone.classList.add(className);
+  clone.setAttribute("aria-hidden", "true");
+  for (const node of clone.querySelectorAll("[id], button, input, form, [tabindex]")) {
+    node.removeAttribute("id");
+    node.setAttribute("tabindex", "-1");
+  }
+  return clone;
+}
+
+function createSpaceReturnFlight(space, previewDataUrl) {
+  const flight = document.createElement("div");
+  flight.className = "space-return-flight";
+  flight.dataset.spaceId = String(space.id);
+  flight.dataset.phase = "preparing";
+  flight.style.width = `${window.innerWidth}px`;
+  flight.style.height = `${window.innerHeight}px`;
+
+  flight.append(inertClone(elements.browserChrome, "space-return-flight-chrome"));
+  const page = document.createElement("div");
+  page.className = "space-return-flight-page";
+  const preview = safeDataImage(previewDataUrl) || safePreview(space);
+  if (preview) {
+    const image = document.createElement("img");
+    image.src = preview;
+    image.alt = "";
+    page.append(image);
+  }
+  flight.append(page);
+  if (!elements.taskControlBar.classList.contains("hidden")) {
+    flight.classList.add("has-task-control");
+    flight.append(inertClone(elements.taskControlBar, "space-return-flight-task-control"));
+  }
+  document.body.append(flight);
+  return flight;
+}
+
+function rectSnapshot(rect) {
+  return {
+    left: Math.round(rect.left * 100) / 100,
+    top: Math.round(rect.top * 100) / 100,
+    width: Math.round(rect.width * 100) / 100,
+    height: Math.round(rect.height * 100) / 100,
+  };
+}
+
+async function animateSpaceReturn(flight, spaceId) {
+  let target = document.querySelector(`.space-card[data-space-id="${spaceId}"] .space-preview`);
+  if (!target) throw new Error(`找不到 Space ${spaceId} 的动画终点`);
+  target.scrollIntoView({ block: "nearest", inline: "nearest" });
+  await afterTwoFrames();
+  target = document.querySelector(`.space-card[data-space-id="${spaceId}"] .space-preview`);
+  if (!target) throw new Error(`Space ${spaceId} 的动画终点已失效`);
+  const from = flight.getBoundingClientRect();
+  const to = target.getBoundingClientRect();
+  if (to.width <= 0 || to.height <= 0) throw new Error(`Space ${spaceId} 的动画终点不可见`);
+  const scaleX = to.width / from.width;
+  const scaleY = to.height / from.height;
+  const targetRadius = Number.parseFloat(getComputedStyle(target).borderTopLeftRadius) || 17;
+  const duration = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 380;
+  const destination = `translate(${to.left - from.left}px, ${to.top - from.top}px) scale(${scaleX}, ${scaleY})`;
+  const finalRadius = `${targetRadius / scaleX}px / ${targetRadius / scaleY}px`;
+  const metrics = {
+    phase: "animating",
+    spaceId,
+    from: rectSnapshot(from),
+    to: rectSnapshot(to),
+    scaleX,
+    scaleY,
+    duration,
+    transformOrigin: "0px 0px",
+  };
+  window.__browserLiteLastSpaceReturn = metrics;
+  flight.dataset.phase = "animating";
+  const animation = flight.animate([
+    { borderRadius: "0px", transform: "translate(0px, 0px) scale(1, 1)" },
+    { borderRadius: finalRadius, transform: destination },
+  ], {
+    duration,
+    easing: "cubic-bezier(.2,.75,.25,1)",
+    fill: "forwards",
+  });
+  await animation.finished;
+  metrics.phase = "complete";
+  metrics.actualEnd = rectSnapshot(flight.getBoundingClientRect());
+}
+
+function finishSpaceReturn() {
+  returnFlight?.remove();
+  returnFlight = null;
+  const target = document.querySelector(`.space-card[data-space-id="${returningSpaceId}"]`);
+  target?.classList.remove("space-return-target");
+  returningSpaceId = null;
+}
+
+async function returnToSpaces(button = null) {
+  if (returningSpaceId !== null || returnFlight || currentState?.workspace?.mode === "spaces") return;
+  const space = activeSpace();
+  if (!space || currentState?.workspace?.mode !== "browser") {
+    await run(button, null, () => window.browserLite.showSpaces());
+    return;
+  }
+  if (button) button.disabled = true;
+  returningSpaceId = Number(space.id);
+  window.__browserLiteLastSpaceReturn = { phase: "capturing", spaceId: returningSpaceId };
+  try {
+    const prepared = await window.browserLite.prepareSpaceReturn(space.id);
+    returnFlight = createSpaceReturnFlight(space, prepared?.previewDataUrl);
+    await afterTwoFrames();
+    render(await window.browserLite.showSpaces({ capturePreview: false }));
+    await animateSpaceReturn(returnFlight, returningSpaceId);
+  } catch (error) {
+    window.__browserLiteLastSpaceReturn = {
+      phase: "error",
+      spaceId: returningSpaceId,
+      message: error.message || String(error),
+    };
+    window.alert(error.message || String(error));
+  } finally {
+    finishSpaceReturn();
+    if (button) button.disabled = false;
+  }
 }
 
 function allBookmarkNodes() {
@@ -572,7 +705,7 @@ elements.terminateTask.addEventListener("click", async () => {
 for (const countButton of [elements.overviewSpaceCount, elements.browserSpaceCount, elements.settingsSpaceCount]) {
   countButton.addEventListener("click", async () => {
     if (currentState?.workspace?.mode === "spaces") return;
-    await run(countButton, null, () => window.browserLite.showSpaces());
+    await returnToSpaces(countButton);
   });
 }
 
@@ -650,7 +783,7 @@ window.addEventListener("keydown", async (event) => {
     const next = spaces[(selectedIndex + 1) % spaces.length];
     await run(null, null, () => window.browserLite.openTaskSpace(next.id));
   } else {
-    await run(null, null, () => window.browserLite.showSpaces());
+    await returnToSpaces();
   }
 });
 

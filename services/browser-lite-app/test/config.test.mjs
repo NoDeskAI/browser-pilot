@@ -11,7 +11,7 @@ test("app manifest is arm64 DMG buildable with embedded Electron Chromium", asyn
   assert.equal(manifest.main, "src/main.mjs");
   assert.match(manifest.devDependencies.electron, /^43\./);
   assert.equal(manifest.scripts["build:dmg"], "node scripts/build-dmg.mjs");
-  assert.equal(manifest.version, "0.5.6");
+  assert.equal(manifest.version, "0.5.7");
 });
 
 test("renderer has a restrictive content security policy", async () => {
@@ -39,7 +39,7 @@ test("Spaces stay inside the single Browser Lite window", async () => {
   assert.match(runtime, /this\.config\.hostWindow\.contentView\.addChildView\(view\)/);
   assert.match(runtime, /backgroundThrottling:\s*false/);
   assert.match(runtime, /await state\.restoreSessionState\(options\.sessionState\);[\s\S]*await state\.start\(\)/);
-  assert.match(runtime, /if \(entry\.state\.visible\) \{[\s\S]*capturePreview/);
+  assert.match(runtime, /if \(capturePreview && entry\.state\.visible\) \{[\s\S]*capturePreview/);
   assert.match(runtime, /startUrl: "about:blank"/);
   assert.doesNotMatch(runtime, /this\.hostWindow\.hide\(\)/);
   assert.doesNotMatch(runtime, /nativeChromiumBinary|onNativeBrowserExit|--load-extension/);
@@ -112,7 +112,7 @@ test("Task Space workspace delegates tabs and navigation to embedded views", asy
   assert.doesNotMatch(html, /id="overview-space-switcher"/);
   assert.match(html, /id="browser-space-count"/);
   assert.match(html, /id="settings-space-count"/);
-  assert.match(renderer, /countButton\.addEventListener\("click"[\s\S]*showSpaces\(\)/);
+  assert.match(renderer, /countButton\.addEventListener\("click"[\s\S]*returnToSpaces\(countButton\)/);
   assert.match(renderer, /overviewSpaceCount\.disabled = inSpacesOverview/);
   assert.match(renderer, /if \(currentState\?\.workspace\?\.mode === "spaces"\) return/);
   assert.match(runtime, /TASK_CONTROL_RESERVE/);
@@ -156,10 +156,28 @@ test("the Browser Lite shell owns the stable Space-count button", async () => {
   const build = await readFile(join(ROOT, "scripts", "build-dmg.mjs"), "utf8");
   assert.match(main, /globalShortcut\.register\("Alt\+S"/);
   assert.match(html, /id="browser-space-count"/);
-  assert.match(renderer, /countButton\.addEventListener\("click"[\s\S]*showSpaces\(\)/);
+  assert.match(renderer, /countButton\.addEventListener\("click"[\s\S]*returnToSpaces\(countButton\)/);
   assert.match(runtime, /await app\.dock\?\.show\(\);[\s\S]*this\.hostWindow\.show\(\)/);
   assert.doesNotMatch(runtime, /prepareRuntimeExtension|extensionPath|controlToken/);
   assert.doesNotMatch(build, /BROWSER_LITE_CHROMIUM_APP|bundledChromiumRoot|brandBundledChromium/);
+});
+
+test("returning from an instance shrinks into its exact Space card", async () => {
+  const main = await readFile(join(ROOT, "src", "main.mjs"), "utf8");
+  const preload = await readFile(join(ROOT, "src", "preload.cjs"), "utf8");
+  const renderer = await readFile(join(ROOT, "src", "renderer", "renderer.mjs"), "utf8");
+  const css = await readFile(join(ROOT, "src", "renderer", "styles.css"), "utf8");
+  assert.match(main, /browser-lite:prepare-space-return/);
+  assert.match(preload, /prepareSpaceReturn/);
+  assert.match(renderer, /prepareSpaceReturn\(space\.id\)[\s\S]*afterTwoFrames\(\)[\s\S]*showSpaces\(\{ capturePreview: false \}\)/);
+  assert.match(renderer, /\.space-card\[data-space-id=[\s\S]*\.space-preview/);
+  assert.match(renderer, /target\.scrollIntoView\(\{ block: "nearest", inline: "nearest" \}\)/);
+  assert.match(renderer, /target = document\.querySelector\([\s\S]*if \(to\.width <= 0 \|\| to\.height <= 0\)/);
+  assert.match(renderer, /transformOrigin: "0px 0px"/);
+  assert.match(renderer, /translate\(\$\{to\.left - from\.left\}px, \$\{to\.top - from\.top\}px\) scale\(\$\{scaleX\}, \$\{scaleY\}\)/);
+  assert.match(renderer, /duration = window\.matchMedia\("\(prefers-reduced-motion: reduce\)"\)\.matches \? 0 : 380/);
+  assert.match(css, /\.space-return-flight\s*\{[^}]*transform-origin:0 0/);
+  assert.match(css, /\.space-return-target \.space-preview\s*\{\s*visibility:hidden/);
 });
 
 test("embedded Browser Lite keeps bookmarks and browser chrome in its shell", async () => {
