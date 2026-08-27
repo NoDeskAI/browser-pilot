@@ -66,7 +66,9 @@ async function connect(target) {
 async function waitForState(client, predicateExpression, timeout = 8_000, interval = 100) {
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
-    if (await client.evaluate(predicateExpression)) return;
+    try {
+      if (await client.evaluate(predicateExpression)) return;
+    } catch {}
     await delay(interval);
   }
   throw new Error(`Timed out waiting for: ${predicateExpression}`);
@@ -118,11 +120,48 @@ try {
   assert.equal(prewarmed.disabledExtensionCount, prewarmed.extensionCount, "Every imported extension must default to disabled");
 
   const acceptanceDir = process.env.BROWSER_LITE_ACCEPTANCE_DIR || "";
+  if (acceptanceDir) await mkdir(acceptanceDir, { recursive: true });
+  const acceptanceVersion = acceptanceDir
+    ? await client.evaluate(`window.browserLite.getState().then(state => state.app.version)`)
+    : "";
+  const openIndex = acceptanceDir ? 1 : 0;
+  const expectedOpen = await client.evaluate(`(() => {
+    const spaces = document.querySelectorAll('[data-action="open-space"]');
+    const button = spaces[${openIndex}] || spaces[0];
+    const card = button.closest('[data-space-id]');
+    const rect = button.getBoundingClientRect();
+    return {
+      spaceId: Number(card.dataset.spaceId),
+      rect: { left: rect.left, top: rect.top, width: rect.width, height: rect.height },
+      viewport: { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight },
+    };
+  })()`);
   const openStartedAt = Date.now();
-  await client.evaluate(`(() => { const spaces = document.querySelectorAll('[data-action="open-space"]'); (spaces[${acceptanceDir ? 1 : 0}] || spaces[0]).click(); })()`);
+  await client.evaluate(`(() => { const spaces = document.querySelectorAll('[data-action="open-space"]'); (spaces[${openIndex}] || spaces[0]).click(); })()`);
+  let openFrames = null;
+  if (acceptanceDir) {
+    await waitForState(client, `document.querySelector('.space-return-flight')?.dataset.phase === 'animating'`, 2_000, 2);
+    await client.evaluate(`(() => { const animation = document.querySelector('.space-return-flight').getAnimations()[0]; animation.pause(); animation.currentTime = 0; return new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))); })()`);
+    const start = await client.evaluate(`(() => { const rect = document.querySelector('.space-return-flight').getBoundingClientRect(); return { left: rect.left, top: rect.top, width: rect.width, height: rect.height }; })()`);
+    await captureController(client, `${acceptanceDir}/Browser-Lite-${acceptanceVersion}-open-start.png`);
+    await client.evaluate(`(() => { const animation = document.querySelector('.space-return-flight').getAnimations()[0]; animation.currentTime = animation.effect.getTiming().duration / 2; return new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))); })()`);
+    const mid = await client.evaluate(`(() => { const rect = document.querySelector('.space-return-flight').getBoundingClientRect(); return { left: rect.left, top: rect.top, width: rect.width, height: rect.height }; })()`);
+    await captureController(client, `${acceptanceDir}/Browser-Lite-${acceptanceVersion}-open-mid.png`);
+    await client.evaluate(`document.querySelector('.space-return-flight').getAnimations()[0].play()`);
+    openFrames = { start, mid };
+  }
   await waitForState(client, `document.body.classList.contains('browser-mode')`);
+  await waitForState(client, `window.__browserLiteLastSpaceOpen?.phase === 'complete'`);
   const openDurationMs = Date.now() - openStartedAt;
   assert.ok(openDurationMs < 1_000, `Prewarmed Space took ${openDurationMs}ms to become visible`);
+  const openAnimation = await client.evaluate(`window.__browserLiteLastSpaceOpen`);
+  assert.equal(openAnimation.spaceId, expectedOpen.spaceId);
+  assert.equal(openAnimation.transformOrigin, "0px 0px");
+  for (const key of ["left", "top", "width", "height"]) {
+    assert.ok(Math.abs(openAnimation.from[key] - expectedOpen.rect[key]) <= 1, `Open animation ${key} did not start at its Space card`);
+    assert.ok(Math.abs(openAnimation.to[key] - expectedOpen.viewport[key]) <= 1, `Open animation ${key} did not target the viewport`);
+    assert.ok(Math.abs(openAnimation.actualEnd[key] - openAnimation.to[key]) <= 1, `Open animation ${key} missed the viewport`);
+  }
   const opened = await client.evaluate(`({
     bodyClass: document.body.className,
     visibility: document.visibilityState,
@@ -215,17 +254,16 @@ try {
     await waitForState(client, `document.querySelector(${JSON.stringify(groupSelector)}).getAttribute('aria-expanded') === ${JSON.stringify(groupBeforeToggle)}`);
   }
 
-  if (acceptanceDir) await mkdir(acceptanceDir, { recursive: true });
   await client.evaluate(`document.querySelector('#browser-space-count').click()`);
   let returnFrames = null;
   if (acceptanceDir) {
     await waitForState(client, `Boolean(document.querySelector('.space-return-flight'))`, 2_000, 2);
     const start = await client.evaluate(`(() => { const rect = document.querySelector('.space-return-flight').getBoundingClientRect(); return { left: rect.left, top: rect.top, width: rect.width, height: rect.height }; })()`);
-    await captureController(client, `${acceptanceDir}/Browser-Lite-0.5.7-return-start.png`);
+    await captureController(client, `${acceptanceDir}/Browser-Lite-${acceptanceVersion}-return-start.png`);
     await waitForState(client, `document.querySelector('.space-return-flight')?.dataset.phase === 'animating'`, 2_000, 2);
     await delay(120);
     const mid = await client.evaluate(`(() => { const rect = document.querySelector('.space-return-flight').getBoundingClientRect(); return { left: rect.left, top: rect.top, width: rect.width, height: rect.height }; })()`);
-    await captureController(client, `${acceptanceDir}/Browser-Lite-0.5.7-return-mid.png`);
+    await captureController(client, `${acceptanceDir}/Browser-Lite-${acceptanceVersion}-return-mid.png`);
     returnFrames = { start, mid };
   }
   await waitForState(client, `document.body.classList.contains('spaces-mode')`);
@@ -245,7 +283,7 @@ try {
       assert.ok(direction === 0 || Math.sign(progress) === Math.sign(direction), `Return animation moved in the wrong ${key} direction`);
     }
   }
-  if (acceptanceDir) await captureController(client, `${acceptanceDir}/Browser-Lite-0.5.7-return-end.png`);
+  if (acceptanceDir) await captureController(client, `${acceptanceDir}/Browser-Lite-${acceptanceVersion}-return-end.png`);
   const returned = await client.evaluate(`({
     bodyClass: document.body.className,
     visibility: document.visibilityState,
@@ -263,6 +301,8 @@ try {
     before,
     prewarmed,
     openDurationMs,
+    openAnimation,
+    openFrames,
     opened,
     chromeSurface,
     extensionMenuRows,

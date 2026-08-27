@@ -20,6 +20,8 @@ const bootStartedAt = performance.now();
 let bootRevealTimer = null;
 let bootTransitionTimer = null;
 let bootRevealScheduled = false;
+let openingSpaceId = null;
+let openFlight = null;
 let returningSpaceId = null;
 let returnFlight = null;
 
@@ -170,7 +172,7 @@ function renderTaskSpaces(taskSpaceState) {
     const previewMarkup = preview
       ? `<img src="${preview}" alt="${escapeHtml(space.name)} 当前页面预览" />`
       : `<span class="preview-placeholder" aria-hidden="true"></span>`;
-    return `<article class="space-card ${space.selected ? "selected" : ""} ${ownershipClass(space)} ${Number(space.id) === returningSpaceId ? "space-return-target" : ""}" data-space-id="${space.id}">
+    return `<article class="space-card ${space.selected ? "selected" : ""} ${ownershipClass(space)} ${[openingSpaceId, returningSpaceId].includes(Number(space.id)) ? "space-return-target" : ""}" data-space-id="${space.id}">
       <button class="space-preview" data-action="open-space" type="button" aria-label="打开 ${escapeHtml(space.name)}">${previewMarkup}</button>
       <button class="card-close" data-action="close-space" type="button" aria-label="关闭 ${escapeHtml(space.name)}">×</button>
       <div class="space-meta">
@@ -323,7 +325,7 @@ function inertClone(source, className) {
   return clone;
 }
 
-function createSpaceReturnFlight(space, previewDataUrl) {
+function createSpaceReturnFlight(space, previewDataUrl, initialRect = null) {
   const flight = document.createElement("div");
   flight.className = "space-return-flight";
   flight.dataset.spaceId = String(space.id);
@@ -346,6 +348,12 @@ function createSpaceReturnFlight(space, previewDataUrl) {
     flight.classList.add("has-task-control");
     flight.append(inertClone(elements.taskControlBar, "space-return-flight-task-control"));
   }
+  if (initialRect) {
+    const scaleX = initialRect.width / window.innerWidth;
+    const scaleY = initialRect.height / window.innerHeight;
+    flight.style.borderRadius = `${initialRect.radius / scaleX}px / ${initialRect.radius / scaleY}px`;
+    flight.style.transform = `translate(${initialRect.left}px, ${initialRect.top}px) scale(${scaleX}, ${scaleY})`;
+  }
   document.body.append(flight);
   return flight;
 }
@@ -357,6 +365,78 @@ function rectSnapshot(rect) {
     width: Math.round(rect.width * 100) / 100,
     height: Math.round(rect.height * 100) / 100,
   };
+}
+
+async function animateSpaceOpen(flight, spaceId) {
+  await afterTwoFrames();
+  const from = flight.getBoundingClientRect();
+  const to = { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
+  const duration = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 380;
+  const metrics = {
+    phase: "animating",
+    spaceId,
+    from: rectSnapshot(from),
+    to: rectSnapshot(to),
+    duration,
+    transformOrigin: "0px 0px",
+  };
+  window.__browserLiteLastSpaceOpen = metrics;
+  flight.dataset.phase = "animating";
+  const animation = flight.animate([
+    { borderRadius: flight.style.borderRadius, transform: flight.style.transform },
+    { borderRadius: "0px", transform: "translate(0px, 0px) scale(1, 1)" },
+  ], {
+    duration,
+    easing: "cubic-bezier(.2,.75,.25,1)",
+    fill: "forwards",
+  });
+  await animation.finished;
+  metrics.phase = "expanded";
+  metrics.actualEnd = rectSnapshot(flight.getBoundingClientRect());
+}
+
+function finishSpaceOpen() {
+  openFlight?.remove();
+  openFlight = null;
+  const target = document.querySelector(`.space-card[data-space-id="${openingSpaceId}"]`);
+  target?.classList.remove("space-return-target");
+  openingSpaceId = null;
+}
+
+async function openSpaceFromCard(button, spaceId) {
+  if (openingSpaceId !== null || openFlight || returningSpaceId !== null || returnFlight) return;
+  let card = document.querySelector(`.space-card[data-space-id="${spaceId}"]`);
+  let preview = card?.querySelector(".space-preview");
+  const space = currentState?.taskSpaces?.taskSpaces?.find((candidate) => Number(candidate.id) === Number(spaceId));
+  if (!card || !preview || !space) return;
+  preview.scrollIntoView({ block: "nearest", inline: "nearest" });
+  await afterTwoFrames();
+  card = document.querySelector(`.space-card[data-space-id="${spaceId}"]`);
+  preview = card?.querySelector(".space-preview");
+  if (!card || !preview) return;
+  const source = preview.getBoundingClientRect();
+  if (source.width <= 0 || source.height <= 0) return;
+  const radius = Number.parseFloat(getComputedStyle(preview).borderTopLeftRadius) || 17;
+  openingSpaceId = Number(spaceId);
+  card.classList.add("space-return-target");
+  if (button) button.disabled = true;
+  window.__browserLiteLastSpaceOpen = { phase: "preparing", spaceId: openingSpaceId };
+  try {
+    openFlight = createSpaceReturnFlight(space, safePreview(space), { ...rectSnapshot(source), radius });
+    await animateSpaceOpen(openFlight, openingSpaceId);
+    render(await window.browserLite.openTaskSpace(spaceId));
+    window.__browserLiteLastSpaceOpen.phase = "complete";
+  } catch (error) {
+    window.__browserLiteLastSpaceOpen = {
+      phase: "error",
+      spaceId: openingSpaceId,
+      message: error.message || String(error),
+    };
+    window.alert(error.message || String(error));
+  } finally {
+    finishSpaceOpen();
+    if (button) button.disabled = false;
+  }
 }
 
 async function animateSpaceReturn(flight, spaceId) {
@@ -565,7 +645,7 @@ elements.taskSpaces.addEventListener("click", async (event) => {
   const card = event.target.closest("[data-space-id]");
   if (!card) return;
   const id = Number(card.dataset.spaceId);
-  if (button.dataset.action === "open-space") await run(button, null, () => window.browserLite.openTaskSpace(id));
+  if (button.dataset.action === "open-space") await openSpaceFromCard(button, id);
   if (button.dataset.action === "close-space" && window.confirm("关闭这个 Space？浏览数据会保留。")) {
     await run(button, null, () => window.browserLite.closeTaskSpace(id));
   }
@@ -781,7 +861,7 @@ window.addEventListener("keydown", async (event) => {
   if (document.body.classList.contains("spaces-mode") && spaces.length) {
     const selectedIndex = spaces.findIndex((space) => space.selected);
     const next = spaces[(selectedIndex + 1) % spaces.length];
-    await run(null, null, () => window.browserLite.openTaskSpace(next.id));
+    await openSpaceFromCard(null, next.id);
   } else {
     await returnToSpaces();
   }

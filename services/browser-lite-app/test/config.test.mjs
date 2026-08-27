@@ -11,7 +11,7 @@ test("app manifest is arm64 DMG buildable with embedded Electron Chromium", asyn
   assert.equal(manifest.main, "src/main.mjs");
   assert.match(manifest.devDependencies.electron, /^43\./);
   assert.equal(manifest.scripts["build:dmg"], "node scripts/build-dmg.mjs");
-  assert.equal(manifest.version, "0.5.8");
+  assert.equal(manifest.version, "0.5.9");
 });
 
 test("renderer has a restrictive content security policy", async () => {
@@ -179,6 +179,16 @@ test("returning from an instance shrinks into its exact Space card", async () =>
   assert.match(renderer, /duration = window\.matchMedia\("\(prefers-reduced-motion: reduce\)"\)\.matches \? 0 : 380/);
   assert.match(css, /\.space-return-flight\s*\{[^}]*transform-origin:0 0/);
   assert.match(css, /\.space-return-target \.space-preview\s*\{\s*visibility:hidden/);
+});
+
+test("opening a Space expands from its exact card into the embedded instance", async () => {
+  const renderer = await readFile(join(ROOT, "src", "renderer", "renderer.mjs"), "utf8");
+  assert.match(renderer, /button\.dataset\.action === "open-space"\) await openSpaceFromCard\(button, id\)/);
+  assert.match(renderer, /preview\.scrollIntoView\(\{ block: "nearest", inline: "nearest" \}\)/);
+  assert.match(renderer, /createSpaceReturnFlight\(space, safePreview\(space\), \{ \.\.\.rectSnapshot\(source\), radius \}\)/);
+  assert.match(renderer, /async function animateSpaceOpen[\s\S]*transformOrigin: "0px 0px"/);
+  assert.match(renderer, /borderRadius: "0px", transform: "translate\(0px, 0px\) scale\(1, 1\)"/);
+  assert.match(renderer, /await animateSpaceOpen\(openFlight, openingSpaceId\);[\s\S]*openTaskSpace\(spaceId\)/);
 });
 
 test("embedded Browser Lite keeps bookmarks and browser chrome in its shell", async () => {
