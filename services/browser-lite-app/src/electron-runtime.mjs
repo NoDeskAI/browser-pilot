@@ -568,6 +568,21 @@ export class ElectronBrowserLiteState {
     }
   }
 
+  async prepareForReveal() {
+    const window = this.windowForTarget();
+    if (!window) return false;
+    this.layout();
+    try {
+      // Keep the native view hidden while Chromium submits a current compositor
+      // frame. The controller can then finish painting its chrome before the live
+      // page replaces the full-screen transition surface.
+      const image = await window.webContents.capturePage(undefined, { stayHidden: true });
+      return !image.isEmpty() && !window.webContents.isDestroyed();
+    } catch {
+      return false;
+    }
+  }
+
   async previewDataUrl() {
     if (this.preview.dataUrl) return this.preview.dataUrl;
     return this.capturePreview();
@@ -904,7 +919,7 @@ export class BrowserLiteManager {
     this.onChanged?.();
   }
 
-  async showInstance(instanceId) {
+  async prepareInstance(instanceId) {
     const id = safeInstanceId(instanceId ?? this.activeInstanceId);
     const entry = this.instances.get(id);
     if (!entry) return false;
@@ -917,10 +932,37 @@ export class BrowserLiteManager {
     this.hostWindow.focus();
     this.layout();
     await Promise.all([...this.instances].map(async ([otherId, other]) => {
+      try { other.state.setVisible(false); } catch {}
+    }));
+    const prepared = await entry.state.prepareForReveal?.();
+    if (prepared === false) throw new Error(`Space ${id} did not produce a frame before reveal`);
+    return true;
+  }
+
+  async revealInstance(instanceId) {
+    const id = safeInstanceId(instanceId ?? this.activeInstanceId);
+    const entry = this.instances.get(id);
+    if (!entry || this.viewMode !== "browser" || this.activeInstanceId !== id) return false;
+    this.layout();
+    await Promise.all([...this.instances].map(async ([otherId, other]) => {
       try { other.state.setVisible(otherId === id); } catch {}
     }));
     this.onChanged?.();
     return true;
+  }
+
+  async showInstance(instanceId) {
+    const id = safeInstanceId(instanceId ?? this.activeInstanceId);
+    const entry = this.instances.get(id);
+    if (!entry) return false;
+    if (this.viewMode === "browser" && this.activeInstanceId === id && entry.state.visible) {
+      this.layout();
+      entry.state.windowForTarget()?.webContents.focus();
+      this.onChanged?.();
+      return true;
+    }
+    if (!await this.prepareInstance(id)) return false;
+    return this.revealInstance(id);
   }
 
   async ensure(instanceId, options = {}) {

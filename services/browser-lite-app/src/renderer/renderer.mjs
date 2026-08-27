@@ -438,12 +438,30 @@ async function openSpaceFromCard(button, spaceId) {
   card.classList.add("space-return-target");
   if (button) button.disabled = true;
   window.__browserLiteLastSpaceOpen = { phase: "preparing", spaceId: openingSpaceId };
+  let prepared = false;
+  let revealed = false;
   try {
     openFlight = createSpaceReturnFlight(space, safePreview(space), { ...rectSnapshot(source), radius });
-    await animateSpaceOpen(openFlight, openingSpaceId);
-    render(await window.browserLite.openTaskSpace(spaceId));
+    const prepareState = window.browserLite.prepareTaskSpaceOpen(spaceId);
+    const [, state] = await Promise.all([
+      animateSpaceOpen(openFlight, openingSpaceId),
+      prepareState,
+    ]);
+    prepared = true;
+    render(state);
+    window.__browserLiteLastSpaceOpen.phase = "controller-rendering";
+    await afterTwoFrames();
+    window.__browserLiteLastSpaceOpen.controllerReady = true;
+    window.__browserLiteLastSpaceOpen.flightPresentAtControllerReady = Boolean(openFlight?.isConnected);
+    window.__browserLiteLastSpaceOpen.phase = "revealing";
+    await window.browserLite.revealTaskSpace(spaceId);
+    revealed = true;
+    window.__browserLiteLastSpaceOpen.flightPresentAtReveal = Boolean(openFlight?.isConnected);
     window.__browserLiteLastSpaceOpen.phase = "complete";
   } catch (error) {
+    if (prepared && !revealed) {
+      try { await window.browserLite.revealTaskSpace(spaceId); } catch {}
+    }
     window.__browserLiteLastSpaceOpen = {
       phase: "error",
       spaceId: openingSpaceId,

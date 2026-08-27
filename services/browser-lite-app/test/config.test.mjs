@@ -11,7 +11,7 @@ test("app manifest is arm64 DMG buildable with embedded Electron Chromium", asyn
   assert.equal(manifest.main, "src/main.mjs");
   assert.match(manifest.devDependencies.electron, /^43\./);
   assert.equal(manifest.scripts["build:dmg"], "node scripts/build-dmg.mjs");
-  assert.equal(manifest.version, "0.5.10");
+  assert.equal(manifest.version, "0.5.11");
 });
 
 test("renderer has a restrictive content security policy", async () => {
@@ -185,14 +185,25 @@ test("returning from an instance shrinks into its exact Space card", async () =>
 });
 
 test("opening a Space expands from its exact card into the embedded instance", async () => {
+  const main = await readFile(join(ROOT, "src", "main.mjs"), "utf8");
+  const preload = await readFile(join(ROOT, "src", "preload.cjs"), "utf8");
   const renderer = await readFile(join(ROOT, "src", "renderer", "renderer.mjs"), "utf8");
+  const runtime = await readFile(join(ROOT, "src", "electron-runtime.mjs"), "utf8");
   assert.match(renderer, /button\.dataset\.action === "open-space"\) await openSpaceFromCard\(button, id\)/);
   assert.match(renderer, /preview\.scrollIntoView\(\{ block: "nearest", inline: "nearest" \}\)/);
   assert.match(renderer, /createSpaceReturnFlight\(space, safePreview\(space\), \{ \.\.\.rectSnapshot\(source\), radius \}\)/);
   assert.match(renderer, /createSpaceReturnFlight[\s\S]*createBrowserSurface\(space, currentState\?\.installation \|\| \{\}, previewDataUrl, "space-return-flight"\)/);
   assert.match(renderer, /async function animateSpaceOpen[\s\S]*transformOrigin: "0px 0px"/);
   assert.match(renderer, /borderRadius: "0px", transform: "translate\(0px, 0px\) scale\(1, 1\)"/);
-  assert.match(renderer, /await animateSpaceOpen\(openFlight, openingSpaceId\);[\s\S]*openTaskSpace\(spaceId\)/);
+  assert.match(main, /browser-lite:prepare-task-space-open[\s\S]*openForUser\(id, \{ reveal: false \}\)/);
+  assert.match(main, /browser-lite:reveal-task-space[\s\S]*revealForUser\(id\)/);
+  assert.match(preload, /prepareTaskSpaceOpen[\s\S]*revealTaskSpace/);
+  assert.match(runtime, /capturePage\(undefined, \{ stayHidden: true \}\)/);
+  assert.match(runtime, /async prepareInstance[\s\S]*setVisible\(false\)[\s\S]*prepareForReveal/);
+  assert.match(runtime, /async revealInstance[\s\S]*setVisible\(otherId === id\)/);
+  assert.match(renderer, /Promise\.all\(\[[\s\S]*animateSpaceOpen\(openFlight, openingSpaceId\)[\s\S]*prepareState/);
+  assert.match(renderer, /render\(state\);[\s\S]*afterTwoFrames\(\);[\s\S]*revealTaskSpace\(spaceId\)/);
+  assert.match(renderer, /flightPresentAtControllerReady[\s\S]*flightPresentAtReveal[\s\S]*phase = "complete"/);
 });
 
 test("embedded Browser Lite keeps bookmarks and browser chrome in its shell", async () => {

@@ -48,6 +48,8 @@ class FakeBrowserManager {
     this.stopped = [];
     this.removed = [];
     this.shown = [];
+    this.prepared = [];
+    this.revealed = [];
   }
 
   async ensure(instanceId, options = {}) {
@@ -60,6 +62,8 @@ class FakeBrowserManager {
   async stop(instanceId) { this.stopped.push(instanceId); }
   async remove(instanceId) { this.removed.push(instanceId); this.instances.delete(instanceId); }
   showInstance(instanceId) { this.shown.push(instanceId); }
+  prepareInstance(instanceId) { this.prepared.push(instanceId); return true; }
+  revealInstance(instanceId) { this.revealed.push(instanceId); return true; }
   async request(instanceId, request) { return { instanceId, request }; }
 }
 
@@ -212,6 +216,19 @@ test("all persisted active Spaces start before the overview becomes interactive"
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+test("animated Space opening prepares the hidden view before revealing it", async () => {
+  const browserManager = new FakeBrowserManager();
+  const taskSpaces = new BrowserLiteTaskSpaceManager(browserManager);
+  const created = await taskSpaces.createUserTaskSpace("smooth-open");
+
+  await taskSpaces.openForUser(created.id, { reveal: false });
+  assert.deepEqual(browserManager.prepared, ["task-space-1"]);
+  assert.deepEqual(browserManager.revealed, []);
+
+  await taskSpaces.revealForUser(created.id);
+  assert.deepEqual(browserManager.revealed, ["task-space-1"]);
 });
 
 test("concurrent state writes remain atomic", async () => {

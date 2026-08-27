@@ -302,6 +302,15 @@ function registerIpc() {
     emitState();
     return getPublicState();
   });
+  ipcMain.handle("browser-lite:prepare-task-space-open", async (_event, id) => {
+    await taskSpaces.openForUser(id, { reveal: false });
+    return getPublicState();
+  });
+  ipcMain.handle("browser-lite:reveal-task-space", async (_event, id) => {
+    await taskSpaces.revealForUser(id);
+    emitState();
+    return { revealed: true };
+  });
   ipcMain.handle("browser-lite:return-task-space", async (_event, id) => {
     await taskSpaces.returnControlToAgent(id);
     emitState();

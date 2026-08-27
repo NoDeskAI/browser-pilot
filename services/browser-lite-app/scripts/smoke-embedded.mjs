@@ -161,6 +161,9 @@ try {
   const openAnimation = await client.evaluate(`window.__browserLiteLastSpaceOpen`);
   assert.equal(openAnimation.spaceId, expectedOpen.spaceId);
   assert.equal(openAnimation.transformOrigin, "0px 0px");
+  assert.equal(openAnimation.controllerReady, true, "Browser chrome must paint before the live view is revealed");
+  assert.equal(openAnimation.flightPresentAtControllerReady, true, "Opening surface must cover the controller handoff");
+  assert.equal(openAnimation.flightPresentAtReveal, true, "Opening surface must remain until the live view is ready");
   for (const key of ["left", "top", "width", "height"]) {
     assert.ok(Math.abs(openAnimation.from[key] - expectedOpen.rect[key]) <= 1, `Open animation ${key} did not start at its Space card`);
     assert.ok(Math.abs(openAnimation.to[key] - expectedOpen.viewport[key]) <= 1, `Open animation ${key} did not target the viewport`);
