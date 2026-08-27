@@ -157,7 +157,7 @@ function renderExtensions(space, installation) {
   elements.extensionsMenuButton.title = `扩展程序（${extensions.length}）`;
 }
 
-function renderTaskSpaces(taskSpaceState) {
+function renderTaskSpaces(taskSpaceState, installation) {
   const spaces = taskSpaceState?.taskSpaces || [];
   elements.spacesTitle.innerHTML = `${spaces.length} ${spaces.length === 1 ? "Space" : "Spaces"} <span aria-hidden="true">⌄</span>`;
   for (const countButton of [elements.overviewSpaceCount, elements.browserSpaceCount, elements.settingsSpaceCount]) {
@@ -165,15 +165,11 @@ function renderTaskSpaces(taskSpaceState) {
     countButton.setAttribute("aria-label", `返回 Space 总览，共 ${spaces.length} 个 Space`);
   }
   const cards = spaces.map((space) => {
-    const preview = safePreview(space);
     const status = space.ownership === "agent" && space.status === "active"
       ? "运行中"
       : space.ownership === "agentDelegatedToUser" ? "需要你处理" : "";
-    const previewMarkup = preview
-      ? `<img src="${preview}" alt="${escapeHtml(space.name)} 当前页面预览" />`
-      : `<span class="preview-placeholder" aria-hidden="true"></span>`;
     return `<article class="space-card ${space.selected ? "selected" : ""} ${ownershipClass(space)} ${[openingSpaceId, returningSpaceId].includes(Number(space.id)) ? "space-return-target" : ""}" data-space-id="${space.id}">
-      <button class="space-preview" data-action="open-space" type="button" aria-label="打开 ${escapeHtml(space.name)}">${previewMarkup}</button>
+      <button class="space-preview" data-action="open-space" type="button" aria-label="打开 ${escapeHtml(space.name)}"></button>
       <button class="card-close" data-action="close-space" type="button" aria-label="关闭 ${escapeHtml(space.name)}">×</button>
       <div class="space-meta">
         <div class="space-name-row">${status ? `<span class="space-status ${ownershipClass(space)}"><i></i>${escapeHtml(status)}</span>` : ""}<strong>${escapeHtml(space.name)}</strong></div>
@@ -183,6 +179,14 @@ function renderTaskSpaces(taskSpaceState) {
   });
   cards.push(`<button class="create-space-tile" data-action="create-space" type="button" aria-label="新建 Space"><span aria-hidden="true">＋</span></button>`);
   elements.taskSpaces.innerHTML = cards.join("");
+  for (const space of spaces) {
+    const preview = elements.taskSpaces.querySelector(`.space-card[data-space-id="${space.id}"] .space-preview`);
+    if (!preview) continue;
+    const surface = createBrowserSurface(space, installation, safePreview(space), "space-card-surface");
+    preview.append(surface);
+    const bounds = preview.getBoundingClientRect();
+    surface.style.transform = `scale(${bounds.width / window.innerWidth}, ${bounds.height / window.innerHeight})`;
+  }
 }
 
 function tabMarkup(tab) {
@@ -273,7 +277,7 @@ function render(state) {
   renderInstaller(installation);
   document.body.classList.remove("spaces-mode", "browser-mode", "settings-mode");
   if (!installation.required) document.body.classList.add(`${state.workspace?.mode || "spaces"}-mode`);
-  renderTaskSpaces(state.taskSpaces);
+  renderTaskSpaces(state.taskSpaces, installation);
   elements.overviewSpaceCount.disabled = inSpacesOverview;
   elements.overviewSpaceCount.title = inSpacesOverview ? "当前位于 Space 总览" : "返回 Space 总览";
   elements.overviewSpaceCount.setAttribute("aria-current", inSpacesOverview ? "page" : "false");
@@ -318,36 +322,49 @@ function inertClone(source, className) {
   clone.removeAttribute("id");
   clone.classList.add(className);
   clone.setAttribute("aria-hidden", "true");
-  for (const node of clone.querySelectorAll("[id], button, input, form, [tabindex]")) {
+  for (const node of clone.querySelectorAll("[id], [data-action], button, input, form, [tabindex]")) {
     node.removeAttribute("id");
+    node.removeAttribute("data-action");
     node.setAttribute("tabindex", "-1");
   }
   return clone;
 }
 
-function createSpaceReturnFlight(space, previewDataUrl, initialRect = null) {
-  const flight = document.createElement("div");
-  flight.className = "space-return-flight";
-  flight.dataset.spaceId = String(space.id);
-  flight.dataset.phase = "preparing";
-  flight.style.width = `${window.innerWidth}px`;
-  flight.style.height = `${window.innerHeight}px`;
+function createBrowserSurface(space, installation, previewDataUrl, className) {
+  const surfaceState = { activeTaskSpace: space };
+  renderBookmarks(installation, surfaceState);
+  renderBrowser(surfaceState, installation);
 
-  flight.append(inertClone(elements.browserChrome, "space-return-flight-chrome"));
+  const surface = document.createElement("div");
+  surface.className = `browser-surface ${className}`;
+  surface.style.width = `${window.innerWidth}px`;
+  surface.style.height = `${window.innerHeight}px`;
+  surface.append(inertClone(elements.browserChrome, "browser-surface-chrome"));
+
   const page = document.createElement("div");
-  page.className = "space-return-flight-page";
+  page.className = "browser-surface-page";
   const preview = safeDataImage(previewDataUrl) || safePreview(space);
   if (preview) {
     const image = document.createElement("img");
     image.src = preview;
     image.alt = "";
     page.append(image);
+  } else {
+    page.append(Object.assign(document.createElement("span"), { className: "preview-placeholder" }));
   }
-  flight.append(page);
+  surface.append(page);
+
   if (!elements.taskControlBar.classList.contains("hidden")) {
-    flight.classList.add("has-task-control");
-    flight.append(inertClone(elements.taskControlBar, "space-return-flight-task-control"));
+    surface.classList.add("has-task-control");
+    surface.append(inertClone(elements.taskControlBar, "browser-surface-task-control"));
   }
+  return surface;
+}
+
+function createSpaceReturnFlight(space, previewDataUrl, initialRect = null) {
+  const flight = createBrowserSurface(space, currentState?.installation || {}, previewDataUrl, "space-return-flight");
+  flight.dataset.spaceId = String(space.id);
+  flight.dataset.phase = "preparing";
   if (initialRect) {
     const scaleX = initialRect.width / window.innerWidth;
     const scaleY = initialRect.height / window.innerHeight;

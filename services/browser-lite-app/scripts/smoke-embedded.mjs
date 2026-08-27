@@ -134,6 +134,7 @@ try {
       spaceId: Number(card.dataset.spaceId),
       rect: { left: rect.left, top: rect.top, width: rect.width, height: rect.height },
       viewport: { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight },
+      cardTabCount: button.querySelectorAll('.browser-tab, .tab-group').length,
     };
   })()`);
   const openStartedAt = Date.now();
@@ -143,6 +144,9 @@ try {
     await waitForState(client, `document.querySelector('.space-return-flight')?.dataset.phase === 'animating'`, 2_000, 2);
     await client.evaluate(`(() => { const animation = document.querySelector('.space-return-flight').getAnimations()[0]; animation.pause(); animation.currentTime = 0; return new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))); })()`);
     const start = await client.evaluate(`(() => { const rect = document.querySelector('.space-return-flight').getBoundingClientRect(); return { left: rect.left, top: rect.top, width: rect.width, height: rect.height }; })()`);
+    const openingChrome = await client.evaluate(`document.querySelector('.space-return-flight .browser-surface-chrome')?.innerText || ''`);
+    assert.ok(openingChrome.trim().length > 0, "Opening surface must include browser chrome from the first frame");
+    assert.ok(expectedOpen.cardTabCount > 0, "Space card must retain its tabs before opening");
     await captureController(client, `${acceptanceDir}/Browser-Lite-${acceptanceVersion}-open-start.png`);
     await client.evaluate(`(() => { const animation = document.querySelector('.space-return-flight').getAnimations()[0]; animation.currentTime = animation.effect.getTiming().duration / 2; return new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))); })()`);
     const mid = await client.evaluate(`(() => { const rect = document.querySelector('.space-return-flight').getBoundingClientRect(); return { left: rect.left, top: rect.top, width: rect.width, height: rect.height }; })()`);
@@ -254,16 +258,37 @@ try {
     await waitForState(client, `document.querySelector(${JSON.stringify(groupSelector)}).getAttribute('aria-expanded') === ${JSON.stringify(groupBeforeToggle)}`);
   }
 
-  await client.evaluate(`document.querySelector('#browser-space-count').click()`);
   let returnFrames = null;
   if (acceptanceDir) {
-    await waitForState(client, `Boolean(document.querySelector('.space-return-flight'))`, 2_000, 2);
+    await client.evaluate(`(() => { window.__browserLiteReturnCapture = new Promise((resolve, reject) => {
+      const deadline = performance.now() + 2000;
+      const pauseAtStart = () => {
+        const flight = document.querySelector('.space-return-flight');
+        const animation = flight?.getAnimations()[0];
+        if (animation) {
+          animation.pause();
+          animation.currentTime = 0;
+          requestAnimationFrame(() => requestAnimationFrame(resolve));
+          return;
+        }
+        if (performance.now() >= deadline) {
+          reject(new Error('Return animation was not created'));
+          return;
+        }
+        requestAnimationFrame(pauseAtStart);
+      };
+      pauseAtStart();
+    }); return true; })()`);
+  }
+  await client.evaluate(`document.querySelector('#browser-space-count').click()`);
+  if (acceptanceDir) {
+    await client.evaluate(`window.__browserLiteReturnCapture`);
     const start = await client.evaluate(`(() => { const rect = document.querySelector('.space-return-flight').getBoundingClientRect(); return { left: rect.left, top: rect.top, width: rect.width, height: rect.height }; })()`);
     await captureController(client, `${acceptanceDir}/Browser-Lite-${acceptanceVersion}-return-start.png`);
-    await waitForState(client, `document.querySelector('.space-return-flight')?.dataset.phase === 'animating'`, 2_000, 2);
-    await delay(120);
+    await client.evaluate(`(() => { const animation = document.querySelector('.space-return-flight').getAnimations()[0]; animation.currentTime = animation.effect.getTiming().duration / 2; return new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))); })()`);
     const mid = await client.evaluate(`(() => { const rect = document.querySelector('.space-return-flight').getBoundingClientRect(); return { left: rect.left, top: rect.top, width: rect.width, height: rect.height }; })()`);
     await captureController(client, `${acceptanceDir}/Browser-Lite-${acceptanceVersion}-return-mid.png`);
+    await client.evaluate(`document.querySelector('.space-return-flight').getAnimations()[0].play()`);
     returnFrames = { start, mid };
   }
   await waitForState(client, `document.body.classList.contains('spaces-mode')`);
@@ -284,6 +309,18 @@ try {
     }
   }
   if (acceptanceDir) await captureController(client, `${acceptanceDir}/Browser-Lite-${acceptanceVersion}-return-end.png`);
+  const returnedSurface = await client.evaluate(`(() => {
+    const id = window.__browserLiteLastSpaceReturn.spaceId;
+    const target = document.querySelector('.space-card[data-space-id="' + id + '"] .space-card-surface');
+    return {
+      exists: Boolean(target),
+      chromeText: target?.querySelector('.browser-surface-chrome')?.innerText || '',
+      tabCount: target?.querySelectorAll('.browser-tab, .tab-group').length || 0,
+    };
+  })()`);
+  assert.equal(returnedSurface.exists, true, "Returned Space card must keep the complete browser surface");
+  assert.ok(returnedSurface.chromeText.trim().length > 0, "Browser chrome must remain visible after shrinking finishes");
+  assert.ok(returnedSurface.tabCount > 0, "Tabs must remain visible after shrinking finishes");
   const returned = await client.evaluate(`({
     bodyClass: document.body.className,
     visibility: document.visibilityState,

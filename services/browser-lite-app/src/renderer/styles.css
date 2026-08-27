@@ -81,7 +81,7 @@ h1, h2, p { margin: 0; }
 .spaces-topbar > .round-count { position: absolute; top: 9px; right: 14px; }
 .space-gallery { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); column-gap: 39px; row-gap: 47px; width: calc(100% - 104px); margin: 18px auto 110px; }
 .space-card { position: relative; min-width: 0; border-radius: 17px; }
-.space-preview { display:block; width:100%; aspect-ratio:1.71875; overflow:hidden; border:1px solid #e0e1e3; border-radius:17px; padding:0; background:#fafafa; box-shadow:none; transition:border-color .14s ease,box-shadow .14s ease; }
+.space-preview { position:relative; display:block; width:100%; aspect-ratio:1.71875; overflow:hidden; border:1px solid #e0e1e3; border-radius:17px; padding:0; background:#fafafa; box-shadow:none; transition:border-color .14s ease,box-shadow .14s ease; }
 .space-preview:hover { border-color:#c7c9cc; box-shadow:0 4px 14px rgba(40,44,51,.08); }
 .space-card.agent .space-preview { border-color:#7bb4ff; box-shadow:0 0 0 3px rgba(67,145,255,.20),0 0 18px 5px rgba(75,151,255,.32); }
 .space-card.delegated .space-preview { border-color:#8caefa; box-shadow:0 0 0 4px rgba(98,139,236,.19),0 0 13px 3px rgba(61,130,245,.34); }
@@ -105,13 +105,16 @@ h1, h2, p { margin: 0; }
 .shortcut-hint b { color:#3e4044; font-size:13px; }
 .keyboard-glyph { display:grid; place-items:center; width:22px; height:16px; border:1px solid #bfc2c5; border-radius:4px; color:#94979b; font-size:10px; line-height:1; }
 
-/* The native WebContentsView is replaced by this painted frame before it is hidden. */
-.space-return-flight { position:fixed; top:0; left:0; z-index:90; overflow:hidden; transform-origin:0 0; pointer-events:none; background:#111; box-shadow:0 8px 28px rgba(27,31,38,.18); will-change:transform,border-radius; }
-.space-return-flight .space-return-flight-chrome { position:absolute; inset:0 0 auto; z-index:3; display:block; height:var(--toolbar-height); }
-.space-return-flight-page { position:absolute; top:var(--toolbar-height); right:0; bottom:0; left:0; overflow:hidden; background:#fff; }
-.space-return-flight.has-task-control .space-return-flight-page { bottom:105px; }
-.space-return-flight-page img { display:block; width:100%; height:100%; object-fit:cover; object-position:top center; }
-.space-return-flight-task-control { z-index:4; }
+/* Cards and transitions paint the same complete browser surface, so chrome never appears or disappears at a handoff. */
+.browser-surface { overflow:hidden; transform-origin:0 0; pointer-events:none; background:#111; }
+.browser-surface .browser-surface-chrome { position:absolute; inset:0 0 auto; z-index:3; display:block; height:var(--toolbar-height); }
+.browser-surface-page { position:absolute; top:var(--toolbar-height); right:0; bottom:0; left:0; overflow:hidden; background:#fff; }
+.browser-surface.has-task-control .browser-surface-page { bottom:105px; }
+.browser-surface-page img { display:block; width:100%; height:100%; object-fit:cover; object-position:top center; }
+.browser-surface-page .preview-placeholder { display:block; width:100%; height:100%; }
+.browser-surface-task-control { z-index:4; }
+.space-card-surface { position:absolute; top:0; left:0; }
+.space-return-flight { position:fixed; top:0; left:0; z-index:90; box-shadow:0 8px 28px rgba(27,31,38,.18); will-change:transform,border-radius; }
 
 /* Chromium chrome and task control surface. */
 .browser-chrome,.settings-chrome { display:none; position:fixed; inset:0 0 auto; z-index:20; height:var(--toolbar-height); color:#34383d; background:#eef0f3; border-bottom:1px solid #dfe2e6; font-family:Arial,"PingFang SC","Helvetica Neue",sans-serif; -webkit-app-region:drag; }
