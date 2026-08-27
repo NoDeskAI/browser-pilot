@@ -83,6 +83,7 @@ export default {
     copyCli: '复制 CLI 接入命令',
     generateToken: '生成会话 Token',
     generateTokenHint: '创建一个仅能操作当前会话的 API Token，适合分发给外部服务。',
+    rename: '重命名会话',
     deleteSession: '删除会话',
     deleteConfirm: '确定删除此会话？',
     deleteDescription: '浏览器容器和会话将被永久删除。',
@@ -102,7 +103,6 @@ export default {
     minutesAgo: '{n}分钟',
     hoursAgo: '{n}小时',
     daysAgo: '{n}天',
-    dblClickRename: '双击重命名',
   },
   sessionFiles: {
     button: '文件',

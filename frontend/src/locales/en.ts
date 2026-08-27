@@ -83,6 +83,7 @@ export default {
     copyCli: 'Copy CLI command',
     generateToken: 'Generate Session Token',
     generateTokenHint: 'Create an API token scoped to this session only, suitable for external services.',
+    rename: 'Rename session',
     deleteSession: 'Delete session',
     deleteConfirm: 'Delete this session?',
     deleteDescription: 'The browser container and session will be permanently deleted.',
@@ -102,7 +103,6 @@ export default {
     minutesAgo: '{n}m',
     hoursAgo: '{n}h',
     daysAgo: '{n}d',
-    dblClickRename: 'Double-click to rename',
   },
   sessionFiles: {
     button: 'Files',

@@ -6,7 +6,7 @@ import { useSessions } from '../composables/useSessions'
 import { useNotify } from '../composables/useNotify'
 import { api } from '../lib/api'
 import type { DeleteSessionFileOptions } from '../types'
-import { Play, Pause, Trash2, ChevronRight, Monitor, Key, Loader2, Copy, Check, FolderOpen, ShieldCheck } from 'lucide-vue-next'
+import { Play, Pause, Trash2, ChevronRight, Monitor, Key, Loader2, Copy, Check, FolderOpen, ShieldCheck, Pencil } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -188,14 +188,26 @@ async function onPauseContainer() {
           @keydown.enter.prevent="commitEdit"
           @keydown.escape.prevent="editing = false"
         />
-        <h2
-          v-else
-          class="text-sm font-medium truncate cursor-pointer hover:underline decoration-muted-foreground/30 underline-offset-4"
-          @dblclick="startEdit"
-          :title="activeSession.name + '\n' + t('session.dblClickRename')"
-        >
-          {{ activeSession.name }}
-        </h2>
+        <div v-else class="group/session-title flex min-w-0 items-center gap-1.5">
+          <h2 class="text-sm font-medium truncate" :title="activeSession.name">
+            {{ activeSession.name }}
+          </h2>
+          <Tooltip>
+            <TooltipTrigger as-child>
+              <Button
+                variant="ghost"
+                size="icon"
+                class="size-6 shrink-0 opacity-0 transition-opacity group-hover/session-title:opacity-100 focus-visible:opacity-100"
+                :aria-label="t('session.rename')"
+                :title="t('session.rename')"
+                @click="startEdit"
+              >
+                <Pencil class="size-3.5" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>{{ t('session.rename') }}</TooltipContent>
+          </Tooltip>
+        </div>
         <Badge
           variant="outline"
           class="ml-2 font-normal uppercase text-[10px] px-1.5"

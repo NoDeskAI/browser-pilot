@@ -6,7 +6,7 @@ import { useSessions } from '../composables/useSessions'
 import { useNetworkEgress } from '../composables/useNetworkEgress'
 import { useNotify } from '../composables/useNotify'
 import type { ActiveSessionLease, BrowserLiteNode, DeleteSessionFileOptions, Session } from '../types'
-import { Plus, Play, Pause, Trash2, Monitor, Globe, Hash, Clock, RefreshCw, Loader2, Network, ArrowUpRight, UserCog, Copy, Check } from 'lucide-vue-next'
+import { Plus, Play, Pause, Trash2, Monitor, Globe, Hash, Clock, RefreshCw, Loader2, Network, ArrowUpRight, UserCog, Copy, Check, Pencil } from 'lucide-vue-next'
 import { formatSessionLeaseOperator, getSessionLeaseOperatorKind } from '../lib/sessionLease'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -569,22 +569,37 @@ async function onPauseContainer(id: string) {
                 @keydown.escape.prevent="editingId = null"
                 @click.stop
               />
-              <Tooltip v-else :disabled="!hasValueTooltip(`name:${s.id}`, s.name)">
-                <TooltipTrigger as-child>
-                  <h3
-                    :ref="(el) => setValueTextRef(`name:${s.id}`, el)"
-                    class="text-base font-medium truncate tracking-tight group-hover:text-primary transition-colors"
-                    @dblclick.stop="startEdit(s.id, s.name)"
-                    @mouseenter="updateValueTruncation(`name:${s.id}`)"
-                  >
+              <div v-else class="flex min-w-0 items-center gap-1.5">
+                <Tooltip :disabled="!hasValueTooltip(`name:${s.id}`, s.name)">
+                  <TooltipTrigger as-child>
+                    <h3
+                      :ref="(el) => setValueTextRef(`name:${s.id}`, el)"
+                      class="min-w-0 flex-1 truncate text-base font-medium tracking-tight transition-colors group-hover:text-primary"
+                      @mouseenter="updateValueTruncation(`name:${s.id}`)"
+                    >
+                      {{ s.name }}
+                    </h3>
+                  </TooltipTrigger>
+                  <TooltipContent class="max-w-[280px] break-all">
                     {{ s.name }}
-                  </h3>
-                </TooltipTrigger>
-                <TooltipContent class="max-w-[280px] flex-col items-start gap-0.5 break-all">
-                  <span>{{ s.name }}</span>
-                  <span class="text-[11px] opacity-70">{{ t('session.dblClickRename') }}</span>
-                </TooltipContent>
-              </Tooltip>
+                  </TooltipContent>
+                </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger as-child>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      class="size-7 shrink-0 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
+                      :aria-label="t('session.rename')"
+                      :title="t('session.rename')"
+                      @click.stop="startEdit(s.id, s.name)"
+                    >
+                      <Pencil class="size-3.5" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>{{ t('session.rename') }}</TooltipContent>
+                </Tooltip>
+              </div>
             </div>
             <Badge
               variant="outline"
