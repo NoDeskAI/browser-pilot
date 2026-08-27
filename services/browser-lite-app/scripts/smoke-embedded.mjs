@@ -83,8 +83,20 @@ try {
   assert.match(before.bodyClass, /spaces-mode/);
   assert.ok(before.spaceCards > 0, "Mac mini must have at least one existing Space");
 
+  const prewarmed = await client.evaluate(`window.browserLite.getState().then(state => ({
+    activeSpaces: state.taskSpaces.taskSpaces.filter(space => space.status === "active").length,
+    loadedActiveSpaces: state.taskSpaces.taskSpaces.filter(space => space.status === "active" && space.loaded).length,
+    runningInstances: state.instances.filter(instance => instance.ready && !instance.stopped && !instance.paused).length,
+  }))`);
+  assert.ok(prewarmed.activeSpaces > 0, "Mac mini must have at least one active Space");
+  assert.equal(prewarmed.loadedActiveSpaces, prewarmed.activeSpaces, "Every active Space must be prewarmed before selection");
+  assert.equal(prewarmed.runningInstances, prewarmed.activeSpaces, "Every active Space must keep a running embedded runtime");
+
+  const openStartedAt = Date.now();
   await client.evaluate(`document.querySelector('[data-action="open-space"]').click()`);
   await waitForState(client, `document.body.classList.contains('browser-mode')`);
+  const openDurationMs = Date.now() - openStartedAt;
+  assert.ok(openDurationMs < 1_000, `Prewarmed Space took ${openDurationMs}ms to become visible`);
   const opened = await client.evaluate(`({
     bodyClass: document.body.className,
     visibility: document.visibilityState,
@@ -192,6 +204,8 @@ try {
   assert.ok(currentTargets.some((target) => target.url === "about:blank"), "Embedded Space target was not found");
   process.stdout.write(`${JSON.stringify({
     before,
+    prewarmed,
+    openDurationMs,
     opened,
     chromeSurface,
     extensionMenuRows,

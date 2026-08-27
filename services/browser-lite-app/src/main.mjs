@@ -18,6 +18,9 @@ let taskSpaces;
 let nodeAgentLoaded = false;
 let shutdownStarted = false;
 let shutdownComplete = false;
+let bootstrapReady = false;
+let resolveBootstrapReady;
+const bootstrapReadyPromise = new Promise((resolveReady) => { resolveBootstrapReady = resolveReady; });
 const isTestBuild = process.env.BROWSER_LITE_TEST_BUILD === "1";
 
 // Ad-hoc signed test builds must stay unattended across upgrades. Chromium's
@@ -37,6 +40,7 @@ const hasSingleInstanceLock = app.requestSingleInstanceLock(initialPairingOption
 if (!hasSingleInstanceLock) app.quit();
 
 function emitState() {
+  if (!bootstrapReady) return;
   if (dashboardWindow && !dashboardWindow.isDestroyed()) {
     void getPublicState().then((state) => dashboardWindow.webContents.send("browser-lite:state", state));
   }
@@ -187,7 +191,10 @@ function createTray() {
 }
 
 function registerIpc() {
-  ipcMain.handle("browser-lite:get-state", () => getPublicState());
+  ipcMain.handle("browser-lite:get-state", async () => {
+    await bootstrapReadyPromise;
+    return getPublicState();
+  });
   ipcMain.handle("browser-lite:install-import", async (_event, payload) => {
     const result = await installation.importProfile(payload);
     await startNodeAgent();
@@ -348,6 +355,7 @@ async function bootstrap() {
     void manager.showSpaces().then(emitState).catch((error) => console.error("Browser Lite failed to show Spaces", error));
   });
   if (installation.isComplete()) {
+    await taskSpaces.startActiveSpaces();
     await startNodeAgent();
   }
   if (installation.isComplete()) await manager.showSpaces();
@@ -356,6 +364,8 @@ async function bootstrap() {
     dashboardWindow.hide();
     app.dock?.hide();
   }
+  bootstrapReady = true;
+  resolveBootstrapReady();
   emitState();
 }
 

@@ -50,8 +50,9 @@ class FakeBrowserManager {
     this.shown = [];
   }
 
-  async ensure(instanceId) {
+  async ensure(instanceId, options = {}) {
     if (!this.instances.has(instanceId)) this.instances.set(instanceId, { state: new FakeBrowserState() });
+    this.instances.get(instanceId).options = options;
     return this.instances.get(instanceId);
   }
 
@@ -186,6 +187,28 @@ test("saved tab groups restore before a fresh runtime may write session state", 
     const state = restored.browserManager.instances.get("task-space-1").state;
     assert.equal(state.restoredSession.groups[0].name, "保留组");
     assert.equal(restored.spaces.get(created.id).browserSession.groups[0].collapsed, true);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("all persisted active Spaces start before the overview becomes interactive", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "browser-lite-prewarm-spaces-"));
+  const statePath = join(directory, "task-spaces.json");
+  try {
+    const first = new BrowserLiteTaskSpaceManager(new FakeBrowserManager(), { statePath });
+    await first.createUserTaskSpace("first");
+    await first.createUserTaskSpace("second");
+
+    const browserManager = new FakeBrowserManager();
+    const restored = new BrowserLiteTaskSpaceManager(browserManager, { statePath });
+    await restored.load();
+    const started = await restored.startActiveSpaces();
+
+    assert.deepEqual(started.map((space) => space.name), ["first", "second"]);
+    assert.deepEqual([...browserManager.instances.keys()], ["task-space-1", "task-space-2"]);
+    assert.deepEqual(browserManager.instances.get("task-space-1").options.sessionState, restored.spaces.get(1).browserSession);
+    assert.deepEqual(browserManager.instances.get("task-space-2").options.sessionState, restored.spaces.get(2).browserSession);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

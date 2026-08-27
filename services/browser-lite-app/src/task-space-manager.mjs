@@ -420,6 +420,12 @@ export class BrowserLiteTaskSpaceManager {
     });
   }
 
+  async startActiveSpaces() {
+    const spaces = [...this.spaces.values()].filter((space) => space.status === "active");
+    await Promise.all(spaces.map((space) => this.ensureSpaceRuntime(space)));
+    return spaces.map(publicTaskSpace);
+  }
+
   async returnControlToAgent(value) {
     const id = requireNumericId(value, "Task space ID must be numeric.");
     return this.runSerialized("ui", async () => {
@@ -906,7 +912,7 @@ export class BrowserLiteTaskSpaceManager {
   }
 
   async ensureSpaceRuntime(space) {
-    const entry = await this.browserManager.ensure(space.instanceId);
+    const entry = await this.browserManager.ensure(space.instanceId, { sessionState: space.browserSession });
     if (typeof entry?.state?.restoreSessionState === "function") {
       await entry.state.restoreSessionState(space.browserSession);
     }

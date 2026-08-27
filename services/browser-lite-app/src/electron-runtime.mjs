@@ -112,6 +112,7 @@ export class ElectronBrowserLiteState {
         sandbox: true,
         webSecurity: true,
         spellcheck: true,
+        backgroundThrottling: false,
       },
     });
     const targetId = targetIdFor(view);
@@ -145,7 +146,11 @@ export class ElectronBrowserLiteState {
       return { action: "deny" };
     });
     if (!view.webContents.debugger.isAttached()) view.webContents.debugger.attach("1.3");
-    await view.webContents.loadURL(url);
+    try {
+      await view.webContents.loadURL(url);
+    } catch (error) {
+      if (view.webContents.isDestroyed()) throw error;
+    }
     if (this.visible) this.setVisible(true, targetId);
     this.notifyChanged();
     return { targetId, window: view };
@@ -886,7 +891,9 @@ export class BrowserLiteManager {
 
   async showSpaces() {
     await Promise.all([...this.instances.values()].map(async (entry) => {
-      try { await entry.state.capturePreview?.(); } catch {}
+      if (entry.state.visible) {
+        try { await entry.state.capturePreview?.(); } catch {}
+      }
       try { entry.state.setVisible(false); } catch {}
     }));
     this.taskControlVisible = false;
@@ -967,6 +974,7 @@ export class BrowserLiteManager {
       config.port = typeof address === "object" && address ? address.port : config.port;
       try {
         const extensionLoading = state.loadExtensions(await this.installation?.runtimeExtensions?.() || []);
+        await state.restoreSessionState(options.sessionState);
         await state.start();
         await this.installation?.seedRuntimeCookies(id, state);
         await state.setVisible(false);
@@ -981,6 +989,7 @@ export class BrowserLiteManager {
     } else {
       if (Number(options.width) >= 320) entry.state.config.width = Number(options.width);
       if (Number(options.height) >= 240) entry.state.config.height = Number(options.height);
+      if (entry.state.stopped) await entry.state.restoreSessionState(options.sessionState);
       await entry.state.resume();
     }
     return entry;

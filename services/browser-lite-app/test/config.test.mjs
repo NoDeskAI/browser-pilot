@@ -11,7 +11,7 @@ test("app manifest is arm64 DMG buildable with embedded Electron Chromium", asyn
   assert.equal(manifest.main, "src/main.mjs");
   assert.match(manifest.devDependencies.electron, /^43\./);
   assert.equal(manifest.scripts["build:dmg"], "node scripts/build-dmg.mjs");
-  assert.equal(manifest.version, "0.5.3");
+  assert.equal(manifest.version, "0.5.4");
 });
 
 test("renderer has a restrictive content security policy", async () => {
@@ -37,11 +37,17 @@ test("Spaces stay inside the single Browser Lite window", async () => {
   assert.match(runtime, /const state = new ElectronBrowserLiteState\(config/);
   assert.match(runtime, /new WebContentsView\(/);
   assert.match(runtime, /this\.config\.hostWindow\.contentView\.addChildView\(view\)/);
+  assert.match(runtime, /backgroundThrottling:\s*false/);
+  assert.match(runtime, /await state\.restoreSessionState\(options\.sessionState\);[\s\S]*await state\.start\(\)/);
+  assert.match(runtime, /if \(entry\.state\.visible\) \{[\s\S]*capturePreview/);
   assert.match(runtime, /startUrl: "about:blank"/);
   assert.doesNotMatch(runtime, /this\.hostWindow\.hide\(\)/);
   assert.doesNotMatch(runtime, /nativeChromiumBinary|onNativeBrowserExit|--load-extension/);
   assert.match(main, /browser-lite:show-settings/);
   assert.match(main, /browser-lite:show-spaces/);
+  assert.match(main, /await taskSpaces\.startActiveSpaces\(\)/);
+  assert.match(main, /await bootstrapReadyPromise/);
+  assert.match(main, /bootstrapReady = true;[\s\S]*resolveBootstrapReady\(\)/);
   assert.doesNotMatch(html, /id="show-spaces"/);
   assert.match(html, /id="settings-page"/);
 });
