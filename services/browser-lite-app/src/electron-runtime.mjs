@@ -884,7 +884,11 @@ export class BrowserLiteManager {
     };
   }
 
-  async showSpaces({ capturePreview = true } = {}) {
+  async showSpaces({
+    capturePreview = true,
+    activateWindow = true,
+    preserveWindowGeometry = false,
+  } = {}) {
     await Promise.all([...this.instances.values()].map(async (entry) => {
       if (capturePreview && entry.state.visible) {
         try { await entry.state.capturePreview?.(); } catch {}
@@ -895,11 +899,25 @@ export class BrowserLiteManager {
     this.chromeMenuOpen = false;
     this.viewMode = "spaces";
     try { this.hostWindow.setTitle("Browser Lite"); } catch (error) { throw new Error(`Space 总览设置标题失败: ${error.message || error}`); }
-    try { this.hostWindow.setContentSize(...this.modeContentSizes.spaces); } catch (error) { throw new Error(`Space 总览调整窗口失败: ${error.message || error}`); }
-    try { await app.dock?.show(); } catch (error) { throw new Error(`Space 总览恢复 Dock 失败: ${error.message || error}`); }
-    try { this.hostWindow.show(); } catch (error) { throw new Error(`Space 总览显示窗口失败: ${error.message || error}`); }
-    try { app.focus({ steal: true }); } catch {}
-    try { this.hostWindow.focus(); } catch (error) { throw new Error(`Space 总览聚焦窗口失败: ${error.message || error}`); }
+    if (preserveWindowGeometry) {
+      this.modeContentSizes.spaces = this.hostWindow.getContentSize();
+    } else {
+      const currentSize = this.hostWindow.getContentSize();
+      const targetSize = this.modeContentSizes.spaces;
+      if (currentSize[0] !== targetSize[0] || currentSize[1] !== targetSize[1]) {
+        try { this.hostWindow.setContentSize(...targetSize); } catch (error) { throw new Error(`Space 总览调整窗口失败: ${error.message || error}`); }
+      }
+    }
+    if (activateWindow) {
+      try { await app.dock?.show(); } catch (error) { throw new Error(`Space 总览恢复 Dock 失败: ${error.message || error}`); }
+      if (!this.hostWindow.isVisible()) {
+        try { this.hostWindow.show(); } catch (error) { throw new Error(`Space 总览显示窗口失败: ${error.message || error}`); }
+      }
+      if (!this.hostWindow.isFocused()) {
+        try { app.focus({ steal: true }); } catch {}
+        try { this.hostWindow.focus(); } catch (error) { throw new Error(`Space 总览聚焦窗口失败: ${error.message || error}`); }
+      }
+    }
     this.onChanged?.();
   }
 

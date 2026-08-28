@@ -317,6 +317,7 @@ try {
   await waitForState(client, `window.__browserLiteLastSpaceReturn?.phase === 'complete'`);
   const returnAnimation = await client.evaluate(`window.__browserLiteLastSpaceReturn`);
   assert.equal(returnAnimation.transformOrigin, "0px 0px");
+  assert.equal(returnAnimation.flightPaintReadyBeforeRuntimeHide, true, "Return surface must finish painting before the embedded runtime is hidden");
   assert.ok(returnAnimation.to.width > 0 && returnAnimation.to.height > 0, "Return animation must resolve a visible Space target");
   assert.ok(returnAnimation.to.width < returnAnimation.from.width, "Return surface must shrink to the Space preview width");
   assert.ok(returnAnimation.to.height < returnAnimation.from.height, "Return surface must shrink to the Space preview height");

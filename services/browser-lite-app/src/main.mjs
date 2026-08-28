@@ -272,7 +272,11 @@ function registerIpc() {
     return taskSpaces.prepareSpaceReturn(id);
   });
   ipcMain.handle("browser-lite:show-spaces", async (_event, options = {}) => {
-    await manager.showSpaces({ capturePreview: options?.capturePreview !== false });
+    await manager.showSpaces({
+      capturePreview: options?.capturePreview !== false,
+      activateWindow: options?.activateWindow !== false,
+      preserveWindowGeometry: options?.preserveWindowGeometry === true,
+    });
     emitState();
     return getPublicState();
   });

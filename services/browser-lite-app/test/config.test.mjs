@@ -11,7 +11,7 @@ test("app manifest is arm64 DMG buildable with embedded Electron Chromium", asyn
   assert.equal(manifest.main, "src/main.mjs");
   assert.match(manifest.devDependencies.electron, /^43\./);
   assert.equal(manifest.scripts["build:dmg"], "node scripts/build-dmg.mjs");
-  assert.equal(manifest.version, "0.5.13");
+  assert.equal(manifest.version, "0.5.14");
 });
 
 test("renderer has a restrictive content security policy", async () => {
@@ -170,7 +170,14 @@ test("returning from an instance shrinks into its exact Space card", async () =>
   const css = await readFile(join(ROOT, "src", "renderer", "styles.css"), "utf8");
   assert.match(main, /browser-lite:prepare-space-return/);
   assert.match(preload, /prepareSpaceReturn/);
-  assert.match(renderer, /prepareSpaceReturn\(space\.id\)[\s\S]*afterTwoFrames\(\)[\s\S]*showSpaces\(\{ capturePreview: false \}\)/);
+  assert.match(renderer, /prepareSpaceReturn\(space\.id\)[\s\S]*prepareSpaceReturnFlight\(returnFlight\)[\s\S]*showSpaces\(\{[\s\S]*capturePreview: false,[\s\S]*activateWindow: false,[\s\S]*preserveWindowGeometry: true/);
+  assert.match(renderer, /async function prepareSpaceReturnFlight[\s\S]*preview\.decode\(\)[\s\S]*afterTwoFrames\(\)[\s\S]*paintReady = "true"/);
+  assert.match(renderer, /flightPaintReadyBeforeRuntimeHide: flight\.dataset\.paintReady === "true"/);
+  assert.match(main, /browser-lite:show-spaces[\s\S]*activateWindow: options\?\.activateWindow !== false,[\s\S]*preserveWindowGeometry: options\?\.preserveWindowGeometry === true/);
+  const runtime = await readFile(join(ROOT, "src", "electron-runtime.mjs"), "utf8");
+  assert.match(runtime, /async showSpaces\(\{[\s\S]*activateWindow = true,[\s\S]*preserveWindowGeometry = false/);
+  assert.match(runtime, /if \(preserveWindowGeometry\) \{[\s\S]*this\.modeContentSizes\.spaces = this\.hostWindow\.getContentSize\(\)/);
+  assert.match(runtime, /if \(activateWindow\) \{[\s\S]*if \(!this\.hostWindow\.isVisible\(\)\)[\s\S]*if \(!this\.hostWindow\.isFocused\(\)\)/);
   assert.match(renderer, /\.space-card\[data-space-id=[\s\S]*\.space-preview/);
   assert.match(renderer, /target\.scrollIntoView\(\{ block: "nearest", inline: "nearest" \}\)/);
   assert.match(renderer, /target = document\.querySelector\([\s\S]*if \(to\.width <= 0 \|\| to\.height <= 0\)/);

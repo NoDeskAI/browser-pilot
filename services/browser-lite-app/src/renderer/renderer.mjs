@@ -375,6 +375,15 @@ function createSpaceReturnFlight(space, previewDataUrl, initialRect = null) {
   return flight;
 }
 
+async function prepareSpaceReturnFlight(flight) {
+  const preview = flight.querySelector(".browser-surface-page img");
+  if (preview && typeof preview.decode === "function") {
+    try { await preview.decode(); } catch {}
+  }
+  await afterTwoFrames();
+  flight.dataset.paintReady = "true";
+}
+
 function rectSnapshot(rect) {
   return {
     left: Math.round(rect.left * 100) / 100,
@@ -501,6 +510,7 @@ async function animateSpaceReturn(flight, spaceId) {
     scaleY,
     duration,
     transformOrigin: "0px 0px",
+    flightPaintReadyBeforeRuntimeHide: flight.dataset.paintReady === "true",
   };
   window.__browserLiteLastSpaceReturn = metrics;
   flight.dataset.phase = "animating";
@@ -538,8 +548,12 @@ async function returnToSpaces(button = null) {
   try {
     const prepared = await window.browserLite.prepareSpaceReturn(space.id);
     returnFlight = createSpaceReturnFlight(space, prepared?.previewDataUrl);
-    await afterTwoFrames();
-    render(await window.browserLite.showSpaces({ capturePreview: false }));
+    await prepareSpaceReturnFlight(returnFlight);
+    render(await window.browserLite.showSpaces({
+      capturePreview: false,
+      activateWindow: false,
+      preserveWindowGeometry: true,
+    }));
     await animateSpaceReturn(returnFlight, returningSpaceId);
   } catch (error) {
     window.__browserLiteLastSpaceReturn = {
