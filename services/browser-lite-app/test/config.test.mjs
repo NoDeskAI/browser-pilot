@@ -11,7 +11,7 @@ test("app manifest is arm64 DMG buildable with embedded Electron Chromium", asyn
   assert.equal(manifest.main, "src/main.mjs");
   assert.match(manifest.devDependencies.electron, /^43\./);
   assert.equal(manifest.scripts["build:dmg"], "node scripts/build-dmg.mjs");
-  assert.equal(manifest.version, "0.5.14");
+  assert.equal(manifest.version, "0.5.15");
 });
 
 test("renderer has a restrictive content security policy", async () => {
@@ -88,8 +88,7 @@ test("renderer follows the Ego Lite overview and embedded views expose previews"
   assert.match(html, /class="settings-sidebar"/);
   assert.match(css, /color-scheme:\s*light/);
   assert.match(css, /grid-template-columns:\s*repeat\(4/);
-  assert.match(css, /\.spaces-topbar\s*>\s*\.round-count\s*\{[^}]*top:\s*9px;\s*right:\s*14px/);
-  assert.match(css, /\.tab-strip>\.round-count\s*\{[^}]*top:9px;\s*right:14px/);
+  assert.match(css, /\.space-switcher\s*\{[^}]*position:fixed;[^}]*top:9px;[^}]*right:14px;[^}]*z-index:120/);
   assert.match(css, /--toolbar-height:\s*112px/);
   assert.match(runtime, /ElectronBrowserLiteState/);
   assert.match(runtime, /window\.webContents\.debugger\.sendCommand/);
@@ -109,12 +108,11 @@ test("Task Space workspace delegates tabs and navigation to embedded views", asy
   assert.match(renderer, /taskSpaceBrowserAction/);
   assert.match(html, /id="return-control"/);
   assert.match(html, /id="task-control-bar"/);
-  assert.match(html, /id="overview-space-count"/);
-  assert.doesNotMatch(html, /id="overview-space-switcher"/);
-  assert.match(html, /id="browser-space-count"/);
-  assert.match(html, /id="settings-space-count"/);
-  assert.match(renderer, /countButton\.addEventListener\("click"[\s\S]*returnToSpaces\(countButton\)/);
-  assert.match(renderer, /overviewSpaceCount\.disabled = inSpacesOverview/);
+  assert.match(html, /id="space-switcher"/);
+  assert.doesNotMatch(html, /id="(?:overview|browser|settings)-space-count"/);
+  assert.match(renderer, /spaceSwitcher\.addEventListener\("click"[\s\S]*returnToSpaces\(elements\.spaceSwitcher\)/);
+  assert.match(renderer, /spaceSwitcher\.disabled = inSpacesOverview/);
+  assert.match(renderer, /currentState\?\.workspace\?\.mode !== "browser"[\s\S]*showSpaces\(\)[\s\S]*button\.disabled = currentState\?\.workspace\?\.mode === "spaces"/);
   assert.match(renderer, /if \(currentState\?\.workspace\?\.mode === "spaces"\) return/);
   assert.match(runtime, /TASK_CONTROL_RESERVE/);
   assert.match(css, /prefers-reduced-motion/);
@@ -156,8 +154,8 @@ test("the Browser Lite shell owns the stable Space-count button", async () => {
   const runtime = await readFile(join(ROOT, "src", "electron-runtime.mjs"), "utf8");
   const build = await readFile(join(ROOT, "scripts", "build-dmg.mjs"), "utf8");
   assert.match(main, /globalShortcut\.register\("Alt\+S"/);
-  assert.match(html, /id="browser-space-count"/);
-  assert.match(renderer, /countButton\.addEventListener\("click"[\s\S]*returnToSpaces\(countButton\)/);
+  assert.match(html, /id="space-switcher"/);
+  assert.match(renderer, /spaceSwitcher\.addEventListener\("click"[\s\S]*returnToSpaces\(elements\.spaceSwitcher\)/);
   assert.match(runtime, /await app\.dock\?\.show\(\);[\s\S]*this\.hostWindow\.show\(\)/);
   assert.doesNotMatch(runtime, /prepareRuntimeExtension|extensionPath|controlToken/);
   assert.doesNotMatch(build, /BROWSER_LITE_CHROMIUM_APP|bundledChromiumRoot|brandBundledChromium/);

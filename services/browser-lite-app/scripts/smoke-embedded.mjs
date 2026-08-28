@@ -191,8 +191,8 @@ try {
   const opened = await client.evaluate(`({
     bodyClass: document.body.className,
     visibility: document.visibilityState,
-    count: document.querySelector('#browser-space-count')?.textContent,
-    countDisplay: getComputedStyle(document.querySelector('#browser-space-count')).display,
+    count: document.querySelector('#space-switcher')?.textContent,
+    countDisplay: getComputedStyle(document.querySelector('#space-switcher')).display,
     browserChromeDisplay: getComputedStyle(document.querySelector('#browser-chrome')).display,
   })`);
   assert.equal(opened.visibility, "visible");
@@ -302,7 +302,7 @@ try {
       pauseAtStart();
     }); return true; })()`);
   }
-  await client.evaluate(`document.querySelector('#browser-space-count').click()`);
+  await client.evaluate(`document.querySelector('#space-switcher').click()`);
   if (acceptanceDir) {
     await client.evaluate(`window.__browserLiteReturnCapture`);
     const start = await client.evaluate(`(() => { const rect = document.querySelector('.space-return-flight').getBoundingClientRect(); return { left: rect.left, top: rect.top, width: rect.width, height: rect.height }; })()`);

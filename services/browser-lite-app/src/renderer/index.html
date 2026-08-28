@@ -9,6 +9,7 @@
   </head>
   <body class="booting">
     <a class="skip-link" href="#main-content">跳到主要内容</a>
+    <button id="space-switcher" class="round-count notification-count space-switcher" type="button" title="返回 Space 总览" aria-label="返回 Space 总览">0</button>
 
     <section id="startup-loading" class="startup-loading" role="status" aria-live="polite" aria-labelledby="startup-title">
       <div class="startup-stage">
@@ -48,7 +49,6 @@
     <main id="main-content" class="spaces-overview">
       <header class="spaces-topbar">
         <button id="spaces-title" class="spaces-title" type="button" aria-label="任务空间列表">0 Spaces <span aria-hidden="true">⌄</span></button>
-        <button id="overview-space-count" class="round-count notification-count" type="button" title="返回 Space 总览" aria-label="返回 Space 总览">0</button>
       </header>
       <section id="task-spaces" class="space-gallery" aria-live="polite">
         <div class="empty-space">正在读取 Space…</div>
@@ -62,7 +62,6 @@
         <div id="browser-tabs" class="browser-tabs" role="tablist"></div>
         <button id="new-tab" class="chrome-icon add-tab" type="button" aria-label="新建标签页">＋</button>
         <span class="tab-strip-spacer"></span>
-        <button id="browser-space-count" class="round-count notification-count" type="button" title="返回 Space 总览" aria-label="返回 Space 总览">0</button>
       </div>
       <div class="navigation-bar">
         <button id="nav-back" class="chrome-icon" type="button" aria-label="后退">‹</button>
@@ -95,7 +94,7 @@
       <div class="tab-strip">
         <span class="tab-search inert"><span aria-hidden="true">⌄</span></span>
         <div class="settings-tab active"><span class="settings-tab-icon" aria-hidden="true">⚙</span><span>设置</span><span aria-hidden="true">×</span></div>
-        <span class="add-tab">＋</span><span class="tab-strip-spacer"></span><button id="settings-space-count" class="round-count notification-count" type="button" title="返回 Space 总览" aria-label="返回 Space 总览">0</button>
+        <span class="add-tab">＋</span><span class="tab-strip-spacer"></span>
       </div>
       <div class="navigation-bar">
         <span class="chrome-icon muted">‹</span><span class="chrome-icon muted">›</span><span class="chrome-icon">↻</span>

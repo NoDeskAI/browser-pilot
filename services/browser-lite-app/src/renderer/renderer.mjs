@@ -1,15 +1,15 @@
 const elements = Object.fromEntries([
   "installer", "installer-error", "chrome-running", "profile-list", "import-login-state", "import-bookmarks",
-  "import-history", "import-extensions", "install-fresh", "install-import", "spaces-title", "overview-space-count", "task-spaces",
+  "import-history", "import-extensions", "install-fresh", "install-import", "spaces-title", "space-switcher", "task-spaces",
   "connection-pill", "pair-form", "server-url", "pairing-code", "pair-button", "paired-state", "node-id",
   "node-name", "node-server", "node-error", "unpair-button", "app-version", "chromium-version",
   "reset-installation", "uninstall-app", "reimport-browser-data", "import-source", "imported-cookies",
-  "imported-bookmarks", "imported-history", "workspace-title", "browser-tabs", "new-tab", "browser-space-count",
+  "imported-bookmarks", "imported-history", "workspace-title", "browser-tabs", "new-tab",
   "browser-chrome",
   "nav-back", "nav-forward", "nav-reload", "address-form", "address-input", "agent-state",
   "return-control", "take-control", "terminate-task", "task-control-bar", "task-control-name",
   "settings-search-input", "settings-profile-page", "settings-about-page", "profile-display-name",
-  "browser-bookmarks", "settings-bookmarks", "settings-space-count", "pinned-extensions",
+  "browser-bookmarks", "settings-bookmarks", "pinned-extensions",
   "extensions-menu-button", "chrome-popover", "startup-loading", "startup-title", "startup-message",
 ].map((id) => [id.replace(/-([a-z])/g, (_, letter) => letter.toUpperCase()), document.querySelector(`#${id}`)]));
 
@@ -160,10 +160,8 @@ function renderExtensions(space, installation) {
 function renderTaskSpaces(taskSpaceState, installation) {
   const spaces = taskSpaceState?.taskSpaces || [];
   elements.spacesTitle.innerHTML = `${spaces.length} ${spaces.length === 1 ? "Space" : "Spaces"} <span aria-hidden="true">⌄</span>`;
-  for (const countButton of [elements.overviewSpaceCount, elements.browserSpaceCount, elements.settingsSpaceCount]) {
-    countButton.textContent = String(spaces.length);
-    countButton.setAttribute("aria-label", `返回 Space 总览，共 ${spaces.length} 个 Space`);
-  }
+  elements.spaceSwitcher.textContent = String(spaces.length);
+  elements.spaceSwitcher.setAttribute("aria-label", `返回 Space 总览，共 ${spaces.length} 个 Space`);
   const cards = spaces.map((space) => {
     const status = space.ownership === "agent" && space.status === "active"
       ? "运行中"
@@ -278,9 +276,9 @@ function render(state) {
   document.body.classList.remove("spaces-mode", "browser-mode", "settings-mode");
   if (!installation.required) document.body.classList.add(`${state.workspace?.mode || "spaces"}-mode`);
   renderTaskSpaces(state.taskSpaces, installation);
-  elements.overviewSpaceCount.disabled = inSpacesOverview;
-  elements.overviewSpaceCount.title = inSpacesOverview ? "当前位于 Space 总览" : "返回 Space 总览";
-  elements.overviewSpaceCount.setAttribute("aria-current", inSpacesOverview ? "page" : "false");
+  elements.spaceSwitcher.disabled = inSpacesOverview;
+  elements.spaceSwitcher.title = inSpacesOverview ? "当前位于 Space 总览" : "返回 Space 总览";
+  elements.spaceSwitcher.setAttribute("aria-current", inSpacesOverview ? "page" : "false");
   renderBookmarks(installation, state.taskSpaces);
   renderBrowser(state.taskSpaces, installation);
   renderSettings(state);
@@ -540,6 +538,7 @@ async function returnToSpaces(button = null) {
   const space = activeSpace();
   if (!space || currentState?.workspace?.mode !== "browser") {
     await run(button, null, () => window.browserLite.showSpaces());
+    if (button) button.disabled = currentState?.workspace?.mode === "spaces";
     return;
   }
   if (button) button.disabled = true;
@@ -564,7 +563,7 @@ async function returnToSpaces(button = null) {
     window.alert(error.message || String(error));
   } finally {
     finishSpaceReturn();
-    if (button) button.disabled = false;
+    if (button) button.disabled = currentState?.workspace?.mode === "spaces";
   }
 }
 
@@ -833,12 +832,10 @@ elements.terminateTask.addEventListener("click", async () => {
     await run(elements.terminateTask, "终止中…", () => window.browserLite.closeTaskSpace(space.id));
   }
 });
-for (const countButton of [elements.overviewSpaceCount, elements.browserSpaceCount, elements.settingsSpaceCount]) {
-  countButton.addEventListener("click", async () => {
-    if (currentState?.workspace?.mode === "spaces") return;
-    await returnToSpaces(countButton);
-  });
-}
+elements.spaceSwitcher.addEventListener("click", async () => {
+  if (currentState?.workspace?.mode === "spaces") return;
+  await returnToSpaces(elements.spaceSwitcher);
+});
 
 function showSettingsPage(page) {
   const about = page === "about";
