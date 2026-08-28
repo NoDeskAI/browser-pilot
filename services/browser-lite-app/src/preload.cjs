@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld("browserLite", Object.freeze({
   createTaskSpace: (name) => ipcRenderer.invoke("browser-lite:create-task-space", name),
   openTaskSpace: (id) => ipcRenderer.invoke("browser-lite:open-task-space", id),
   prepareTaskSpaceOpen: (id) => ipcRenderer.invoke("browser-lite:prepare-task-space-open", id),
+  commitTaskSpaceOpen: (id) => ipcRenderer.invoke("browser-lite:commit-task-space-open", id),
   revealTaskSpace: (id) => ipcRenderer.invoke("browser-lite:reveal-task-space", id),
   returnTaskSpace: (id) => ipcRenderer.invoke("browser-lite:return-task-space", id),
   closeTaskSpace: (id) => ipcRenderer.invoke("browser-lite:close-task-space", id),

@@ -438,16 +438,18 @@ async function openSpaceFromCard(button, spaceId) {
   card.classList.add("space-return-target");
   if (button) button.disabled = true;
   window.__browserLiteLastSpaceOpen = { phase: "preparing", spaceId: openingSpaceId };
-  let prepared = false;
+  let committed = false;
   let revealed = false;
   try {
     openFlight = createSpaceReturnFlight(space, safePreview(space), { ...rectSnapshot(source), radius });
-    const prepareState = window.browserLite.prepareTaskSpaceOpen(spaceId);
-    const [, state] = await Promise.all([
+    const prepareRuntime = window.browserLite.prepareTaskSpaceOpen(spaceId);
+    await Promise.all([
       animateSpaceOpen(openFlight, openingSpaceId),
-      prepareState,
+      prepareRuntime,
     ]);
-    prepared = true;
+    window.__browserLiteLastSpaceOpen.spacesBackdropPreserved = document.body.classList.contains("spaces-mode");
+    const state = await window.browserLite.commitTaskSpaceOpen(spaceId);
+    committed = true;
     render(state);
     window.__browserLiteLastSpaceOpen.phase = "controller-rendering";
     await afterTwoFrames();
@@ -459,7 +461,7 @@ async function openSpaceFromCard(button, spaceId) {
     window.__browserLiteLastSpaceOpen.flightPresentAtReveal = Boolean(openFlight?.isConnected);
     window.__browserLiteLastSpaceOpen.phase = "complete";
   } catch (error) {
-    if (prepared && !revealed) {
+    if (committed && !revealed) {
       try { await window.browserLite.revealTaskSpace(spaceId); } catch {}
     }
     window.__browserLiteLastSpaceOpen = {

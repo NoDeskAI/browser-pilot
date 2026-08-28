@@ -11,7 +11,7 @@ test("app manifest is arm64 DMG buildable with embedded Electron Chromium", asyn
   assert.equal(manifest.main, "src/main.mjs");
   assert.match(manifest.devDependencies.electron, /^43\./);
   assert.equal(manifest.scripts["build:dmg"], "node scripts/build-dmg.mjs");
-  assert.equal(manifest.version, "0.5.11");
+  assert.equal(manifest.version, "0.5.12");
 });
 
 test("renderer has a restrictive content security policy", async () => {
@@ -196,12 +196,15 @@ test("opening a Space expands from its exact card into the embedded instance", a
   assert.match(renderer, /async function animateSpaceOpen[\s\S]*transformOrigin: "0px 0px"/);
   assert.match(renderer, /borderRadius: "0px", transform: "translate\(0px, 0px\) scale\(1, 1\)"/);
   assert.match(main, /browser-lite:prepare-task-space-open[\s\S]*openForUser\(id, \{ reveal: false \}\)/);
+  assert.match(main, /browser-lite:commit-task-space-open[\s\S]*commitOpenForUser\(id\)/);
   assert.match(main, /browser-lite:reveal-task-space[\s\S]*revealForUser\(id\)/);
-  assert.match(preload, /prepareTaskSpaceOpen[\s\S]*revealTaskSpace/);
+  assert.match(preload, /prepareTaskSpaceOpen[\s\S]*commitTaskSpaceOpen[\s\S]*revealTaskSpace/);
   assert.match(runtime, /capturePage\(undefined, \{ stayHidden: true \}\)/);
-  assert.match(runtime, /async prepareInstance[\s\S]*setVisible\(false\)[\s\S]*prepareForReveal/);
+  assert.match(runtime, /async prewarmInstance[\s\S]*setVisible\(false\)[\s\S]*prepareForReveal/);
+  assert.match(runtime, /async prepareInstance\(instanceId, \{ prewarm = true \} = \{\}\)[\s\S]*if \(prewarm && !await this\.prewarmInstance\(id\)\)[\s\S]*this\.viewMode = "browser"/);
   assert.match(runtime, /async revealInstance[\s\S]*setVisible\(otherId === id\)/);
-  assert.match(renderer, /Promise\.all\(\[[\s\S]*animateSpaceOpen\(openFlight, openingSpaceId\)[\s\S]*prepareState/);
+  assert.match(renderer, /Promise\.all\(\[[\s\S]*animateSpaceOpen\(openFlight, openingSpaceId\)[\s\S]*prepareRuntime/);
+  assert.match(renderer, /spacesBackdropPreserved = document\.body\.classList\.contains\("spaces-mode"\)[\s\S]*commitTaskSpaceOpen\(spaceId\)/);
   assert.match(renderer, /render\(state\);[\s\S]*afterTwoFrames\(\);[\s\S]*revealTaskSpace\(spaceId\)/);
   assert.match(renderer, /flightPresentAtControllerReady[\s\S]*flightPresentAtReveal[\s\S]*phase = "complete"/);
 });

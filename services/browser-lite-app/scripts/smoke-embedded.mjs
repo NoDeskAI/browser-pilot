@@ -144,23 +144,42 @@ try {
     await waitForState(client, `document.querySelector('.space-return-flight')?.dataset.phase === 'animating'`, 2_000, 2);
     await client.evaluate(`(() => { const animation = document.querySelector('.space-return-flight').getAnimations()[0]; animation.pause(); animation.currentTime = 0; return new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))); })()`);
     const start = await client.evaluate(`(() => { const rect = document.querySelector('.space-return-flight').getBoundingClientRect(); return { left: rect.left, top: rect.top, width: rect.width, height: rect.height }; })()`);
+    const startBackdrop = await client.evaluate(`({
+      bodyClass: document.body.className,
+      overviewDisplay: getComputedStyle(document.querySelector('#main-content')).display,
+      browserChromeDisplay: getComputedStyle(document.querySelector('#browser-chrome')).display,
+    })`);
+    assert.match(startBackdrop.bodyClass, /spaces-mode/, "Opening must retain the Spaces background at its first frame");
+    assert.notEqual(startBackdrop.overviewDisplay, "none", "Spaces overview must remain painted behind the opening surface");
+    assert.equal(startBackdrop.browserChromeDisplay, "none", "Browser chrome must not replace Spaces during opening");
     const openingChrome = await client.evaluate(`document.querySelector('.space-return-flight .browser-surface-chrome')?.innerText || ''`);
     assert.ok(openingChrome.trim().length > 0, "Opening surface must include browser chrome from the first frame");
     assert.ok(expectedOpen.cardTabCount > 0, "Space card must retain its tabs before opening");
     await captureController(client, `${acceptanceDir}/Browser-Lite-${acceptanceVersion}-open-start.png`);
     await client.evaluate(`(() => { const animation = document.querySelector('.space-return-flight').getAnimations()[0]; animation.currentTime = animation.effect.getTiming().duration / 2; return new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))); })()`);
     const mid = await client.evaluate(`(() => { const rect = document.querySelector('.space-return-flight').getBoundingClientRect(); return { left: rect.left, top: rect.top, width: rect.width, height: rect.height }; })()`);
+    const midBackdrop = await client.evaluate(`({
+      bodyClass: document.body.className,
+      overviewDisplay: getComputedStyle(document.querySelector('#main-content')).display,
+      browserChromeDisplay: getComputedStyle(document.querySelector('#browser-chrome')).display,
+    })`);
+    assert.match(midBackdrop.bodyClass, /spaces-mode/, "Opening must retain the Spaces background at its middle frame");
+    assert.notEqual(midBackdrop.overviewDisplay, "none", "Spaces overview must stay visible until opening fills the viewport");
+    assert.equal(midBackdrop.browserChromeDisplay, "none", "Browser chrome must stay hidden until opening fills the viewport");
     await captureController(client, `${acceptanceDir}/Browser-Lite-${acceptanceVersion}-open-mid.png`);
     await client.evaluate(`document.querySelector('.space-return-flight').getAnimations()[0].play()`);
-    openFrames = { start, mid };
+    openFrames = { start, startBackdrop, mid, midBackdrop };
   }
   await waitForState(client, `document.body.classList.contains('browser-mode')`);
   await waitForState(client, `window.__browserLiteLastSpaceOpen?.phase === 'complete'`);
   const openDurationMs = Date.now() - openStartedAt;
-  assert.ok(openDurationMs < 1_000, `Prewarmed Space took ${openDurationMs}ms to become visible`);
+  if (!acceptanceDir) {
+    assert.ok(openDurationMs < 1_000, `Prewarmed Space took ${openDurationMs}ms to become visible`);
+  }
   const openAnimation = await client.evaluate(`window.__browserLiteLastSpaceOpen`);
   assert.equal(openAnimation.spaceId, expectedOpen.spaceId);
   assert.equal(openAnimation.transformOrigin, "0px 0px");
+  assert.equal(openAnimation.spacesBackdropPreserved, true, "Spaces background must remain until the opening surface fills the viewport");
   assert.equal(openAnimation.controllerReady, true, "Browser chrome must paint before the live view is revealed");
   assert.equal(openAnimation.flightPresentAtControllerReady, true, "Opening surface must cover the controller handoff");
   assert.equal(openAnimation.flightPresentAtReveal, true, "Opening surface must remain until the live view is ready");
@@ -255,7 +274,7 @@ try {
 
   if (createdGroupId) {
     await client.evaluate(`window.browserLite.getState().then(state => window.browserLite.taskSpaceBrowserAction(state.taskSpaces.activeTaskSpace.id, "removeTabGroup", ${JSON.stringify(createdGroupId)}))`);
-    await waitForState(client, `!document.querySelector('[data-tab-group-id="${createdGroupId}"]')`);
+    await waitForState(client, `window.browserLite.getState().then(state => !state.taskSpaces.activeTaskSpace.tabGroups.some(group => group.id === ${JSON.stringify(createdGroupId)}))`);
   } else {
     await client.evaluate(`document.querySelector(${JSON.stringify(groupSelector)}).click()`);
     await waitForState(client, `document.querySelector(${JSON.stringify(groupSelector)}).getAttribute('aria-expanded') === ${JSON.stringify(groupBeforeToggle)}`);

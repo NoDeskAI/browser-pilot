@@ -48,6 +48,7 @@ class FakeBrowserManager {
     this.stopped = [];
     this.removed = [];
     this.shown = [];
+    this.prewarmed = [];
     this.prepared = [];
     this.revealed = [];
   }
@@ -62,7 +63,8 @@ class FakeBrowserManager {
   async stop(instanceId) { this.stopped.push(instanceId); }
   async remove(instanceId) { this.removed.push(instanceId); this.instances.delete(instanceId); }
   showInstance(instanceId) { this.shown.push(instanceId); }
-  prepareInstance(instanceId) { this.prepared.push(instanceId); return true; }
+  prewarmInstance(instanceId) { this.prewarmed.push(instanceId); return true; }
+  prepareInstance(instanceId, options) { this.prepared.push({ instanceId, options }); return true; }
   revealInstance(instanceId) { this.revealed.push(instanceId); return true; }
   async request(instanceId, request) { return { instanceId, request }; }
 }
@@ -218,14 +220,18 @@ test("all persisted active Spaces start before the overview becomes interactive"
   }
 });
 
-test("animated Space opening prepares the hidden view before revealing it", async () => {
+test("animated Space opening preserves Spaces while prewarming, then commits before reveal", async () => {
   const browserManager = new FakeBrowserManager();
   const taskSpaces = new BrowserLiteTaskSpaceManager(browserManager);
   const created = await taskSpaces.createUserTaskSpace("smooth-open");
 
   await taskSpaces.openForUser(created.id, { reveal: false });
-  assert.deepEqual(browserManager.prepared, ["task-space-1"]);
+  assert.deepEqual(browserManager.prewarmed, ["task-space-1"]);
+  assert.deepEqual(browserManager.prepared, []);
   assert.deepEqual(browserManager.revealed, []);
+
+  await taskSpaces.commitOpenForUser(created.id);
+  assert.deepEqual(browserManager.prepared, [{ instanceId: "task-space-1", options: { prewarm: false } }]);
 
   await taskSpaces.revealForUser(created.id);
   assert.deepEqual(browserManager.revealed, ["task-space-1"]);

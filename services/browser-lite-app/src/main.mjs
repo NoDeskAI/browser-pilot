@@ -304,6 +304,10 @@ function registerIpc() {
   });
   ipcMain.handle("browser-lite:prepare-task-space-open", async (_event, id) => {
     await taskSpaces.openForUser(id, { reveal: false });
+    return { prepared: true };
+  });
+  ipcMain.handle("browser-lite:commit-task-space-open", async (_event, id) => {
+    await taskSpaces.commitOpenForUser(id);
     return getPublicState();
   });
   ipcMain.handle("browser-lite:reveal-task-space", async (_event, id) => {

@@ -448,10 +448,26 @@ export class BrowserLiteTaskSpaceManager {
       if (reveal) {
         await this.browserManager.showInstance(space.instanceId);
       } else {
-        await this.browserManager.prepareInstance(space.instanceId);
+        await this.browserManager.prewarmInstance(space.instanceId);
       }
       await this.refreshRecentTabs(space);
       await this.persist();
+      return publicTaskSpace(space);
+    });
+  }
+
+  async commitOpenForUser(value) {
+    const id = requireNumericId(value, "Task space ID must be numeric.");
+    return this.runSerialized("ui", async () => {
+      const space = this.requireSpace(id);
+      if (this.selectedSpaceId !== id) {
+        throw bridgeError(EGO_ERROR.TASK_SPACE_UNAVAILABLE, `Task space ${id} is no longer selected.`);
+      }
+      this.browserManager.setTaskControlVisible?.(space.ownership !== OWNERSHIP_USER);
+      const committed = await this.browserManager.prepareInstance(space.instanceId, { prewarm: false });
+      if (!committed) {
+        throw bridgeError(EGO_ERROR.TASK_SPACE_UNAVAILABLE, `Task space ${id} is not ready to open.`);
+      }
       return publicTaskSpace(space);
     });
   }

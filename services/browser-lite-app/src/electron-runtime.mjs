@@ -919,10 +919,21 @@ export class BrowserLiteManager {
     this.onChanged?.();
   }
 
-  async prepareInstance(instanceId) {
+  async prewarmInstance(instanceId) {
     const id = safeInstanceId(instanceId ?? this.activeInstanceId);
     const entry = this.instances.get(id);
     if (!entry) return false;
+    try { entry.state.setVisible(false); } catch {}
+    const prepared = await entry.state.prepareForReveal?.();
+    if (prepared === false) throw new Error(`Space ${id} did not produce a frame before reveal`);
+    return true;
+  }
+
+  async prepareInstance(instanceId, { prewarm = true } = {}) {
+    const id = safeInstanceId(instanceId ?? this.activeInstanceId);
+    const entry = this.instances.get(id);
+    if (!entry) return false;
+    if (prewarm && !await this.prewarmInstance(id)) return false;
     this.activeInstanceId = id;
     this.viewMode = "browser";
     this.hostWindow.setTitle(`Browser Lite — ${id}`);
@@ -934,8 +945,6 @@ export class BrowserLiteManager {
     await Promise.all([...this.instances].map(async ([otherId, other]) => {
       try { other.state.setVisible(false); } catch {}
     }));
-    const prepared = await entry.state.prepareForReveal?.();
-    if (prepared === false) throw new Error(`Space ${id} did not produce a frame before reveal`);
     return true;
   }
 
