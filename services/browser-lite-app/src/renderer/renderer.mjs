@@ -1,6 +1,6 @@
 const elements = Object.fromEntries([
   "installer", "installer-error", "chrome-running", "profile-list", "import-login-state", "import-bookmarks",
-  "import-history", "import-extensions", "install-fresh", "install-import", "spaces-title", "space-switcher", "task-spaces",
+  "import-history", "import-extensions", "install-fresh", "install-import", "spaces-title", "window-chrome-layer", "space-switcher", "task-spaces",
   "connection-pill", "pair-form", "server-url", "pairing-code", "pair-button", "paired-state", "node-id",
   "node-name", "node-server", "node-error", "unpair-button", "app-version", "chromium-version",
   "reset-installation", "uninstall-app", "reimport-browser-data", "import-source", "imported-cookies",
@@ -12,6 +12,10 @@ const elements = Object.fromEntries([
   "browser-bookmarks", "settings-bookmarks", "pinned-extensions",
   "extensions-menu-button", "chrome-popover", "startup-loading", "startup-title", "startup-message",
 ].map((id) => [id.replace(/-([a-z])/g, (_, letter) => letter.toUpperCase()), document.querySelector(`#${id}`)]));
+
+for (const chrome of document.querySelectorAll(".spaces-topbar, .browser-chrome, .settings-chrome")) {
+  elements.windowChromeLayer.insertBefore(chrome, elements.spaceSwitcher);
+}
 
 let currentState = null;
 let addressEditing = false;

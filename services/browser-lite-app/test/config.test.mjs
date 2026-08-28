@@ -11,7 +11,7 @@ test("app manifest is arm64 DMG buildable with embedded Electron Chromium", asyn
   assert.equal(manifest.main, "src/main.mjs");
   assert.match(manifest.devDependencies.electron, /^43\./);
   assert.equal(manifest.scripts["build:dmg"], "node scripts/build-dmg.mjs");
-  assert.equal(manifest.version, "0.5.15");
+  assert.equal(manifest.version, "0.5.16");
 });
 
 test("renderer has a restrictive content security policy", async () => {
@@ -109,7 +109,9 @@ test("Task Space workspace delegates tabs and navigation to embedded views", asy
   assert.match(html, /id="return-control"/);
   assert.match(html, /id="task-control-bar"/);
   assert.match(html, /id="space-switcher"/);
+  assert.match(html, /id="window-chrome-layer"[\s\S]*id="space-switcher"/);
   assert.doesNotMatch(html, /id="(?:overview|browser|settings)-space-count"/);
+  assert.match(renderer, /querySelectorAll\("\.spaces-topbar, \.browser-chrome, \.settings-chrome"\)[\s\S]*windowChromeLayer\.insertBefore\(chrome, elements\.spaceSwitcher\)/);
   assert.match(renderer, /spaceSwitcher\.addEventListener\("click"[\s\S]*returnToSpaces\(elements\.spaceSwitcher\)/);
   assert.match(renderer, /spaceSwitcher\.disabled = inSpacesOverview/);
   assert.match(renderer, /currentState\?\.workspace\?\.mode !== "browser"[\s\S]*showSpaces\(\)[\s\S]*button\.disabled = currentState\?\.workspace\?\.mode === "spaces"/);
@@ -117,6 +119,9 @@ test("Task Space workspace delegates tabs and navigation to embedded views", asy
   assert.match(runtime, /TASK_CONTROL_RESERVE/);
   assert.match(css, /prefers-reduced-motion/);
   assert.match(css, /focus-visible/);
+  assert.match(css, /\.window-chrome-layer\s*\{[^}]*pointer-events:none;[^}]*-webkit-app-region:drag/);
+  assert.match(css, /\.window-chrome-layer > \*\s*\{[^}]*pointer-events:auto/);
+  assert.doesNotMatch(css, /\.browser-chrome,\.settings-chrome\s*\{[^}]*-webkit-app-region:drag/);
   assert.match(runtime, /new ElectronBrowserLiteState\(config/);
   assert.match(await readFile(join(ROOT, "src", "task-space-manager.mjs"), "utf8"), /await state\.stopLoading\(\)/);
 });
