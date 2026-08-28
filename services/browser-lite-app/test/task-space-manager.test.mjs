@@ -231,7 +231,10 @@ test("animated Space opening preserves Spaces while prewarming, then commits bef
   assert.deepEqual(browserManager.revealed, []);
 
   await taskSpaces.commitOpenForUser(created.id);
-  assert.deepEqual(browserManager.prepared, [{ instanceId: "task-space-1", options: { prewarm: false } }]);
+  assert.deepEqual(browserManager.prepared, [{
+    instanceId: "task-space-1",
+    options: { prewarm: false, activateWindow: false },
+  }]);
 
   await taskSpaces.revealForUser(created.id);
   assert.deepEqual(browserManager.revealed, ["task-space-1"]);

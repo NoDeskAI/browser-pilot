@@ -464,7 +464,10 @@ export class BrowserLiteTaskSpaceManager {
         throw bridgeError(EGO_ERROR.TASK_SPACE_UNAVAILABLE, `Task space ${id} is no longer selected.`);
       }
       this.browserManager.setTaskControlVisible?.(space.ownership !== OWNERSHIP_USER);
-      const committed = await this.browserManager.prepareInstance(space.instanceId, { prewarm: false });
+      const committed = await this.browserManager.prepareInstance(space.instanceId, {
+        prewarm: false,
+        activateWindow: false,
+      });
       if (!committed) {
         throw bridgeError(EGO_ERROR.TASK_SPACE_UNAVAILABLE, `Task space ${id} is not ready to open.`);
       }

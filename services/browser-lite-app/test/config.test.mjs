@@ -11,7 +11,7 @@ test("app manifest is arm64 DMG buildable with embedded Electron Chromium", asyn
   assert.equal(manifest.main, "src/main.mjs");
   assert.match(manifest.devDependencies.electron, /^43\./);
   assert.equal(manifest.scripts["build:dmg"], "node scripts/build-dmg.mjs");
-  assert.equal(manifest.version, "0.5.12");
+  assert.equal(manifest.version, "0.5.13");
 });
 
 test("renderer has a restrictive content security policy", async () => {
@@ -201,7 +201,9 @@ test("opening a Space expands from its exact card into the embedded instance", a
   assert.match(preload, /prepareTaskSpaceOpen[\s\S]*commitTaskSpaceOpen[\s\S]*revealTaskSpace/);
   assert.match(runtime, /capturePage\(undefined, \{ stayHidden: true \}\)/);
   assert.match(runtime, /async prewarmInstance[\s\S]*setVisible\(false\)[\s\S]*prepareForReveal/);
-  assert.match(runtime, /async prepareInstance\(instanceId, \{ prewarm = true \} = \{\}\)[\s\S]*if \(prewarm && !await this\.prewarmInstance\(id\)\)[\s\S]*this\.viewMode = "browser"/);
+  assert.match(runtime, /async prepareInstance\(instanceId, \{ prewarm = true, activateWindow = true \} = \{\}\)[\s\S]*if \(prewarm && !await this\.prewarmInstance\(id\)\)[\s\S]*this\.viewMode = "browser"/);
+  assert.match(runtime, /if \(activateWindow\) \{[\s\S]*if \(!this\.hostWindow\.isVisible\(\)\) this\.hostWindow\.show\(\);[\s\S]*if \(!this\.hostWindow\.isFocused\(\)\)/);
+  assert.match(await readFile(join(ROOT, "src", "task-space-manager.mjs"), "utf8"), /prepareInstance\(space\.instanceId, \{[\s\S]*prewarm: false,[\s\S]*activateWindow: false/);
   assert.match(runtime, /async revealInstance[\s\S]*setVisible\(otherId === id\)/);
   assert.match(renderer, /Promise\.all\(\[[\s\S]*animateSpaceOpen\(openFlight, openingSpaceId\)[\s\S]*prepareRuntime/);
   assert.match(renderer, /spacesBackdropPreserved = document\.body\.classList\.contains\("spaces-mode"\)[\s\S]*commitTaskSpaceOpen\(spaceId\)/);

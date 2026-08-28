@@ -929,7 +929,7 @@ export class BrowserLiteManager {
     return true;
   }
 
-  async prepareInstance(instanceId, { prewarm = true } = {}) {
+  async prepareInstance(instanceId, { prewarm = true, activateWindow = true } = {}) {
     const id = safeInstanceId(instanceId ?? this.activeInstanceId);
     const entry = this.instances.get(id);
     if (!entry) return false;
@@ -937,10 +937,14 @@ export class BrowserLiteManager {
     this.activeInstanceId = id;
     this.viewMode = "browser";
     this.hostWindow.setTitle(`Browser Lite — ${id}`);
-    await app.dock?.show();
-    this.hostWindow.show();
-    app.focus({ steal: true });
-    this.hostWindow.focus();
+    if (activateWindow) {
+      await app.dock?.show();
+      if (!this.hostWindow.isVisible()) this.hostWindow.show();
+      if (!this.hostWindow.isFocused()) {
+        app.focus({ steal: true });
+        this.hostWindow.focus();
+      }
+    }
     this.layout();
     await Promise.all([...this.instances].map(async ([otherId, other]) => {
       try { other.state.setVisible(false); } catch {}
