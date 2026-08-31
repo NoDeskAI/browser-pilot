@@ -255,11 +255,11 @@ function renderSettings(state) {
   const authenticated = Boolean(node.authenticated);
   elements.loginState.classList.toggle("hidden", authenticated);
   elements.pairedState.classList.toggle("hidden", !authenticated);
-  elements.nodeId.textContent = node.nodeId || "";
+  elements.nodeId.textContent = authenticated ? (node.nodeId || "") : "";
   elements.nodeName.textContent = node.displayName || "Browser Lite node";
   elements.nodeAccount.textContent = [node.account?.name, node.account?.email, node.account?.tenantName].filter(Boolean).join(" · ");
   elements.nodeServer.textContent = node.serverUrl || "";
-  elements.nodeError.textContent = node.lastError || "";
+  elements.nodeError.textContent = node.authStatus === "error" ? (node.lastError || "") : "";
   elements.pairedNodeError.textContent = node.lastError || "";
   const loginStatuses = {
     opening_browser: "正在打开系统浏览器…",

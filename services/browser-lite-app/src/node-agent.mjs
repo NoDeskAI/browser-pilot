@@ -67,7 +67,7 @@ export class BrowserLiteNodeAgent {
       this.pendingAuth = await this.loadPendingAuth();
       this.authStatus = this.pendingAuth ? "waiting_for_browser" : "idle";
     } else {
-      this.authStatus = "connecting";
+      this.authStatus = this.config.account ? "connecting" : "idle";
     }
     if (this.config) void this.connectLoop();
     this.notifyChanged();
@@ -327,7 +327,7 @@ export class BrowserLiteNodeAgent {
         await this.connectOnce();
       } catch (error) {
         this.lastError = error.message || String(error);
-        this.authStatus = "error";
+        if (this.config?.account) this.authStatus = "error";
       }
       this.connected = false;
       this.notifyChanged();

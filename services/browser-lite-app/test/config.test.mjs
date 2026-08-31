@@ -300,6 +300,14 @@ test("packaged app registers Browser Lite deep links and completes PKCE login", 
   assert.doesNotMatch(html, /id="pairing-code"/);
 });
 
+test("legacy pairing connection failures do not masquerade as SSO login failures", async () => {
+  const agent = await readFile(join(ROOT, "src", "node-agent.mjs"), "utf8");
+  const renderer = await readFile(join(ROOT, "src", "renderer", "renderer.mjs"), "utf8");
+  assert.match(agent, /this\.authStatus = this\.config\.account \? "connecting" : "idle"/);
+  assert.match(agent, /if \(this\.config\?\.account\) this\.authStatus = "error"/);
+  assert.match(renderer, /node\.authStatus === "error" \? \(node\.lastError \|\| ""\) : ""/);
+});
+
 test("task-space capability is refreshed on reconnect and uses an allowlisted controller", async () => {
   const agent = await readFile(join(ROOT, "src", "node-agent.mjs"), "utf8");
   const controller = await readFile(join(ROOT, "src", "task-space-manager.mjs"), "utf8");
