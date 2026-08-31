@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, defineAsyncComponent, onMounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { useAuth } from '../composables/useAuth'
 import { useSessions } from '../composables/useSessions'
 import { setLocale, getLocale } from '../i18n'
@@ -24,6 +24,7 @@ const SsoLoginButton = isEE
   : null
 
 const { t } = useI18n()
+const route = useRoute()
 const router = useRouter()
 const { setAuth } = useAuth()
 const { brand, fetchBrand } = useSessions()
@@ -38,6 +39,11 @@ const rememberMe = ref(false)
 const loading = ref(false)
 const error = ref('')
 const tenantChoices = ref<Array<{ name: string, slug: string }>>([])
+
+function safeRedirectTarget() {
+  const target = typeof route.query.redirect === 'string' ? route.query.redirect : ''
+  return target.startsWith('/') && !target.startsWith('//') ? target : '/'
+}
 
 watch([email, password], () => {
   if (!tenantChoices.value.length) return
@@ -107,7 +113,7 @@ async function handleLogin() {
     }
     const data = await res.json()
     setAuth(data.access_token, data.user)
-    await router.push('/')
+    await router.push(safeRedirectTarget())
   } catch {
     notify.error(t('auth.loginNetworkError'))
   } finally {

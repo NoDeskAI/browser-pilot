@@ -1,8 +1,8 @@
 const elements = Object.fromEntries([
   "installer", "installer-error", "chrome-running", "profile-list", "import-login-state", "import-bookmarks",
   "import-history", "import-extensions", "install-fresh", "install-import", "spaces-title", "window-chrome-layer", "space-switcher", "task-spaces",
-  "connection-pill", "pair-form", "server-url", "pairing-code", "pair-button", "paired-state", "node-id",
-  "node-name", "node-server", "node-error", "unpair-button", "app-version", "chromium-version",
+  "connection-pill", "login-state", "login-status", "login-button", "paired-state", "node-id",
+  "node-name", "node-account", "node-server", "node-error", "paired-node-error", "relogin-button", "logout-button", "app-version", "chromium-version",
   "reset-installation", "uninstall-app", "reimport-browser-data", "import-source", "imported-cookies",
   "imported-bookmarks", "imported-history", "workspace-title", "browser-tabs", "new-tab",
   "browser-chrome",
@@ -252,12 +252,25 @@ function renderSettings(state) {
   elements.chromiumVersion.textContent = state.app?.chromiumVersion || "—";
 
   const node = state.node || {};
-  elements.pairForm.classList.toggle("hidden", Boolean(node.paired));
-  elements.pairedState.classList.toggle("hidden", !node.paired);
+  const authenticated = Boolean(node.authenticated);
+  elements.loginState.classList.toggle("hidden", authenticated);
+  elements.pairedState.classList.toggle("hidden", !authenticated);
   elements.nodeId.textContent = node.nodeId || "";
   elements.nodeName.textContent = node.displayName || "Browser Lite node";
+  elements.nodeAccount.textContent = [node.account?.name, node.account?.email, node.account?.tenantName].filter(Boolean).join(" · ");
   elements.nodeServer.textContent = node.serverUrl || "";
   elements.nodeError.textContent = node.lastError || "";
+  elements.pairedNodeError.textContent = node.lastError || "";
+  const loginStatuses = {
+    opening_browser: "正在打开系统浏览器…",
+    waiting_for_browser: "请在系统浏览器中完成登录",
+    exchanging: "正在完成登录…",
+    error: "登录失败，请重试",
+  };
+  elements.loginStatus.textContent = loginStatuses[node.authStatus]
+    || (node.legacyPaired ? "当前为旧配对方式，请登录以绑定 Browser Pilot 账号" : "将在系统浏览器中完成安全登录");
+  elements.loginButton.disabled = ["opening_browser", "waiting_for_browser", "exchanging"].includes(node.authStatus);
+  elements.loginButton.textContent = node.authStatus === "waiting_for_browser" ? "等待登录" : "登录";
   elements.connectionPill.className = "";
   if (node.connected) {
     elements.connectionPill.classList.add("online");
@@ -267,7 +280,7 @@ function renderSettings(state) {
     elements.connectionPill.textContent = "正在连接";
   } else {
     elements.connectionPill.classList.add("offline");
-    elements.connectionPill.textContent = node.paired ? "节点离线" : "未配对";
+    elements.connectionPill.textContent = authenticated ? "节点离线" : "未登录";
   }
 }
 
@@ -854,16 +867,16 @@ for (const button of document.querySelectorAll("[data-settings-page]")) {
   button.addEventListener("click", () => showSettingsPage(button.dataset.settingsPage));
 }
 
-elements.pairForm.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  await run(elements.pairButton, "配对中…", async () => {
-    await window.browserLite.pair({ serverUrl: elements.serverUrl.value, pairingCode: elements.pairingCode.value });
-    elements.pairingCode.value = "";
-    return window.browserLite.getState();
-  });
+elements.loginButton.addEventListener("click", async () => {
+  await run(elements.loginButton, "正在打开…", async () => { await window.browserLite.login({}); return window.browserLite.getState(); });
 });
-elements.unpairButton.addEventListener("click", async () => {
-  if (window.confirm("解除这台 Mac 与 Browser Pilot 的配对？")) await run(elements.unpairButton, null, async () => { await window.browserLite.unpair(); return window.browserLite.getState(); });
+elements.reloginButton.addEventListener("click", async () => {
+  await run(elements.reloginButton, "正在打开…", async () => { await window.browserLite.login({}); return window.browserLite.getState(); });
+});
+elements.logoutButton.addEventListener("click", async () => {
+  if (window.confirm("退出 Browser Pilot？这台 Mac 将停止接受远程任务。")) {
+    await run(elements.logoutButton, null, async () => { await window.browserLite.logout(); return window.browserLite.getState(); });
+  }
 });
 
 elements.installImport.addEventListener("click", async () => {

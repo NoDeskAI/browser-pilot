@@ -1,6 +1,6 @@
-import { app } from "electron";
-import { createCipheriv, createDecipheriv, randomBytes, randomUUID } from "node:crypto";
-import { readFile, writeFile } from "node:fs/promises";
+import { app, safeStorage } from "electron";
+import { createDecipheriv, createHash, randomBytes, randomUUID } from "node:crypto";
+import { readFile, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { hostname, platform, arch } from "node:os";
 
@@ -8,7 +8,10 @@ function delay(milliseconds) {
   return new Promise((resolveDelay) => setTimeout(resolveDelay, milliseconds));
 }
 
-const TOKEN_ENCRYPTION = "local-aes-256-gcm-v1";
+const LEGACY_TOKEN_ENCRYPTION = "local-aes-256-gcm-v1";
+const TOKEN_ENCRYPTION = "electron-safe-storage-v1";
+const DEFAULT_SERVER_URL = "https://bpilot.nodeskai.com";
+const AUTH_CALLBACK_URL = "browserlite://auth/callback";
 const NODE_CAPABILITIES = Object.freeze([
   "webdriver", "cdp", "screenshot", "persistent_profile", "multi_instance", "task_spaces",
 ]);
@@ -36,22 +39,35 @@ export class BrowserLiteNodeAgent {
     this.onChanged = onChanged;
     this.configPath = join(app.getPath("userData"), "node-config.json");
     this.keyPath = join(app.getPath("userData"), "node-key.bin");
+    this.pendingAuthPath = join(app.getPath("userData"), "browser-pilot-login.json");
     this.config = null;
+    this.pendingAuth = null;
+    this.authStatus = "idle";
     this.socket = null;
     this.connected = false;
     this.connecting = false;
     this.stopped = false;
     this.lastError = "";
     this.reconnectAttempt = 0;
+    this.connectionGeneration = 0;
   }
 
   async load() {
     try {
       const parsed = JSON.parse(await readFile(this.configPath, "utf8"));
       const token = await this.decryptToken(parsed);
-      if (parsed.serverUrl && parsed.nodeId && token) this.config = { ...parsed, token };
+      if (parsed.serverUrl && parsed.nodeId && token) {
+        this.config = { ...parsed, token };
+        if (parsed.tokenEncryption === LEGACY_TOKEN_ENCRYPTION) await this.saveConfig(this.config);
+      }
     } catch {
       this.config = null;
+    }
+    if (!this.config) {
+      this.pendingAuth = await this.loadPendingAuth();
+      this.authStatus = this.pendingAuth ? "waiting_for_browser" : "idle";
+    } else {
+      this.authStatus = "connecting";
     }
     if (this.config) void this.connectLoop();
     this.notifyChanged();
@@ -63,16 +79,13 @@ export class BrowserLiteNodeAgent {
 
   async saveConfig(config) {
     const serialized = { ...config };
-    const key = await this.installationKey();
-    const iv = randomBytes(12);
-    const cipher = createCipheriv("aes-256-gcm", key, iv);
-    const ciphertext = Buffer.concat([cipher.update(config.token, "utf8"), cipher.final()]);
+    if (!safeStorage.isEncryptionAvailable()) throw new Error("macOS Keychain is unavailable");
     serialized.tokenEncryption = TOKEN_ENCRYPTION;
-    serialized.tokenCiphertext = ciphertext.toString("base64");
-    serialized.tokenIv = iv.toString("base64");
-    serialized.tokenAuthTag = cipher.getAuthTag().toString("base64");
+    serialized.tokenCiphertext = safeStorage.encryptString(config.token).toString("base64");
     delete serialized.token;
     delete serialized.tokenEncrypted;
+    delete serialized.tokenIv;
+    delete serialized.tokenAuthTag;
     await writeFile(this.configPath, `${JSON.stringify(serialized, null, 2)}\n`, { mode: 0o600 });
   }
 
@@ -97,7 +110,11 @@ export class BrowserLiteNodeAgent {
   }
 
   async decryptToken(config) {
-    if (config.tokenEncryption !== TOKEN_ENCRYPTION) return "";
+    if (config.tokenEncryption === TOKEN_ENCRYPTION) {
+      if (!safeStorage.isEncryptionAvailable()) throw new Error("macOS Keychain is unavailable");
+      return safeStorage.decryptString(Buffer.from(config.tokenCiphertext, "base64"));
+    }
+    if (config.tokenEncryption !== LEGACY_TOKEN_ENCRYPTION) return "";
     const key = await this.installationKey();
     const decipher = createDecipheriv("aes-256-gcm", key, Buffer.from(config.tokenIv, "base64"));
     decipher.setAuthTag(Buffer.from(config.tokenAuthTag, "base64"));
@@ -107,6 +124,146 @@ export class BrowserLiteNodeAgent {
     ]).toString("utf8");
   }
 
+  async savePendingAuth(pending) {
+    if (!safeStorage.isEncryptionAvailable()) throw new Error("macOS Keychain is unavailable");
+    const serialized = {
+      ...pending,
+      codeVerifierCiphertext: safeStorage.encryptString(pending.codeVerifier).toString("base64"),
+    };
+    delete serialized.codeVerifier;
+    await writeFile(this.pendingAuthPath, `${JSON.stringify(serialized, null, 2)}\n`, { mode: 0o600 });
+  }
+
+  async loadPendingAuth() {
+    try {
+      const parsed = JSON.parse(await readFile(this.pendingAuthPath, "utf8"));
+      if (!safeStorage.isEncryptionAvailable()) return null;
+      const expiresAt = Date.parse(parsed.expiresAt || "");
+      if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+        await this.clearPendingAuth();
+        return null;
+      }
+      return {
+        ...parsed,
+        codeVerifier: safeStorage.decryptString(Buffer.from(parsed.codeVerifierCiphertext, "base64")),
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  async clearPendingAuth() {
+    this.pendingAuth = null;
+    await unlink(this.pendingAuthPath).catch((error) => {
+      if (error.code !== "ENOENT") throw error;
+    });
+  }
+
+  nodeMetadata(displayName = undefined) {
+    return {
+      displayName: String(displayName || hostname()),
+      platform: platform(),
+      architecture: arch(),
+      appVersion: app.getVersion(),
+      chromiumVersion: process.versions.chrome,
+      capabilities: NODE_CAPABILITIES,
+    };
+  }
+
+  async beginLogin(serverUrl = DEFAULT_SERVER_URL, displayName = undefined) {
+    const origin = normalizeServerUrl(serverUrl || DEFAULT_SERVER_URL);
+    const codeVerifier = randomBytes(48).toString("base64url");
+    const codeChallenge = createHash("sha256").update(codeVerifier).digest("base64url");
+    const state = randomBytes(32).toString("base64url");
+    this.authStatus = "opening_browser";
+    this.lastError = "";
+    this.notifyChanged();
+    try {
+      const response = await fetch(`${origin}/api/browser-lite/auth/requests`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          codeChallenge,
+          state,
+          callbackUrl: AUTH_CALLBACK_URL,
+          ...this.nodeMetadata(displayName),
+        }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.detail || body.error || `Login failed: HTTP ${response.status}`);
+      const authorizeUrl = new URL(body.authorizePath, origin).toString();
+      this.pendingAuth = {
+        serverUrl: origin,
+        requestId: body.requestId,
+        state,
+        codeVerifier,
+        expiresAt: body.expiresAt,
+      };
+      await this.savePendingAuth(this.pendingAuth);
+      this.authStatus = "waiting_for_browser";
+      this.notifyChanged();
+      return { authorizeUrl, state: this.publicState() };
+    } catch (error) {
+      this.authStatus = "error";
+      this.lastError = error.message || String(error);
+      this.notifyChanged();
+      throw error;
+    }
+  }
+
+  async completeLogin(callbackUrl) {
+    this.authStatus = "exchanging";
+    this.lastError = "";
+    this.notifyChanged();
+    try {
+      const callback = new URL(String(callbackUrl || ""));
+      if (callback.protocol !== "browserlite:" || callback.hostname !== "auth" || callback.pathname !== "/callback") {
+        throw new Error("Browser Lite login callback is invalid");
+      }
+      const pending = this.pendingAuth || await this.loadPendingAuth();
+      if (!pending) throw new Error("Browser Lite login request is missing or expired");
+      if (callback.searchParams.get("state") !== pending.state) throw new Error("Browser Lite login state does not match");
+      if (callback.searchParams.get("request") !== pending.requestId) throw new Error("Browser Lite login request does not match");
+      const authorizationCode = callback.searchParams.get("code") || "";
+      if (!authorizationCode) throw new Error("Browser Lite login callback has no authorization code");
+      const response = await fetch(`${pending.serverUrl}/api/browser-lite/auth/token`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ authorizationCode, codeVerifier: pending.codeVerifier }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.detail || body.error || `Login failed: HTTP ${response.status}`);
+
+      const previous = this.config;
+      this.disconnect();
+      this.config = {
+        serverUrl: pending.serverUrl,
+        nodeId: body.nodeId,
+        token: body.token,
+        displayName: body.displayName || hostname(),
+        account: body.account || null,
+      };
+      await this.saveConfig(this.config);
+      await this.clearPendingAuth();
+      if (previous) {
+        void fetch(`${previous.serverUrl}/api/browser-lite/nodes/${encodeURIComponent(previous.nodeId)}/disconnect`, {
+          method: "POST",
+          headers: { authorization: `Bearer ${previous.token}` },
+        }).catch(() => {});
+      }
+      this.stopped = false;
+      this.authStatus = "connecting";
+      void this.connectLoop();
+      this.notifyChanged();
+      return this.publicState();
+    } catch (error) {
+      this.authStatus = "error";
+      this.lastError = error.message || String(error);
+      this.notifyChanged();
+      throw error;
+    }
+  }
+
   async pair(serverUrl, pairingCode, displayName = undefined) {
     const origin = normalizeServerUrl(serverUrl);
     const response = await fetch(`${origin}/api/browser-lite/pair`, {
@@ -114,12 +271,7 @@ export class BrowserLiteNodeAgent {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         pairingCode: String(pairingCode || "").trim(),
-        displayName: String(displayName || hostname()),
-        platform: platform(),
-        architecture: arch(),
-        appVersion: app.getVersion(),
-        chromiumVersion: process.versions.chrome,
-        capabilities: NODE_CAPABILITIES,
+        ...this.nodeMetadata(displayName),
       }),
     });
     const body = await response.json().catch(() => ({}));
@@ -132,7 +284,9 @@ export class BrowserLiteNodeAgent {
       displayName: body.displayName || displayName || hostname(),
     };
     await this.saveConfig(this.config);
+    await this.clearPendingAuth();
     this.stopped = false;
+    this.authStatus = "connecting";
     void this.connectLoop();
     this.notifyChanged();
     return this.publicState();
@@ -147,11 +301,15 @@ export class BrowserLiteNodeAgent {
     }
     this.disconnect();
     this.config = null;
+    await this.clearPendingAuth();
     await writeFile(this.configPath, "{}\n", { mode: 0o600 });
+    this.authStatus = "idle";
+    this.lastError = "";
     this.notifyChanged();
   }
 
   disconnect() {
+    this.connectionGeneration += 1;
     this.stopped = true;
     this.socket?.close();
     this.socket = null;
@@ -161,21 +319,23 @@ export class BrowserLiteNodeAgent {
 
   async connectLoop() {
     if (this.connecting || !this.config) return;
+    const generation = this.connectionGeneration;
     this.connecting = true;
     this.stopped = false;
-    while (!this.stopped && this.config) {
+    while (!this.stopped && this.config && generation === this.connectionGeneration) {
       try {
         await this.connectOnce();
       } catch (error) {
         this.lastError = error.message || String(error);
+        this.authStatus = "error";
       }
       this.connected = false;
       this.notifyChanged();
-      if (this.stopped) break;
+      if (this.stopped || generation !== this.connectionGeneration) break;
       this.reconnectAttempt += 1;
       await delay(Math.min(30_000, 1_000 * 2 ** Math.min(5, this.reconnectAttempt)));
     }
-    this.connecting = false;
+    if (generation === this.connectionGeneration) this.connecting = false;
   }
 
   async connectOnce() {
@@ -215,6 +375,7 @@ export class BrowserLiteNodeAgent {
       }, { once: true });
     });
     this.connected = true;
+    this.authStatus = "connected";
     this.reconnectAttempt = 0;
     this.lastError = "";
     this.notifyChanged();
@@ -301,11 +462,15 @@ export class BrowserLiteNodeAgent {
   publicState() {
     return {
       paired: Boolean(this.config),
+      authenticated: Boolean(this.config?.account),
+      legacyPaired: Boolean(this.config && !this.config.account),
       connected: this.connected,
       connecting: this.connecting,
+      authStatus: this.authStatus,
       serverUrl: this.config?.serverUrl || "",
       nodeId: this.config?.nodeId || "",
       displayName: this.config?.displayName || hostname(),
+      account: this.config?.account || null,
       lastError: this.lastError,
     };
   }

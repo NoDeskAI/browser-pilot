@@ -142,7 +142,7 @@
           </section>
           <section class="settings-card setting-list chromium-setting-list">
             <button class="setting-row settings-link-row" type="button"><span class="row-leading-icon">✎</span><span class="setting-copy"><strong>自定义个人资料</strong></span><span class="row-chevron">›</span></button>
-            <button class="setting-row settings-link-row" data-settings-page="about" type="button"><span class="row-leading-icon">↻</span><span class="setting-copy"><strong>同步功能和 Browser Pilot 服务</strong><span id="connection-pill">未配对</span></span><span class="row-chevron">›</span></button>
+            <button class="setting-row settings-link-row" data-settings-page="about" type="button"><span class="row-leading-icon">↻</span><span class="setting-copy"><strong>同步功能和 Browser Pilot 服务</strong><span id="connection-pill">未登录</span></span><span class="row-chevron">›</span></button>
             <button id="reimport-browser-data" class="setting-row settings-link-row" type="button"><span class="row-leading-icon">⇩</span><span class="setting-copy"><strong>从其他浏览器导入</strong></span><span class="row-chevron">›</span></button>
             <div class="setting-row keep-signed-in"><span class="row-leading-icon">✓</span><span class="setting-copy"><strong>保持登录状态最新（Beta）</strong><span>让导入的浏览器登录状态在本机保持可用</span></span><span class="toggle-switch on" aria-label="已开启"></span></div>
           </section>
@@ -152,13 +152,15 @@
           <h1>关于 Browser Lite</h1>
           <h2>Browser Pilot</h2>
           <section class="settings-card setting-list">
-            <div class="setting-row node-heading"><div class="setting-copy"><strong>远程节点</strong><span>允许 Browser Pilot 在独立 Space 内控制网页</span></div><span id="node-id" class="mono subtle"></span></div>
-            <form id="pair-form" class="setting-row pair-form">
-              <label><span>服务地址</span><input id="server-url" type="url" value="https://bpilot.nodeskai.com" required /></label>
-              <label><span>10 位配对码</span><input id="pairing-code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{10}" minlength="10" maxlength="10" required /></label>
-              <button id="pair-button" class="primary" type="submit">配对</button>
-            </form>
-            <div id="paired-state" class="setting-row paired-state hidden"><div class="setting-copy"><strong id="node-name">Mac node</strong><span id="node-server"></span><span id="node-error" class="error" role="alert"></span></div><button id="unpair-button" class="secondary" type="button">解除配对</button></div>
+            <div class="setting-row node-heading"><div class="setting-copy"><strong>Browser Pilot 账号</strong><span>登录后，Browser Pilot 可以在独立 Space 内控制网页</span></div><span id="node-id" class="mono subtle"></span></div>
+            <div id="login-state" class="setting-row login-state">
+              <div class="setting-copy"><strong>登录 Browser Pilot</strong><span id="login-status">将在系统浏览器中完成安全登录</span><span id="node-error" class="error" role="alert"></span></div>
+              <button id="login-button" class="primary" type="button">登录</button>
+            </div>
+            <div id="paired-state" class="setting-row paired-state hidden">
+              <div class="setting-copy"><strong id="node-name">Mac node</strong><span id="node-account"></span><span id="node-server"></span><span id="paired-node-error" class="error" role="alert"></span></div>
+              <div class="account-actions"><button id="relogin-button" class="secondary" type="button">切换账号</button><button id="logout-button" class="secondary" type="button">退出登录</button></div>
+            </div>
           </section>
           <h2>浏览数据</h2>
           <section class="settings-card setting-list">
@@ -167,7 +169,7 @@
           <h2>版本与维护</h2>
           <section class="settings-card setting-list">
             <div class="setting-row"><div class="setting-copy"><strong>版本</strong><span>App <b id="app-version">—</b> · Chromium <b id="chromium-version">—</b></span></div><span class="update-state">Browser Lite 已是最新版本</span></div>
-            <details class="maintenance-card"><summary>重置与卸载</summary><p>重置会清空 Browser Lite 浏览数据并保留配对。彻底卸载会解除配对，并把 App 与数据移到废纸篓。</p><div class="maintenance-actions"><button id="reset-installation" class="secondary" type="button">重置安装</button><button id="uninstall-app" class="danger" type="button">彻底卸载</button></div></details>
+            <details class="maintenance-card"><summary>重置与卸载</summary><p>重置会清空 Browser Lite 浏览数据并保留登录。彻底卸载会退出登录，并把 App 与数据移到废纸篓。</p><div class="maintenance-actions"><button id="reset-installation" class="secondary" type="button">重置安装</button><button id="uninstall-app" class="danger" type="button">彻底卸载</button></div></details>
           </section>
         </div>
       </div>

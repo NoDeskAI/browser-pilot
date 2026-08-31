@@ -19,6 +19,11 @@ const router = createRouter({
     { path: '/users', component: () => import('../views/UsersView.vue'), meta: { requiresAuth: true } },
     { path: '/account', component: () => import('../views/AccountView.vue'), meta: { requiresAuth: true } },
     {
+      path: '/browser-lite/authorize',
+      component: () => import('../views/BrowserLiteAuthorizeView.vue'),
+      meta: { requiresAuth: true, authShell: true },
+    },
+    {
       path: '/docs',
       component: () => import('../views/DocsView.vue'),
       meta: { requiresAuth: true },
@@ -69,7 +74,7 @@ router.beforeEach(async (to) => {
   }
 
   if (to.meta.requiresAuth && !token.value && !(await refreshAuth())) {
-    return '/login'
+    return { path: '/login', query: { redirect: to.fullPath } }
   }
 
   if ((to.path === '/login' || to.path === '/register') && (!token.value ? await refreshAuth() : true)) {

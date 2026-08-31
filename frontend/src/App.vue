@@ -22,6 +22,7 @@ const isAuthPage = computed(() => (
   route.path === '/login' ||
   route.path === '/register' ||
   route.path === '/setup' ||
+  route.meta.authShell === true ||
   isPublicShellRoute(route.path)
 ))
 const ready = ref(false)

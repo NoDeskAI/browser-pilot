@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import hashlib
 import hmac
@@ -10,8 +11,10 @@ import secrets
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Literal
+from urllib.parse import urlencode
 
+import jwt
 from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket
 from pydantic import BaseModel, Field
 from starlette.websockets import WebSocketDisconnect, WebSocketState
@@ -24,6 +27,9 @@ logger = logging.getLogger("browser_lite")
 router = APIRouter(prefix="/api/browser-lite", tags=["browser-lite"])
 
 PAIRING_TTL_SECONDS = 10 * 60
+BROWSER_LITE_AUTH_REQUEST_TTL_SECONDS = 10 * 60
+BROWSER_LITE_AUTH_CODE_TTL_SECONDS = 2 * 60
+BROWSER_LITE_CALLBACK_URL = "browserlite://auth/callback"
 COMMAND_TIMEOUT_SECONDS = 45
 TASK_SPACE_METHODS = frozenset({
     "createTab", "listTabs", "listTaskSpaces", "deleteSpaces", "listProfiles", "snapshot",
@@ -38,6 +44,71 @@ _pairing_attempts: dict[str, list[float]] = {}
 
 def _hash_secret(value: str, purpose: str) -> str:
     return hmac.new(JWT_SECRET.encode(), f"{purpose}:{value}".encode(), hashlib.sha256).hexdigest()
+
+
+def _pkce_challenge(verifier: str) -> str:
+    digest = hashlib.sha256(verifier.encode()).digest()
+    return base64.urlsafe_b64encode(digest).rstrip(b"=").decode()
+
+
+def _encode_auth_token(kind: str, payload: dict[str, Any], ttl_seconds: int) -> str:
+    now = datetime.now(timezone.utc)
+    return jwt.encode(
+        {
+            **payload,
+            "typ": kind,
+            "iat": now,
+            "exp": now + timedelta(seconds=ttl_seconds),
+        },
+        JWT_SECRET,
+        algorithm="HS256",
+    )
+
+
+def _decode_auth_token(token: str, expected_kind: str) -> dict[str, Any]:
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
+    except jwt.PyJWTError as exc:
+        raise HTTPException(status_code=401, detail="Browser Lite authorization is invalid or expired") from exc
+    if payload.get("typ") != expected_kind:
+        raise HTTPException(status_code=401, detail="Browser Lite authorization type is invalid")
+    return payload
+
+
+def _node_metadata_payload(body: NodeMetadata) -> dict[str, Any]:
+    return {
+        "displayName": body.displayName.strip(),
+        "platform": body.platform,
+        "architecture": body.architecture,
+        "appVersion": body.appVersion,
+        "chromiumVersion": body.chromiumVersion,
+        "capabilities": body.capabilities[:30],
+    }
+
+
+async def _insert_node(connection, metadata: NodeMetadata, tenant_id: str, created_by: str | None) -> dict[str, str]:
+    node_id = f"bln_{secrets.token_urlsafe(12)}"
+    token = secrets.token_urlsafe(48)
+    display_name = metadata.displayName.strip()
+    await connection.execute(
+        """
+        INSERT INTO browser_lite_nodes
+            (id, tenant_id, display_name, token_hash, platform, architecture,
+             app_version, chromium_version, capabilities, status, created_by)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, 'offline', $10)
+        """,
+        node_id,
+        tenant_id,
+        display_name,
+        _hash_secret(token, "node"),
+        metadata.platform,
+        metadata.architecture,
+        metadata.appVersion,
+        metadata.chromiumVersion,
+        metadata.capabilities[:30],
+        created_by,
+    )
+    return {"nodeId": node_id, "token": token, "displayName": display_name}
 
 
 def _iso(value: Any) -> str | None:
@@ -55,14 +126,32 @@ def _check_pairing_rate_limit(request: Request) -> None:
     _pairing_attempts[client] = attempts
 
 
-class PairingBody(BaseModel):
-    pairingCode: str = Field(min_length=10, max_length=10, pattern=r"^\d{10}$")
+class NodeMetadata(BaseModel):
     displayName: str = Field(default="Browser Lite node", min_length=1, max_length=120)
     platform: str = Field(default="", max_length=40)
     architecture: str = Field(default="", max_length=40)
     appVersion: str = Field(default="", max_length=40)
     chromiumVersion: str = Field(default="", max_length=80)
     capabilities: list[str] = Field(default_factory=list, max_length=30)
+
+
+class PairingBody(NodeMetadata):
+    pairingCode: str = Field(min_length=10, max_length=10, pattern=r"^\d{10}$")
+
+
+class BrowserLiteAuthRequestBody(NodeMetadata):
+    codeChallenge: str = Field(min_length=43, max_length=43, pattern=r"^[A-Za-z0-9_-]{43}$")
+    state: str = Field(min_length=16, max_length=256, pattern=r"^[A-Za-z0-9_-]+$")
+    callbackUrl: Literal[BROWSER_LITE_CALLBACK_URL] = BROWSER_LITE_CALLBACK_URL
+
+
+class BrowserLiteAuthorizeBody(BaseModel):
+    requestToken: str = Field(min_length=40, max_length=8192)
+
+
+class BrowserLiteTokenBody(BaseModel):
+    authorizationCode: str = Field(min_length=40, max_length=8192)
+    codeVerifier: str = Field(min_length=43, max_length=128, pattern=r"^[A-Za-z0-9._~-]+$")
 
 
 @dataclass
@@ -415,6 +504,140 @@ async def create_pairing_code(user: CurrentUser = Depends(get_current_user)):
     return {"pairingCode": code, "expiresAt": expires_at.isoformat(), "ttlSeconds": PAIRING_TTL_SECONDS}
 
 
+@router.post("/auth/requests")
+async def create_auth_request(body: BrowserLiteAuthRequestBody, request: Request):
+    """Create a signed, short-lived PKCE request without authenticating the native app."""
+    _check_pairing_rate_limit(request)
+    request_id = f"blr_{secrets.token_urlsafe(16)}"
+    request_token = _encode_auth_token(
+        "browser_lite_auth_request",
+        {
+            "jti": request_id,
+            "code_challenge": body.codeChallenge,
+            "state": body.state,
+            "callback_url": body.callbackUrl,
+            "node": _node_metadata_payload(body),
+        },
+        BROWSER_LITE_AUTH_REQUEST_TTL_SECONDS,
+    )
+    expires_at = datetime.now(timezone.utc) + timedelta(seconds=BROWSER_LITE_AUTH_REQUEST_TTL_SECONDS)
+    authorize_path = f"/browser-lite/authorize?{urlencode({'request': request_token})}"
+    return {
+        "requestId": request_id,
+        "authorizePath": authorize_path,
+        "expiresAt": expires_at.isoformat(),
+        "ttlSeconds": BROWSER_LITE_AUTH_REQUEST_TTL_SECONDS,
+    }
+
+
+@router.post("/auth/authorize")
+async def authorize_auth_request(
+    body: BrowserLiteAuthorizeBody,
+    user: CurrentUser = Depends(get_current_user),
+):
+    """Bind a native-app PKCE request to the signed-in Browser Pilot user."""
+    request_payload = _decode_auth_token(body.requestToken, "browser_lite_auth_request")
+    callback_url = request_payload.get("callback_url")
+    state = request_payload.get("state")
+    request_id = request_payload.get("jti")
+    code_challenge = request_payload.get("code_challenge")
+    node_payload = request_payload.get("node")
+    if (
+        callback_url != BROWSER_LITE_CALLBACK_URL
+        or not isinstance(state, str)
+        or not isinstance(request_id, str)
+        or not isinstance(code_challenge, str)
+        or not isinstance(node_payload, dict)
+    ):
+        raise HTTPException(status_code=400, detail="Browser Lite authorization request is malformed")
+    try:
+        metadata = NodeMetadata.model_validate(node_payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Browser Lite node metadata is invalid") from exc
+
+    code_id = f"bla_{secrets.token_urlsafe(16)}"
+    authorization_code = _encode_auth_token(
+        "browser_lite_authorization_code",
+        {
+            "jti": code_id,
+            "request_id": request_id,
+            "code_challenge": code_challenge,
+            "node": _node_metadata_payload(metadata),
+        },
+        BROWSER_LITE_AUTH_CODE_TTL_SECONDS,
+    )
+    expires_at = datetime.now(timezone.utc) + timedelta(seconds=BROWSER_LITE_AUTH_CODE_TTL_SECONDS)
+    await get_pool().execute(
+        """
+        INSERT INTO browser_lite_pairing_codes (id, tenant_id, code_hash, expires_at, created_by)
+        VALUES ($1, $2, $3, $4, $5)
+        """,
+        code_id,
+        user.tenant_id,
+        _hash_secret(authorization_code, "browser-lite-auth-code"),
+        expires_at,
+        user.id,
+    )
+    deep_link = f"{callback_url}?{urlencode({'code': authorization_code, 'state': state, 'request': request_id})}"
+    return {
+        "deepLink": deep_link,
+        "expiresAt": expires_at.isoformat(),
+        "account": {"email": user.email, "name": user.name},
+    }
+
+
+@router.post("/auth/token")
+async def exchange_auth_code(body: BrowserLiteTokenBody):
+    """Consume a one-time authorization code and issue the Browser Lite node credential."""
+    code_payload = _decode_auth_token(body.authorizationCode, "browser_lite_authorization_code")
+    code_id = code_payload.get("jti")
+    code_challenge = code_payload.get("code_challenge")
+    node_payload = code_payload.get("node")
+    if (
+        not isinstance(code_id, str)
+        or not isinstance(code_challenge, str)
+        or not isinstance(node_payload, dict)
+    ):
+        raise HTTPException(status_code=400, detail="Browser Lite authorization code is malformed")
+    if not hmac.compare_digest(_pkce_challenge(body.codeVerifier), code_challenge):
+        raise HTTPException(status_code=401, detail="Browser Lite PKCE verification failed")
+    try:
+        metadata = NodeMetadata.model_validate(node_payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Browser Lite node metadata is invalid") from exc
+
+    pool = get_pool()
+    async with pool.acquire() as connection:
+        async with connection.transaction():
+            row = await connection.fetchrow(
+                """
+                SELECT p.id, p.tenant_id, p.created_by,
+                       u.email, u.name, t.name AS tenant_name
+                FROM browser_lite_pairing_codes p
+                LEFT JOIN users u ON u.id = p.created_by
+                JOIN tenants t ON t.id = p.tenant_id
+                WHERE p.id = $1 AND p.code_hash = $2
+                  AND p.used_at IS NULL AND p.expires_at > NOW()
+                FOR UPDATE
+                """,
+                code_id,
+                _hash_secret(body.authorizationCode, "browser-lite-auth-code"),
+            )
+            if not row:
+                raise HTTPException(status_code=401, detail="Browser Lite authorization code was already used or expired")
+            await connection.execute(
+                "UPDATE browser_lite_pairing_codes SET used_at = NOW() WHERE id = $1",
+                row["id"],
+            )
+            result = await _insert_node(connection, metadata, row["tenant_id"], row["created_by"])
+    result["account"] = {
+        "email": row["email"] or "",
+        "name": row["name"] or "",
+        "tenantName": row["tenant_name"] or "",
+    }
+    return result
+
+
 @router.post("/pair")
 async def pair_node(body: PairingBody, request: Request):
     _check_pairing_rate_limit(request)
@@ -436,27 +659,8 @@ async def pair_node(body: PairingBody, request: Request):
                 "UPDATE browser_lite_pairing_codes SET used_at = NOW() WHERE id = $1",
                 row["id"],
             )
-            node_id = f"bln_{secrets.token_urlsafe(12)}"
-            token = secrets.token_urlsafe(48)
-            await connection.execute(
-                """
-                INSERT INTO browser_lite_nodes
-                    (id, tenant_id, display_name, token_hash, platform, architecture,
-                     app_version, chromium_version, capabilities, status, created_by)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, 'offline', $10)
-                """,
-                node_id,
-                row["tenant_id"],
-                body.displayName.strip(),
-                _hash_secret(token, "node"),
-                body.platform,
-                body.architecture,
-                body.appVersion,
-                body.chromiumVersion,
-                body.capabilities,
-                row["created_by"],
-            )
-    return {"nodeId": node_id, "token": token, "displayName": body.displayName.strip()}
+            result = await _insert_node(connection, body, row["tenant_id"], row["created_by"])
+    return result
 
 
 @router.get("/nodes")

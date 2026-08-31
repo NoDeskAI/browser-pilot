@@ -1,4 +1,4 @@
-import { app, BrowserWindow, globalShortcut, ipcMain, Menu, nativeImage, Tray } from "electron";
+import { app, BrowserWindow, globalShortcut, ipcMain, Menu, nativeImage, shell, Tray } from "electron";
 import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -25,6 +25,7 @@ const isTestBuild = process.env.BROWSER_LITE_TEST_BUILD === "1";
 const startupTraceEnabled = process.env.BROWSER_LITE_STARTUP_TRACE === "1";
 const startupTraceStartedAt = Date.now();
 let publicStateSequence = 0;
+let pendingAuthCallback = authCallbackOptions(process.argv).authCallback;
 
 function traceStartup(phase, details = "") {
   if (!startupTraceEnabled) return;
@@ -36,6 +37,7 @@ function traceStartup(phase, details = "") {
 // code identity. Developer ID release builds do not set this environment flag.
 if (isTestBuild) app.commandLine.appendSwitch("use-mock-keychain");
 app.setName("Browser Lite");
+if (app.isPackaged) app.setAsDefaultProtocolClient("browserlite");
 const testUserDataPath = isTestBuild
   ? process.env.BROWSER_LITE_TEST_USER_DATA_DIR
   : "";
@@ -44,7 +46,10 @@ app.setPath("userData", testUserDataPath || join(app.getPath("appData"), "Browse
 const PAIRING_REQUEST_PATH = join(app.getPath("userData"), "pairing-request.json");
 const initialPairingOptions = pairingOptions(process.argv);
 stagePairingRequest(initialPairingOptions);
-const hasSingleInstanceLock = app.requestSingleInstanceLock(initialPairingOptions);
+const hasSingleInstanceLock = app.requestSingleInstanceLock({
+  ...initialPairingOptions,
+  ...authCallbackOptions(process.argv),
+});
 if (!hasSingleInstanceLock) app.quit();
 
 function emitState() {
@@ -66,6 +71,12 @@ function pairingOptions(argv = [], additionalData = {}) {
     serverUrl: String(data.serverUrl || option("--pair-server") || ""),
     pairingCode: String(data.pairingCode || option("--pairing-code") || ""),
   };
+}
+
+function authCallbackOptions(argv = [], additionalData = {}) {
+  const data = additionalData && typeof additionalData === "object" ? additionalData : {};
+  const authCallback = String(data.authCallback || argv.find((value) => String(value).startsWith("browserlite://auth/callback")) || "");
+  return authCallback.startsWith("browserlite://auth/callback") ? { authCallback } : {};
 }
 
 function validPairingOptions(options = {}) {
@@ -104,6 +115,28 @@ async function startNodeAgent() {
   await nodeAgent.load();
   nodeAgentLoaded = true;
   if (!await pairFromArguments(process.argv)) await pairFromArguments([]);
+}
+
+async function completeBrowserPilotLogin(callbackUrl) {
+  pendingAuthCallback = "";
+  await nodeAgent.completeLogin(callbackUrl);
+  createDashboardWindow();
+  await manager.showSettings();
+  app.focus({ steal: true });
+  dashboardWindow.show();
+  dashboardWindow.focus();
+  emitState();
+}
+
+function receiveAuthCallback(callbackUrl) {
+  if (!callbackUrl?.startsWith("browserlite://auth/callback")) return;
+  pendingAuthCallback = callbackUrl;
+  if (!bootstrapReady || !nodeAgentLoaded) return;
+  void completeBrowserPilotLogin(callbackUrl).catch((error) => {
+    console.error("Browser Lite login callback failed", error);
+    requestMainWindow();
+    emitState();
+  });
 }
 
 async function getPublicState() {
@@ -249,6 +282,17 @@ function registerIpc() {
     emitState();
     return state;
   });
+  ipcMain.handle("browser-lite:login", async (_event, payload = {}) => {
+    const result = await nodeAgent.beginLogin(payload.serverUrl, payload.displayName);
+    await shell.openExternal(result.authorizeUrl);
+    emitState();
+    return result.state;
+  });
+  ipcMain.handle("browser-lite:logout", async () => {
+    await nodeAgent.unpair();
+    emitState();
+    return nodeAgent.publicState();
+  });
   ipcMain.handle("browser-lite:unpair", async () => {
     await nodeAgent.unpair();
     emitState();
@@ -341,11 +385,17 @@ function registerIpc() {
 }
 
 app.on("second-instance", (_event, argv, _workingDirectory, additionalData) => {
+  const callback = authCallbackOptions(argv, additionalData).authCallback;
+  if (callback) receiveAuthCallback(callback);
   stagePairingRequest(pairingOptions(argv, additionalData));
   if (installation?.isComplete()) {
     void pairFromArguments(argv, additionalData).catch((error) => console.error("Browser Lite pairing failed", error));
   }
   requestMainWindow();
+});
+app.on("open-url", (event, url) => {
+  event.preventDefault();
+  receiveAuthCallback(url);
 });
 app.on("activate", requestMainWindow);
 app.on("window-all-closed", () => {});
@@ -366,6 +416,7 @@ app.on("before-quit", (event) => {
 });
 
 async function bootstrap() {
+  let handledAuthCallback = false;
   if (app.isPackaged && !isTestBuild) {
     app.setLoginItemSettings({ openAtLogin: true, openAsHidden: true });
   }
@@ -400,8 +451,12 @@ async function bootstrap() {
     traceStartup("active-spaces-started");
     await startNodeAgent();
     traceStartup("node-agent-started");
+    if (pendingAuthCallback) {
+      await completeBrowserPilotLogin(pendingAuthCallback);
+      handledAuthCallback = true;
+    }
   }
-  if (installation.isComplete()) await manager.showSpaces();
+  if (installation.isComplete() && !handledAuthCallback) await manager.showSpaces();
   else await manager.showSettings();
   traceStartup("workspace-shown");
   if (installation.isComplete() && app.isPackaged && !isTestBuild && app.getLoginItemSettings().wasOpenedAtLogin) {

@@ -292,10 +292,9 @@ button.setting-row:hover { background:#f8f9fa; }
 .toggle-switch::after { content:""; position:absolute; top:2px; left:2px; width:12px; height:12px; border-radius:50%; background:#fff; box-shadow:0 1px 2px rgba(0,0,0,.18); }
 .toggle-switch.on { background:#1a73e8; }
 .toggle-switch.on::after { left:16px; }
-.pair-form { display:grid; grid-template-columns:minmax(180px,1.35fr) minmax(150px,.9fr) auto; align-items:end; }
-.pair-form label { display:grid; gap:6px; color:#6f747a; font-size:10px; }
-.pair-form input { width:100%; height:34px; border:1px solid #d6d9de; border-radius:6px; padding:0 10px; color:#303134; background:#fff; font-size:12px; }
+.login-state { min-height:72px; }
 .paired-state { min-height:72px; }
+.account-actions { display:flex; align-items:center; gap:8px; }
 button.primary, button.secondary, button.danger { min-height: 34px; border-radius: 17px; padding: 0 15px; font-size: 12px; font-weight: 600; }
 button.primary { border: 0; color: #fff; background: #1a73e8; }
 button.primary:hover { background: #1765cc; }
@@ -355,7 +354,7 @@ button.danger { border: 1px solid #f0c7c4; color: #b3261e; background: #fff; }
 @media (max-width: 800px) {
   .space-gallery { grid-template-columns: 1fr; width: min(520px, calc(100% - 56px)); }
   .settings-sidebar { display: none; }
-  .pair-form { grid-template-columns: 1fr; }
+  .account-actions { align-items:stretch; flex-direction:column; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; animation: none !important; }

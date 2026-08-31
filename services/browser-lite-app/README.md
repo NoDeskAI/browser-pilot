@@ -61,8 +61,8 @@ records the signing and notarization state.
 
 - App configuration: `~/Library/Application Support/Browser Lite`
 - Each Browser Pilot session: a separate persistent Electron session partition
-- Node token: AES-256-GCM encrypted with a per-installation 32-byte key
-- Installation key: local `node-key.bin`, created once with owner-only mode `0600`
+- Node token and pending PKCE verifier: encrypted by Electron safeStorage backed by
+  macOS Keychain (legacy local AES credentials are migrated on first launch)
 - Remote connection: outbound WebSocket to Browser Pilot
 - Local WebDriver/CDP compatibility endpoint: loopback only
 
@@ -71,15 +71,21 @@ that Space's isolated partition.
 
 Settings provides two maintenance flows:
 
-- Reset installation preserves Browser Pilot pairing, clears imported/browser
+- Reset installation preserves the Browser Pilot login, clears imported/browser
   data, restarts the app, and shows the installation assistant again.
 - Complete uninstall disconnects the node, disables login startup, and moves the
   installed app and local data to the macOS Trash for recovery.
 
-## Browser Pilot pairing
+## Browser Pilot login
 
-Generate a 10-digit one-time code in Browser Pilot, then enter it in the app.
-For managed Mac nodes, pairing can also be initiated without typing into the UI:
+Choose **Login to Browser Pilot** in Browser Lite settings. The app opens the
+production Browser Pilot site in the system browser, completes the user's normal
+SSO or password login, and returns through `browserlite://auth/callback`. The
+authorization code is short-lived, one-time, and bound to the native app with
+PKCE. No node token is placed in the browser URL.
+
+For managed or development Mac nodes, the legacy one-time pairing flow remains
+available from the command line:
 
 ```bash
 "/Applications/Browser Lite.app/Contents/MacOS/Browser Lite" \
@@ -87,11 +93,10 @@ For managed Mac nodes, pairing can also be initiated without typing into the UI:
   --pairing-code 0123456789
 ```
 
-The code expires after 10 minutes and can be used once. The long-lived node
-token is returned only to the app, encrypted with the local installation key,
-and is never accepted as a command-line argument. Test builds avoid interactive
-Keychain access so unattended upgrades and restarts do not prompt for a macOS
-password.
+The legacy code expires after 10 minutes and can be used once. Node credentials
+are returned only to the app and are never accepted as command-line arguments.
+Ad-hoc test builds use Electron's mock Keychain backend so unattended upgrades
+and restarts do not prompt for a macOS password; signed releases use Keychain.
 
 Browser Lite does not expose a remote shell, container egress profiles,
 synthetic fingerprint injection, or a Browser Pilot Web VNC viewer. Browser

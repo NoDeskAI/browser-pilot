@@ -8,6 +8,8 @@ contextBridge.exposeInMainWorld("browserLite", Object.freeze({
   uninstall: () => ipcRenderer.invoke("browser-lite:uninstall"),
   pair: (payload) => ipcRenderer.invoke("browser-lite:pair", payload),
   unpair: () => ipcRenderer.invoke("browser-lite:unpair"),
+  login: (payload) => ipcRenderer.invoke("browser-lite:login", payload),
+  logout: () => ipcRenderer.invoke("browser-lite:logout"),
   openInstance: (instanceId) => ipcRenderer.invoke("browser-lite:open-instance", instanceId),
   showSettings: () => ipcRenderer.invoke("browser-lite:show-settings"),
   prepareSpaceReturn: (id) => ipcRenderer.invoke("browser-lite:prepare-space-return", id),

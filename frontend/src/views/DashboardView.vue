@@ -32,7 +32,7 @@ const {
   createSession, deleteSession, renameSession,
   startContainer, pauseContainer, fetchSessions,
   fetchBrowserImageState,
-  fetchBrowserLiteNodes, createBrowserLitePairingCode,
+  fetchBrowserLiteNodes,
 } = useSessions()
 const { state: egressState, fetchNetworkEgress } = useNetworkEgress()
 
@@ -48,9 +48,6 @@ const createNetworkEgressId = ref('__direct__')
 const createRuntime = ref<'standard_chrome' | 'cloak_chromium' | 'browser_lite'>('standard_chrome')
 const browserLiteNodes = ref<BrowserLiteNode[]>([])
 const createBrowserLiteNodeId = ref('')
-const pairingCode = ref('')
-const pairingCodeExpiresAt = ref('')
-const creatingPairingCode = ref(false)
 const onlineBrowserLiteNodes = computed(() => browserLiteNodes.value.filter(node => node.status === 'online'))
 const DIRECT_EGRESS_VALUE = '__direct__'
 const browserImagesEnabled = computed(() => brand.features.browserImages !== false)
@@ -62,7 +59,6 @@ const browserImagesSettingsPath = '/settings/browser-images'
 
 const autoRefresh = ref(localStorage.getItem('bp_auto_refresh') === 'true')
 let refreshTimer: ReturnType<typeof setInterval> | null = null
-let pairingRefreshTimer: ReturnType<typeof setInterval> | null = null
 let autoRefreshFetchInFlight = false
 
 function setAutoRefresh(on: boolean) {
@@ -90,17 +86,11 @@ function stopTimer() {
   if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null }
 }
 
-function stopPairingRefresh() {
-  if (pairingRefreshTimer) { clearInterval(pairingRefreshTimer); pairingRefreshTimer = null }
-}
-
-async function refreshBrowserLiteNodes(preferredNewNodeIds?: Set<string>) {
+async function refreshBrowserLiteNodes() {
   const nodes = await fetchBrowserLiteNodes()
   browserLiteNodes.value = nodes
-  const preferred = nodes.find(node => node.status === 'online' && preferredNewNodeIds && !preferredNewNodeIds.has(node.id))
   const selectedIsOnline = nodes.some(node => node.id === createBrowserLiteNodeId.value && node.status === 'online')
-  if (preferred || !selectedIsOnline) createBrowserLiteNodeId.value = preferred?.id || onlineBrowserLiteNodes.value[0]?.id || ''
-  return preferred
+  if (!selectedIsOnline) createBrowserLiteNodeId.value = onlineBrowserLiteNodes.value[0]?.id || ''
 }
 
 function refreshWhenVisible() {
@@ -273,7 +263,6 @@ onMounted(async () => {
 })
 onUnmounted(() => {
   stopTimer()
-  stopPairingRefresh()
   document.removeEventListener('visibilitychange', refreshWhenVisible)
   window.removeEventListener('focus', refreshWhenFocused)
   valueResizeObservers.forEach(observer => observer.disconnect())
@@ -385,30 +374,6 @@ function openCreateDialog() {
     createBrowserImageId.value = readyCloakImages.value[0].id
   }
   createDialogOpen.value = true
-}
-
-async function generateBrowserLitePairingCode() {
-  creatingPairingCode.value = true
-  try {
-    const result = await createBrowserLitePairingCode()
-    pairingCode.value = result.pairingCode
-    pairingCodeExpiresAt.value = result.expiresAt
-    const existingNodeIds = new Set(browserLiteNodes.value.map(node => node.id))
-    stopPairingRefresh()
-    pairingRefreshTimer = setInterval(() => {
-      if (!createDialogOpen.value || Date.now() >= Date.parse(pairingCodeExpiresAt.value)) {
-        stopPairingRefresh()
-        return
-      }
-      void refreshBrowserLiteNodes(existingNodeIds).then((newNode) => {
-        if (newNode) stopPairingRefresh()
-      })
-    }, 2000)
-  } catch (error: any) {
-    notify.error(error?.message || t('browserRuntime.pairingCodeError'))
-  } finally {
-    creatingPairingCode.value = false
-  }
 }
 
 async function handleCreateSession(name?: string, chromeVersion?: string, networkEgressId?: string, runtime = createRuntime.value, browserImageId = createBrowserImageId.value, browserLiteNodeId = createBrowserLiteNodeId.value) {
@@ -915,15 +880,11 @@ async function onPauseContainer(id: string) {
             </Select>
             <div class="rounded-lg border border-border bg-muted/40 p-3 text-sm">
               <div class="flex items-center justify-between gap-3">
-                <span class="text-muted-foreground">{{ t('browserRuntime.pairNewNode') }}</span>
-                <Button type="button" size="sm" variant="outline" :disabled="creatingPairingCode" @click="generateBrowserLitePairingCode">
-                  <Loader2 v-if="creatingPairingCode" class="size-3.5 animate-spin" />
-                  {{ t('browserRuntime.generatePairingCode') }}
+                <span class="text-muted-foreground">{{ t('browserRuntime.loginFromBrowserLite') }}</span>
+                <Button type="button" size="sm" variant="outline" @click="refreshBrowserLiteNodes">
+                  <RefreshCw class="size-3.5" />
+                  {{ t('browserRuntime.refreshNodes') }}
                 </Button>
-              </div>
-              <div v-if="pairingCode" class="mt-3 flex items-baseline gap-3">
-                <code class="font-mono text-2xl font-semibold tracking-[0.25em] text-foreground">{{ pairingCode }}</code>
-                <span class="text-xs text-muted-foreground">{{ t('browserRuntime.pairingCodeExpiry') }}</span>
               </div>
             </div>
           </div>

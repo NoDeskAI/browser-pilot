@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from urllib.parse import parse_qs, urlparse
 from pathlib import Path
 
 import pytest
@@ -8,6 +9,50 @@ from starlette.requests import Request
 
 from app import browser_lite, runtime_provider
 from app.tools.browser import session as browser_session
+
+
+class _Transaction:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args):
+        return False
+
+
+class _ConnectionContext:
+    def __init__(self, connection):
+        self.connection = connection
+
+    async def __aenter__(self):
+        return self.connection
+
+    async def __aexit__(self, *_args):
+        return False
+
+
+class AuthFlowPool:
+    def __init__(self):
+        self.executed = []
+        self.exchange_row = {
+            "id": "bla-test",
+            "tenant_id": "tenant-1",
+            "created_by": "user-1",
+            "email": "user@example.com",
+            "name": "User",
+            "tenant_name": "Acme",
+        }
+
+    def acquire(self):
+        return _ConnectionContext(self)
+
+    def transaction(self):
+        return _Transaction()
+
+    async def execute(self, *args):
+        self.executed.append(args)
+
+    async def fetchrow(self, *_args):
+        return self.exchange_row
 
 
 def test_pairing_code_is_ten_digits():
@@ -27,6 +72,85 @@ def test_pairing_rate_limit_is_scoped_by_client(monkeypatch):
     with pytest.raises(browser_lite.HTTPException) as exc:
         browser_lite._check_pairing_rate_limit(request)
     assert exc.value.status_code == 429
+
+
+def test_browser_lite_sso_uses_pkce_and_one_time_code(monkeypatch):
+    verifier = "v" * 64
+    state = "s" * 32
+    request = Request({"type": "http", "client": ("192.0.2.10", 1234), "headers": []})
+    auth_request = asyncio.run(browser_lite.create_auth_request(
+        browser_lite.BrowserLiteAuthRequestBody(
+            codeChallenge=browser_lite._pkce_challenge(verifier),
+            state=state,
+            displayName="Office Mac",
+            platform="darwin",
+            architecture="arm64",
+            appVersion="0.5.17",
+            chromiumVersion="140",
+            capabilities=["webdriver", "task_spaces"],
+        ),
+        request,
+    ))
+    request_token = parse_qs(urlparse(auth_request["authorizePath"]).query)["request"][0]
+    request_claims = browser_lite._decode_auth_token(request_token, "browser_lite_auth_request")
+    assert request_claims["code_challenge"] == browser_lite._pkce_challenge(verifier)
+    assert request_claims["node"]["displayName"] == "Office Mac"
+
+    pool = AuthFlowPool()
+    monkeypatch.setattr(browser_lite, "get_pool", lambda: pool)
+    user = browser_lite.CurrentUser(
+        id="user-1", tenant_id="tenant-1", email="user@example.com", name="User",
+        role="admin", created_at="2026-08-31T00:00:00+00:00",
+    )
+    authorization = asyncio.run(browser_lite.authorize_auth_request(
+        browser_lite.BrowserLiteAuthorizeBody(requestToken=request_token),
+        user,
+    ))
+    callback = urlparse(authorization["deepLink"])
+    callback_query = parse_qs(callback.query)
+    assert callback.scheme == "browserlite"
+    assert callback.netloc == "auth"
+    assert callback.path == "/callback"
+    assert callback_query["state"] == [state]
+
+    authorization_code = callback_query["code"][0]
+    code_claims = browser_lite._decode_auth_token(authorization_code, "browser_lite_authorization_code")
+    pool.exchange_row["id"] = code_claims["jti"]
+    exchanged = asyncio.run(browser_lite.exchange_auth_code(
+        browser_lite.BrowserLiteTokenBody(
+            authorizationCode=authorization_code,
+            codeVerifier=verifier,
+        )
+    ))
+    assert exchanged["nodeId"].startswith("bln_")
+    assert exchanged["token"]
+    assert exchanged["displayName"] == "Office Mac"
+    assert exchanged["account"] == {
+        "email": "user@example.com", "name": "User", "tenantName": "Acme",
+    }
+    assert any("SET used_at = NOW()" in call[0] for call in pool.executed)
+
+
+def test_browser_lite_sso_rejects_wrong_pkce_before_database(monkeypatch):
+    authorization_code = browser_lite._encode_auth_token(
+        "browser_lite_authorization_code",
+        {
+            "jti": "bla-test",
+            "code_challenge": browser_lite._pkce_challenge("v" * 64),
+            "node": {"displayName": "Office Mac"},
+        },
+        60,
+    )
+    monkeypatch.setattr(browser_lite, "get_pool", lambda: (_ for _ in ()).throw(AssertionError("DB must not be read")))
+    with pytest.raises(browser_lite.HTTPException) as exc:
+        asyncio.run(browser_lite.exchange_auth_code(
+            browser_lite.BrowserLiteTokenBody(
+                authorizationCode=authorization_code,
+                codeVerifier="x" * 64,
+            )
+        ))
+    assert exc.value.status_code == 401
+    assert exc.value.detail == "Browser Lite PKCE verification failed"
 
 
 def test_wd_fetch_routes_browser_lite_without_http_client(monkeypatch):

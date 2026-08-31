@@ -89,6 +89,10 @@ async function main() {
       LSUIElement: false,
       LSApplicationCategoryType: "public.app-category.productivity",
       NSHumanReadableCopyright: "Copyright © 2026 Xy718",
+      CFBundleURLTypes: [{
+        CFBundleURLName: "com.nodeskai.browserlite.auth",
+        CFBundleURLSchemes: ["browserlite"],
+      }],
       ...(identity ? {} : { LSEnvironment: { BROWSER_LITE_TEST_BUILD: "1" } }),
     },
   });

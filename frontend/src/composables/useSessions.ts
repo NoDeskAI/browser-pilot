@@ -196,13 +196,6 @@ async function fetchBrowserLiteNodes(): Promise<BrowserLiteNode[]> {
   return data.nodes || []
 }
 
-async function createBrowserLitePairingCode(): Promise<{ pairingCode: string; expiresAt: string }> {
-  const res = await api('/api/browser-lite/pairing-codes', { method: 'POST' })
-  const data = await res.json().catch(() => null)
-  if (!res.ok) throw new Error(data?.detail || i18n.global.t('browserRuntime.pairingCodeError'))
-  return data
-}
-
 async function createSession(
   name?: string,
   chromeVersion?: string,
@@ -581,6 +574,5 @@ export function useSessions() {
     fetchBrowserImages,
     fetchBrowserImageState,
     fetchBrowserLiteNodes,
-    createBrowserLitePairingCode,
   }
 }

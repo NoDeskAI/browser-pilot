@@ -11,7 +11,7 @@ test("app manifest is arm64 DMG buildable with embedded Electron Chromium", asyn
   assert.equal(manifest.main, "src/main.mjs");
   assert.match(manifest.devDependencies.electron, /^43\./);
   assert.equal(manifest.scripts["build:dmg"], "node scripts/build-dmg.mjs");
-  assert.equal(manifest.version, "0.5.16");
+  assert.equal(manifest.version, "0.5.17");
 });
 
 test("renderer has a restrictive content security policy", async () => {
@@ -266,15 +266,38 @@ test("settings expose recoverable reset and uninstall flows", async () => {
   assert.match(html, /id="uninstall-app"/);
 });
 
-test("remote node token is encrypted without interactive Keychain access", async () => {
+test("remote node token and login verifier use macOS Keychain-backed safe storage", async () => {
   const source = await readFile(join(ROOT, "src", "node-agent.mjs"), "utf8");
-  assert.match(source, /createCipheriv\("aes-256-gcm"/);
+  assert.match(source, /safeStorage\.encryptString\(config\.token\)/);
+  assert.match(source, /safeStorage\.decryptString/);
+  assert.match(source, /electron-safe-storage-v1/);
+  assert.match(source, /codeVerifierCiphertext/);
+  assert.match(source, /browser-pilot-login\.json/);
+  assert.match(source, /LEGACY_TOKEN_ENCRYPTION/);
   assert.match(source, /createDecipheriv\("aes-256-gcm"/);
   assert.match(source, /node-key\.bin/);
   assert.match(source, /mode: 0o600, flag: "wx"/);
-  assert.doesNotMatch(source, /safeStorage|Keychain/);
   assert.match(source, /type: "auth", token: config\.token/);
   assert.doesNotMatch(source, /searchParams\.set\("token"/);
+});
+
+test("packaged app registers Browser Lite deep links and completes PKCE login", async () => {
+  const main = await readFile(join(ROOT, "src", "main.mjs"), "utf8");
+  const agent = await readFile(join(ROOT, "src", "node-agent.mjs"), "utf8");
+  const build = await readFile(join(ROOT, "scripts", "build-dmg.mjs"), "utf8");
+  const html = await readFile(join(ROOT, "src", "renderer", "index.html"), "utf8");
+  assert.match(build, /CFBundleURLSchemes:\s*\["browserlite"\]/);
+  assert.match(main, /setAsDefaultProtocolClient\("browserlite"\)/);
+  assert.match(main, /app\.on\("open-url"/);
+  assert.match(main, /second-instance[\s\S]*authCallbackOptions/);
+  assert.match(main, /shell\.openExternal\(result\.authorizeUrl\)/);
+  assert.match(agent, /createHash\("sha256"\)/);
+  assert.match(agent, /\/api\/browser-lite\/auth\/requests/);
+  assert.match(agent, /\/api\/browser-lite\/auth\/token/);
+  assert.match(agent, /callback\.searchParams\.get\("state"\)/);
+  assert.match(html, /id="login-button"/);
+  assert.match(html, /id="logout-button"/);
+  assert.doesNotMatch(html, /id="pairing-code"/);
 });
 
 test("task-space capability is refreshed on reconnect and uses an allowlisted controller", async () => {
@@ -335,7 +358,7 @@ test("packaged app supports one-time command-line pairing without accepting a no
   const source = await readFile(join(ROOT, "src", "main.mjs"), "utf8");
   assert.match(source, /--pair-server/);
   assert.match(source, /--pairing-code/);
-  assert.match(source, /requestSingleInstanceLock\(initialPairingOptions\)/);
+  assert.match(source, /requestSingleInstanceLock\(\{[\s\S]*initialPairingOptions/);
   assert.match(source, /second-instance[\s\S]*additionalData/);
   assert.match(source, /writeFileSync\(PAIRING_REQUEST_PATH[\s\S]*mode: 0o600/);
   assert.match(source, /consumeStagedPairingRequest/);
