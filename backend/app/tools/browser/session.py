@@ -177,6 +177,39 @@ async def wd_fetch(
     return data.get("value", data)
 
 
+async def wd_fetch_bytes(
+    url_path: str,
+    method: str = "GET",
+    body: Any = None,
+    timeout: float = 30.0,
+    *,
+    base_url: str = "",
+) -> tuple[bytes, dict[str, str]]:
+    if not base_url:
+        raise RuntimeError("wd_fetch_bytes requires base_url (no global SELENIUM_BASE)")
+    if base_url.startswith("browser_lite://"):
+        raise RuntimeError("Original image export requires the cloak_chromium runtime")
+
+    client = _get_client()
+    url = f"{base_url}{url_path}"
+    kwargs: dict[str, Any] = {}
+    if body is not None:
+        kwargs["headers"] = {"Content-Type": "application/json"}
+        kwargs["content"] = json.dumps(body)
+
+    try:
+        resp = await client.request(method, url, timeout=timeout, **kwargs)
+        _raise_for_http_error(resp, url_path=url_path)
+    except httpx.TimeoutException:
+        raise RuntimeError(f"WebDriver timeout ({timeout}s): {url_path}")
+    except RuntimeError:
+        raise
+    except Exception as exc:
+        raise RuntimeError(f"WebDriver request failed: {exc}") from exc
+
+    return resp.content, {str(key).lower(): str(value) for key, value in resp.headers.items()}
+
+
 async def _cleanup_stale_session(base: str, sid: str) -> None:
     try:
         if base.startswith("browser_lite://"):

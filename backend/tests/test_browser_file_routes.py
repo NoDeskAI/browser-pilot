@@ -148,6 +148,213 @@ def test_screenshot_include_base64_false_returns_file_only(monkeypatch):
     }
 
 
+def test_export_page_image_stores_original_bytes_in_target_session(monkeypatch):
+    raw = b"original-jpeg-bytes"
+    captured = {}
+
+    async def fake_verify(session_id, user):
+        captured["verify"] = (session_id, user.id)
+
+    async def fake_wd_fetch_bytes(url_path, method="GET", body=None, timeout=30, *, base_url=""):
+        captured["runtime"] = (url_path, method, body, timeout, base_url)
+        return raw, {
+            "content-type": "image/jpeg",
+            "x-browser-pilot-image-fetch-mode": "context_request",
+        }
+
+    async def fake_save_bytes(**kwargs):
+        captured["save"] = kwargs
+        return {
+            "id": "file-image-1",
+            "sessionId": kwargs["session_id"],
+            "source": kwargs["source"],
+            "name": kwargs["filename"],
+            "contentType": kwargs["content_type"],
+            "size": len(kwargs["data"]),
+            "url": "http://localhost:8000/api/files/file-image-1.jpg",
+        }
+
+    monkeypatch.setattr(browser, "verify_session_access", fake_verify)
+    monkeypatch.setattr(browser, "browser_session", lambda _session_id: FakeBrowserSession())
+    monkeypatch.setattr(browser, "wd_fetch_bytes", fake_wd_fetch_bytes)
+    monkeypatch.setattr(file_service, "save_bytes", fake_save_bytes)
+
+    result = asyncio.run(
+        browser.api_export_page_image(
+            browser.ExportPageImageBody(
+                sessionId="session-1",
+                url="https://sns-img-qc.xhscdn.com/asset/image-id?sign=secret#fragment",
+            ),
+            user=_user(),
+        )
+    )
+
+    assert result["ok"] is True
+    assert result["file"]["id"] == "file-image-1"
+    assert result["fetchMode"] == "context_request"
+    assert "image" not in result
+    assert captured["verify"] == ("session-1", "user-1")
+    assert captured["runtime"] == (
+        "/session/wd-session-1/image/export",
+        "POST",
+        {"url": "https://sns-img-qc.xhscdn.com/asset/image-id?sign=secret#fragment"},
+        45,
+        "http://selenium",
+    )
+    assert captured["save"]["session_id"] == "session-1"
+    assert captured["save"]["source"] == "page_image"
+    assert captured["save"]["data"] == raw
+    assert captured["save"]["filename"] == "image-id.jpg"
+    assert captured["save"]["content_type"] == "image/jpeg"
+    assert captured["save"]["source_path"] == "https://sns-img-qc.xhscdn.com/asset/image-id"
+
+
+def test_export_page_image_resolves_img_selector_to_current_src(monkeypatch):
+    raw = b"original-webp-bytes"
+    captured = {}
+    resolved_url = "https://sns-avatar-qc.xhscdn.com/avatar/user?format=webp"
+
+    async def fake_verify(*_args, **_kwargs):
+        return None
+
+    async def fake_wd_fetch(url_path, method="GET", body=None, timeout=30, *, base_url=""):
+        captured["selector"] = (url_path, method, body, timeout, base_url)
+        return {"found": True, "isImage": True, "url": resolved_url}
+
+    async def fake_wd_fetch_bytes(url_path, method="GET", body=None, timeout=30, *, base_url=""):
+        captured["runtime"] = (url_path, method, body, timeout, base_url)
+        return raw, {
+            "content-type": "image/webp",
+            "x-browser-pilot-image-fetch-mode": "context_request",
+        }
+
+    async def fake_save_bytes(**kwargs):
+        captured["save"] = kwargs
+        return {"id": "file-image-1", "name": kwargs["filename"]}
+
+    monkeypatch.setattr(browser, "verify_session_access", fake_verify)
+    monkeypatch.setattr(browser, "browser_session", lambda _session_id: FakeBrowserSession())
+    monkeypatch.setattr(browser, "wd_fetch", fake_wd_fetch)
+    monkeypatch.setattr(browser, "wd_fetch_bytes", fake_wd_fetch_bytes)
+    monkeypatch.setattr(file_service, "save_bytes", fake_save_bytes)
+
+    result = asyncio.run(
+        browser.api_export_page_image(
+            browser.ExportPageImageBody(
+                sessionId="session-1",
+                selector='a[href^="/user/profile/"] img',
+                filename="profile-avatar",
+            ),
+            user=_user(),
+        )
+    )
+
+    assert result["ok"] is True
+    assert captured["selector"][0:2] == (
+        "/session/wd-session-1/execute/sync",
+        "POST",
+    )
+    assert captured["selector"][2]["args"] == ['a[href^="/user/profile/"] img']
+    assert captured["runtime"] == (
+        "/session/wd-session-1/image/export",
+        "POST",
+        {"url": resolved_url},
+        45,
+        "http://selenium",
+    )
+    assert captured["save"]["data"] == raw
+    assert captured["save"]["filename"] == "profile-avatar.webp"
+    assert captured["save"]["source_path"] == "https://sns-avatar-qc.xhscdn.com/avatar/user"
+
+
+def test_export_page_image_selector_must_match_img(monkeypatch):
+    async def fake_verify(*_args, **_kwargs):
+        return None
+
+    async def fake_wd_fetch(*_args, **_kwargs):
+        return {"found": True, "isImage": False, "tagName": "DIV"}
+
+    monkeypatch.setattr(browser, "verify_session_access", fake_verify)
+    monkeypatch.setattr(browser, "browser_session", lambda _session_id: FakeBrowserSession())
+    monkeypatch.setattr(browser, "wd_fetch", fake_wd_fetch)
+
+    result = asyncio.run(
+        browser.api_export_page_image(
+            browser.ExportPageImageBody(sessionId="session-1", selector="#profile"),
+            user=_user(),
+        )
+    )
+
+    assert result["ok"] is False
+    assert "does not match an <img> element" in result["error"]
+
+
+def test_export_page_image_rejects_non_image_runtime_response(monkeypatch):
+    saved = []
+
+    async def fake_verify(*_args, **_kwargs):
+        return None
+
+    async def fake_wd_fetch_bytes(*_args, **_kwargs):
+        return b"not-an-image", {"content-type": "text/html"}
+
+    async def fake_save_bytes(**kwargs):
+        saved.append(kwargs)
+        return {"id": "unexpected"}
+
+    monkeypatch.setattr(browser, "verify_session_access", fake_verify)
+    monkeypatch.setattr(browser, "browser_session", lambda _session_id: FakeBrowserSession())
+    monkeypatch.setattr(browser, "wd_fetch_bytes", fake_wd_fetch_bytes)
+    monkeypatch.setattr(file_service, "save_bytes", fake_save_bytes)
+
+    result = asyncio.run(
+        browser.api_export_page_image(
+            browser.ExportPageImageBody(
+                sessionId="session-1",
+                url="https://sns-img-qc.xhscdn.com/asset/image-id",
+            ),
+            user=_user(),
+        )
+    )
+
+    assert result["ok"] is False
+    assert "non-image" in result["error"]
+    assert saved == []
+
+
+def test_export_page_image_uses_custom_filename_with_content_type_extension(monkeypatch):
+    captured = {}
+
+    async def fake_verify(*_args, **_kwargs):
+        return None
+
+    async def fake_wd_fetch_bytes(*_args, **_kwargs):
+        return b"webp-bytes", {"content-type": "image/webp"}
+
+    async def fake_save_bytes(**kwargs):
+        captured.update(kwargs)
+        return {"id": "file-image-1", "url": "http://localhost/file-image-1.webp"}
+
+    monkeypatch.setattr(browser, "verify_session_access", fake_verify)
+    monkeypatch.setattr(browser, "browser_session", lambda _session_id: FakeBrowserSession())
+    monkeypatch.setattr(browser, "wd_fetch_bytes", fake_wd_fetch_bytes)
+    monkeypatch.setattr(file_service, "save_bytes", fake_save_bytes)
+
+    result = asyncio.run(
+        browser.api_export_page_image(
+            browser.ExportPageImageBody(
+                sessionId="session-1",
+                url="https://sns-img-qc.xhscdn.com/asset/image-id",
+                filename="cover",
+            ),
+            user=_user(),
+        )
+    )
+
+    assert result["ok"] is True
+    assert captured["filename"] == "cover.webp"
+
+
 def test_screenshot_does_not_require_active_lease(monkeypatch):
     raw = b"png-bytes"
     calls = {"control": 0, "compatible": 0}

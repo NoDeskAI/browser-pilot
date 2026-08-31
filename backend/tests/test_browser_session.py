@@ -52,6 +52,54 @@ def test_wd_fetch_reports_non_json_response_with_http_context():
     asyncio.run(run())
 
 
+def test_wd_fetch_bytes_returns_binary_response_and_headers():
+    async def run():
+        def handler(request: httpx.Request) -> httpx.Response:
+            assert request.url.path == "/session/wd-1/image/export"
+            assert request.method == "POST"
+            assert request.headers["content-type"] == "application/json"
+            return httpx.Response(
+                200,
+                headers={
+                    "content-type": "image/webp",
+                    "x-browser-pilot-image-fetch-mode": "page_fetch",
+                },
+                content=b"webp-bytes",
+            )
+
+        browser_session._client = httpx.AsyncClient(
+            transport=httpx.MockTransport(handler),
+            trust_env=False,
+        )
+
+        data, headers = await browser_session.wd_fetch_bytes(
+            "/session/wd-1/image/export",
+            "POST",
+            {"url": "https://sns-img-qc.xhscdn.com/image"},
+            base_url="http://selenium.local",
+        )
+
+        assert data == b"webp-bytes"
+        assert headers["content-type"] == "image/webp"
+        assert headers["x-browser-pilot-image-fetch-mode"] == "page_fetch"
+
+    asyncio.run(run())
+
+
+def test_wd_fetch_bytes_rejects_browser_lite_runtime():
+    with pytest.raises(RuntimeError) as exc:
+        asyncio.run(
+            browser_session.wd_fetch_bytes(
+                "/session/wd-1/image/export",
+                "POST",
+                {"url": "https://sns-img-qc.xhscdn.com/image"},
+                base_url="browser_lite://session-1",
+            )
+        )
+
+    assert "cloak_chromium" in str(exc.value)
+
+
 def test_webdriver_session_creation_reports_non_json_response():
     async def run():
         def handler(request: httpx.Request) -> httpx.Response:

@@ -4,6 +4,9 @@ import asyncio
 import base64
 import logging
 import time
+from pathlib import Path
+from typing import Any
+from urllib.parse import unquote, urlsplit, urlunsplit
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
@@ -13,7 +16,11 @@ from app.auth.dependencies import CurrentUser, get_session_aware_user, verify_se
 from app.auto_name import maybe_auto_name
 from app.db import get_pool
 from app.runtime_provider import ensure_localhost_bridge_for_url
-from app.tools.browser.scripts import CLICK_ELEMENT_SCRIPT, OBSERVE_SCRIPT
+from app.tools.browser.scripts import (
+    CLICK_ELEMENT_SCRIPT,
+    IMAGE_ELEMENT_CURRENT_SRC_SCRIPT,
+    OBSERVE_SCRIPT,
+)
 from app.tools.browser.session import (
     KEY_MAP,
     browser_session,
@@ -22,6 +29,7 @@ from app.tools.browser.session import (
     quick_observe,
     run_browser_session_operation,
     wd_fetch,
+    wd_fetch_bytes,
 )
 from app.tools.browser.ax import collect_ax_candidates
 from app.tools.vision.ui_detector import (
@@ -32,6 +40,19 @@ from app.tools.vision.ui_detector import (
 )
 
 logger = logging.getLogger("routes.browser")
+MAX_PAGE_IMAGE_BYTES = 8 * 1024 * 1024
+IMAGE_EXTENSION_BY_CONTENT_TYPE = {
+    "image/avif": ".avif",
+    "image/bmp": ".bmp",
+    "image/gif": ".gif",
+    "image/jpeg": ".jpg",
+    "image/jpg": ".jpg",
+    "image/png": ".png",
+    "image/svg+xml": ".svg",
+    "image/tiff": ".tiff",
+    "image/webp": ".webp",
+    "image/x-icon": ".ico",
+}
 
 VIEWPORT_METRICS_SCRIPT = """
 return {
@@ -102,6 +123,33 @@ class SwitchTabBody(BaseModel):
     handle: str | None = None
     index: int | None = None
     closeCurrent: bool = False
+
+
+class ExportPageImageBody(BaseModel):
+    sessionId: str
+    url: str | None = Field(default=None, min_length=1, max_length=8192)
+    selector: str | None = Field(default=None, min_length=1, max_length=2048)
+    filename: str | None = Field(default=None, max_length=255)
+
+
+def _page_image_filename(url: str, content_type: str, requested_name: str | None) -> str:
+    name = (requested_name or "").strip()
+    if not name:
+        name = unquote(Path(urlsplit(url).path).name).strip()
+    extension = IMAGE_EXTENSION_BY_CONTENT_TYPE.get(content_type, "")
+    if not name:
+        name = f"page-image{extension}"
+    elif extension and not Path(name).suffix:
+        name = f"{name}{extension}"
+    if len(name) > 255:
+        suffix = Path(name).suffix
+        name = f"{name[:max(1, 255 - len(suffix))]}{suffix}"
+    return name
+
+
+def _source_url_without_secrets(url: str) -> str:
+    parsed = urlsplit(url)
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
 
 
 def mix_observe_strategy() -> str:
@@ -699,6 +747,102 @@ async def api_screenshot(
             {"ok": True, "file": file, "screenshot": b64 if includeBase64 is True else None},
             summary="Captured browser screenshot",
             evidence_refs=[{"type": "session_file", "id": file.get("id"), "url": file.get("url")}],
+            retry_safety="safe",
+        )
+    except Exception as exc:
+        return await agent_devices.fail_compatible_action(ctx, str(exc), retry_safety="safe")
+
+
+# ---------------------------------------------------------------------------
+# Current-page image export
+# ---------------------------------------------------------------------------
+
+@router.post("/api/browser/image/export")
+async def api_export_page_image(
+    body: ExportPageImageBody,
+    user: CurrentUser = Depends(get_session_aware_user),
+):
+    await verify_session_access(body.sessionId, user)
+    ctx = await agent_devices.begin_control_action(
+        body.sessionId,
+        user,
+        action="browser.image.export",
+        side_effect_level="internal",
+    )
+    try:
+        requested_url = (body.url or "").strip()
+        selector = (body.selector or "").strip()
+        if bool(requested_url) == bool(selector):
+            raise RuntimeError("Provide exactly one of url or selector")
+
+        async with browser_session(body.sessionId) as (sid, base):
+            if selector:
+                selected_image = await wd_fetch(
+                    f"/session/{sid}/execute/sync",
+                    "POST",
+                    {"script": IMAGE_ELEMENT_CURRENT_SRC_SCRIPT, "args": [selector]},
+                    timeout=10,
+                    base_url=base,
+                )
+                if not isinstance(selected_image, dict) or not selected_image.get("found"):
+                    error = (
+                        selected_image.get("error")
+                        if isinstance(selected_image, dict)
+                        else ""
+                    )
+                    if error == "invalid_selector":
+                        raise RuntimeError("Invalid CSS selector")
+                    raise RuntimeError(f'Image element not found for selector "{selector}"')
+                if not selected_image.get("isImage"):
+                    raise RuntimeError(
+                        f'Selector "{selector}" does not match an <img> element'
+                    )
+                requested_url = str(selected_image.get("url") or "").strip()
+                if not requested_url:
+                    raise RuntimeError(f'Image element "{selector}" has no currentSrc')
+
+            image_bytes, response_headers = await wd_fetch_bytes(
+                f"/session/{sid}/image/export",
+                "POST",
+                {"url": requested_url},
+                timeout=45,
+                base_url=base,
+            )
+        content_type = response_headers.get("content-type", "").split(";", 1)[0].strip().lower()
+        if not content_type.startswith("image/"):
+            raise RuntimeError("Browser runtime returned a non-image response")
+        if not image_bytes:
+            raise RuntimeError("Browser runtime returned an empty image")
+        if len(image_bytes) > MAX_PAGE_IMAGE_BYTES:
+            raise RuntimeError("Browser runtime image exceeds the 8 MB limit")
+
+        from app.file_service import save_bytes
+
+        filename = _page_image_filename(requested_url, content_type, body.filename)
+        file = await save_bytes(
+            session_id=body.sessionId,
+            source="page_image",
+            data=image_bytes,
+            filename=filename,
+            content_type=content_type,
+            source_path=_source_url_without_secrets(requested_url),
+        )
+        saved_name = str(file.get("name") or filename)
+        fetch_mode = response_headers.get("x-browser-pilot-image-fetch-mode") or "unknown"
+        return await agent_devices.complete_compatible_action(
+            ctx,
+            {"ok": True, "file": file, "fetchMode": fetch_mode},
+            summary=f"Exported current-page image to session file {saved_name}",
+            evidence_refs=[{"type": "session_file", "id": file.get("id"), "url": file.get("url")}],
+            details={
+                "filename": saved_name,
+                "contentType": content_type,
+                "sizeBytes": len(image_bytes),
+                "sourceHost": urlsplit(requested_url).hostname,
+                "selectionMode": "selector" if selector else "url",
+                **({"selector": selector} if selector else {}),
+                "fetchMode": fetch_mode,
+            },
             retry_safety="safe",
         )
     except Exception as exc:

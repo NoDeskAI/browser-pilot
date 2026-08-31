@@ -186,6 +186,29 @@ return (function(selector) {
 })(arguments[0]);
 """
 
+IMAGE_ELEMENT_CURRENT_SRC_SCRIPT = r"""
+return (function(selector) {
+  var element;
+  try {
+    element = document.querySelector(selector);
+  } catch (_error) {
+    return { found: false, error: 'invalid_selector' };
+  }
+  if (!element) return { found: false, error: 'element_not_found' };
+  if (element.tagName !== 'IMG') {
+    return { found: true, isImage: false, tagName: element.tagName || '' };
+  }
+  if (!element.currentSrc) {
+    return { found: true, isImage: true, error: 'image_source_unavailable' };
+  }
+  return {
+    found: true,
+    isImage: true,
+    url: new URL(element.currentSrc, document.baseURI).href,
+  };
+})(arguments[0]);
+"""
+
 _STEALTH_SCRIPT_CACHE: str | None = None
 
 

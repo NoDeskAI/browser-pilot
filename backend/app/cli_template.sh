@@ -500,6 +500,31 @@ cmd_screenshot() {
   fi
 }
 
+cmd_export_image() {
+  local image_url="" selector="" filename=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --name) filename="$2"; shift 2 ;;
+      --selector) selector="$2"; shift 2 ;;
+      --url) image_url="$2"; shift 2 ;;
+      -*) echo "Unknown export-image option: $1"; exit 1 ;;
+      *)
+        [[ -z "$image_url" ]] || { echo "export-image accepts only one image URL"; exit 1; }
+        image_url="$1"; shift ;;
+    esac
+  done
+  [[ -n "$image_url" || -n "$selector" ]] || { echo "Usage: $CLI_NAME export-image <current-img-url> | --selector <css-selector> [--name <filename>]"; exit 1; }
+  [[ -z "$image_url" || -z "$selector" ]] || { echo "export-image accepts either a URL or --selector, not both"; exit 1; }
+  local body="{\"sessionId\":\"$(_sid)\""
+  [[ -n "$image_url" ]] && body="$body,\"url\":\"$(_esc "$image_url")\""
+  [[ -n "$selector" ]] && body="$body,\"selector\":\"$(_esc "$selector")\""
+  [[ -n "$filename" ]] && body="$body,\"filename\":\"$(_esc "$filename")\""
+  body="$body}"
+  local resp
+  resp=$(_api_post "/api/browser/image/export" "$body")
+  _print_or_fail_ok "$resp"
+}
+
 cmd_logs() {
   local tail=200
   while [[ $# -gt 0 ]]; do
@@ -867,6 +892,7 @@ case "${1:-}" in
   switch-tab)   shift; cmd_switch_tab "$@" ;;
   page-info)    cmd_page_info ;;
   screenshot)   shift; cmd_screenshot "$@" ;;
+  export-image) shift; cmd_export_image "$@" ;;
   logs)         shift; cmd_logs "$@" ;;
   files)
     shift
@@ -948,6 +974,9 @@ Browser (require active session):
   switch-tab [opts]            Switch tab (--handle, --index, --close-current)
   page-info                    Current URL and title
   screenshot [-o file]         Store screenshot and signed file URL; -o exports a local copy
+  export-image <url> [--name <n>] Store a current-page img.currentSrc in Session Files (Cloak only)
+  export-image --selector <css> [--name <n>]
+                               Resolve a current-page <img> selector and store its original bytes
   logs [--tail <n>]            View CDP event logs
 
 Files:

@@ -8,12 +8,137 @@ import os
 import socket
 import uuid
 from typing import Any
+from urllib.parse import urlsplit
 
 from aiohttp import web
 from cloakbrowser import launch_persistent_context_async
 
 
 SESSION_ID = "cloak-session"
+MAX_IMAGE_EXPORT_BYTES = 8 * 1024 * 1024
+DEFAULT_IMAGE_EXPORT_HOSTS = "xhscdn.com,ci.xiaohongshu.com"
+
+IMAGE_ELEMENT_LOOKUP_SCRIPT = """
+({ url }) => {
+  const requested = new URL(url, document.baseURI).href;
+  const image = Array.from(document.images).find((candidate) => {
+    if (!candidate.currentSrc) return false;
+    try {
+      return new URL(candidate.currentSrc, document.baseURI).href === requested;
+    } catch (_error) {
+      return false;
+    }
+  });
+  if (!image) return { found: false };
+  return {
+    found: true,
+    url: new URL(image.currentSrc, document.baseURI).href,
+    pageUrl: location.href,
+    userAgent: navigator.userAgent,
+    naturalWidth: image.naturalWidth || 0,
+    naturalHeight: image.naturalHeight || 0,
+  };
+}
+"""
+
+PAGE_IMAGE_FETCH_SCRIPT = """
+async ({ url, maxBytes }) => {
+  try {
+    const response = await fetch(url, {
+      credentials: "include",
+      cache: "force-cache",
+      referrer: location.href,
+    });
+    if (!response.ok) {
+      return { ok: false, error: "image_fetch_http_error", status: response.status };
+    }
+    const contentType = (response.headers.get("content-type") || "").split(";", 1)[0].trim().toLowerCase();
+    if (!contentType.startsWith("image/")) {
+      return { ok: false, error: "image_content_type_invalid", contentType };
+    }
+    const contentLength = Number(response.headers.get("content-length") || 0);
+    if (contentLength > maxBytes) {
+      return { ok: false, error: "image_too_large", size: contentLength };
+    }
+    if (!response.body) {
+      return { ok: false, error: "image_empty" };
+    }
+    const reader = response.body.getReader();
+    const chunks = [];
+    let size = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > maxBytes) {
+        await reader.cancel();
+        return { ok: false, error: "image_too_large", size };
+      }
+      chunks.push(value);
+    }
+    if (size === 0) {
+      return { ok: false, error: "image_empty" };
+    }
+    const bytes = new Uint8Array(size);
+    let writeOffset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, writeOffset);
+      writeOffset += chunk.byteLength;
+    }
+    let binary = "";
+    for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+      binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+    }
+    return {
+      ok: true,
+      contentType,
+      data: btoa(binary),
+    };
+  } catch (fetchError) {
+    return {
+      ok: false,
+      error: "page_fetch_failed",
+      message: String(fetchError && fetchError.message ? fetchError.message : fetchError),
+    };
+  }
+}
+"""
+
+
+class ImageExportFailure(Exception):
+    def __init__(self, code: str, message: str, status: int) -> None:
+        super().__init__(message)
+        self.code = code
+        self.status = status
+
+
+def image_export_hosts() -> tuple[str, ...]:
+    configured = os.getenv("BP_IMAGE_EXPORT_HOSTS", DEFAULT_IMAGE_EXPORT_HOSTS)
+    return tuple(host.strip().lower().lstrip(".") for host in configured.split(",") if host.strip())
+
+
+def assert_allowed_image_url(raw_url: str) -> str:
+    try:
+        parsed = urlsplit(raw_url)
+        port = parsed.port
+    except ValueError as exc:
+        raise ImageExportFailure("invalid_image_url", "Image URL is invalid", 400) from exc
+    hostname = (parsed.hostname or "").lower().rstrip(".")
+    allowed = any(hostname == host or hostname.endswith(f".{host}") for host in image_export_hosts())
+    if parsed.scheme != "https" or not hostname or port not in (None, 443) or parsed.username or parsed.password or not allowed:
+        raise ImageExportFailure("image_host_not_allowed", "Image URL host is not allowed", 403)
+    return raw_url
+
+
+def validate_image_bytes(data: bytes, content_type: str) -> str:
+    normalized_type = content_type.split(";", 1)[0].strip().lower()
+    if not normalized_type.startswith("image/"):
+        raise ImageExportFailure("image_content_type_invalid", "Exported resource is not an image", 415)
+    if not data:
+        raise ImageExportFailure("image_empty", "Exported image is empty", 422)
+    if len(data) > MAX_IMAGE_EXPORT_BYTES:
+        raise ImageExportFailure("image_too_large", "Exported image exceeds the 8 MB limit", 413)
+    return normalized_type
 
 
 class DriverState:
@@ -387,6 +512,103 @@ async def screenshot(_request: web.Request) -> web.Response:
     return ok(base64.b64encode(data).decode("ascii"))
 
 
+async def fetch_image_with_context(url: str, *, page_url: str, user_agent: str) -> tuple[bytes, str]:
+    headers = {
+        "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+        "Referer": page_url,
+    }
+    if user_agent:
+        headers["User-Agent"] = user_agent
+    response = None
+    try:
+        response = await state.context.request.get(
+            url,
+            headers=headers,
+            fail_on_status_code=False,
+            max_redirects=5,
+            timeout=30000,
+        )
+        if response.status < 200 or response.status >= 300:
+            raise ImageExportFailure(
+                "image_fetch_http_error",
+                f"Image request returned HTTP {response.status}",
+                502,
+            )
+        assert_allowed_image_url(response.url)
+        response_headers = {str(key).lower(): str(value) for key, value in response.headers.items()}
+        try:
+            content_length = int(response_headers.get("content-length") or 0)
+        except ValueError:
+            content_length = 0
+        if content_length > MAX_IMAGE_EXPORT_BYTES:
+            raise ImageExportFailure("image_too_large", "Exported image exceeds the 8 MB limit", 413)
+        data = await response.body()
+        content_type = validate_image_bytes(data, response_headers.get("content-type", ""))
+        return data, content_type
+    except ImageExportFailure:
+        raise
+    except Exception as exc:
+        raise ImageExportFailure("image_fetch_failed", f"Browser context image request failed: {exc}", 502) from exc
+    finally:
+        if response is not None:
+            await response.dispose()
+
+
+async def export_page_image(request: web.Request) -> web.Response:
+    body = await request.json()
+    requested_url = str(body.get("url") or "").strip() if isinstance(body, dict) else ""
+    if not requested_url:
+        return error("invalid argument", "Missing image URL", 400)
+    try:
+        assert_allowed_image_url(requested_url)
+        page = await state.active_page()
+        image = await page.evaluate(IMAGE_ELEMENT_LOOKUP_SCRIPT, {"url": requested_url})
+        if not isinstance(image, dict) or not image.get("found"):
+            raise ImageExportFailure(
+                "image_not_on_current_page",
+                "URL does not match any img.currentSrc on the current page",
+                404,
+            )
+
+        source_url = assert_allowed_image_url(str(image.get("url") or ""))
+        page_result = await page.evaluate(
+            PAGE_IMAGE_FETCH_SCRIPT,
+            {"url": source_url, "maxBytes": MAX_IMAGE_EXPORT_BYTES},
+        )
+        fetch_mode = "page_fetch"
+        if isinstance(page_result, dict) and page_result.get("ok"):
+            try:
+                data = base64.b64decode(str(page_result.get("data") or ""), validate=True)
+            except Exception as exc:
+                raise ImageExportFailure("image_decode_failed", "Browser returned invalid image bytes", 502) from exc
+            content_type = validate_image_bytes(data, str(page_result.get("contentType") or ""))
+        else:
+            failure_code = str(page_result.get("error") or "") if isinstance(page_result, dict) else "page_fetch_failed"
+            if failure_code == "image_too_large":
+                raise ImageExportFailure("image_too_large", "Exported image exceeds the 8 MB limit", 413)
+            if failure_code == "image_content_type_invalid":
+                raise ImageExportFailure("image_content_type_invalid", "Exported resource is not an image", 415)
+            if failure_code == "image_empty":
+                raise ImageExportFailure("image_empty", "Exported image is empty", 422)
+            data, content_type = await fetch_image_with_context(
+                source_url,
+                page_url=str(image.get("pageUrl") or page.url),
+                user_agent=str(image.get("userAgent") or ""),
+            )
+            fetch_mode = "context_request"
+
+        return web.Response(
+            body=data,
+            content_type=content_type,
+            headers={
+                "Cache-Control": "no-store",
+                "X-Browser-Pilot-Image-Fetch-Mode": fetch_mode,
+            },
+        )
+    except ImageExportFailure as exc:
+        return error(exc.code, str(exc), exc.status)
+
+
 def is_target_crash_error(exc: Exception) -> bool:
     message = str(exc).lower()
     return "target crashed" in message or "page crashed" in message
@@ -541,6 +763,7 @@ def build_app() -> web.Application:
     app.router.add_delete("/session/{sid}/cookie/{name}", delete_cookie)
     app.router.add_post("/session/{sid}/execute/sync", execute_sync)
     app.router.add_get("/session/{sid}/screenshot", screenshot)
+    app.router.add_post("/session/{sid}/image/export", export_page_image)
     app.router.add_post("/session/{sid}/actions", actions)
     app.router.add_delete("/session/{sid}/actions", release_actions)
     app.router.add_post("/session/{sid}/goog/cdp/execute", cdp_execute)
