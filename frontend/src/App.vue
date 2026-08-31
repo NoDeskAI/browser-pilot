@@ -103,7 +103,10 @@ async function syncRouteAfterBootstrap() {
       return
     }
     if (route.meta.requiresAuth && !isAuthenticated.value) {
-      await router.replace('/login')
+      await router.replace({
+        path: '/login',
+        query: { redirect: route.fullPath },
+      })
     }
   } catch {
     // router guard will retry on the next navigation
