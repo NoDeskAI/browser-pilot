@@ -9,6 +9,7 @@ import time
 import uuid
 from pathlib import Path
 from typing import Protocol
+from urllib.parse import urlsplit
 
 from app.file_urls import (
     FILE_DOWNLOAD_URL_TTL_SECONDS,
@@ -73,6 +74,14 @@ def _decode_file_id(file_id: str) -> str | None:
         return None
 
 
+def _s3_addressing_style(endpoint: str) -> str:
+    hostname = (urlsplit(endpoint.strip()).hostname or "").lower()
+    is_volcengine_tos = hostname.startswith("tos-s3-") and hostname.endswith(
+        (".volces.com", ".ivolces.com")
+    )
+    return "virtual" if is_volcengine_tos else "path"
+
+
 class S3Store:
     def __init__(
         self,
@@ -94,14 +103,15 @@ class S3Store:
             aws_secret_access_key=secret_key,
             region_name=region,
         )
+        endpoint = endpoint.strip()
         kwargs = {
-            "config": Config(s3={"addressing_style": "path"}),
+            "config": Config(s3={"addressing_style": _s3_addressing_style(endpoint)}),
             **({"endpoint_url": endpoint} if endpoint else {}),
         }
         self._client = session.client("s3", **kwargs)
         public_endpoint = (public_endpoint or endpoint or "").strip()
         public_kwargs = {
-            "config": Config(s3={"addressing_style": "path"}),
+            "config": Config(s3={"addressing_style": _s3_addressing_style(public_endpoint)}),
             **({"endpoint_url": public_endpoint} if public_endpoint else {}),
         }
         self._presign_client = session.client("s3", **public_kwargs)

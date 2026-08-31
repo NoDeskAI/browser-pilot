@@ -2,8 +2,9 @@ import asyncio
 import base64
 
 import boto3
+import pytest
 
-from app.file_store import BuiltinStore, S3Store
+from app.file_store import BuiltinStore, S3Store, _s3_addressing_style
 
 
 class FakeBody:
@@ -44,6 +45,20 @@ class FakeS3Client:
             }
         )
         return f"http://public-storage:9000/{Params['Bucket']}/{Params['Key']}?X-Amz-Expires={ExpiresIn}"
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "expected"),
+    [
+        ("https://tos-s3-cn-beijing.volces.com", "virtual"),
+        ("https://tos-s3-cn-beijing.ivolces.com", "virtual"),
+        ("http://object-storage:9000", "path"),
+        ("https://s3.example.com", "path"),
+        ("", "path"),
+    ],
+)
+def test_s3_addressing_style(endpoint, expected):
+    assert _s3_addressing_style(endpoint) == expected
 
 
 def test_s3_store_returns_presigned_public_url_and_can_read(monkeypatch):
