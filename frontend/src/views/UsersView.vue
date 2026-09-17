@@ -217,9 +217,8 @@ onMounted(fetchUsers)
               <TableCell>
                 <div class="flex items-center gap-2">
                   <Switch
-                    v-if="u.role !== 'superadmin' && u.id !== currentUser?.id"
                     :model-value="u.isActive"
-                    :disabled="updatingUsers.has(u.id)"
+                    :disabled="u.role === 'superadmin' || u.id === currentUser?.id || updatingUsers.has(u.id)"
                     :aria-label="t('users.accountEnabled', { name: u.name || u.email })"
                     @update:model-value="toggleActive(u, $event)"
                   />
