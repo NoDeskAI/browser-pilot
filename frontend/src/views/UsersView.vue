@@ -30,6 +30,7 @@ const { user: currentUser } = useAuth()
 interface UserItem { id: string; email: string; name: string; role: string; isActive: boolean; createdAt: string }
 
 const users = ref<UserItem[]>([])
+const updatingUsers = ref(new Set<string>())
 const showInvite = ref(false)
 const inviteEmail = ref('')
 const inviteName = ref('')
@@ -65,9 +66,26 @@ async function handleInvite() {
   } catch { inviteError.value = t('users.inviteError') } finally { inviteLoading.value = false }
 }
 
-async function toggleActive(u: UserItem) {
-  await api(`/api/users/${u.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ is_active: !u.isActive }) })
-  await fetchUsers()
+async function toggleActive(u: UserItem, active: boolean) {
+  if (updatingUsers.value.has(u.id) || active === u.isActive) return
+  updatingUsers.value.add(u.id)
+  try {
+    const res = await api(`/api/users/${u.id}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ is_active: active }),
+    })
+    if (!res.ok) {
+      const data = await res.json().catch(() => null)
+      toast.error(typeof data?.detail === 'string' ? data.detail : t('users.statusUpdateError'))
+      return
+    }
+    u.isActive = active
+    toast.success(t(active ? 'users.enabledSuccess' : 'users.disabledSuccess'))
+  } catch {
+    toast.error(t('users.statusUpdateError'))
+  } finally {
+    updatingUsers.value.delete(u.id)
+  }
 }
 
 async function deleteUser() {
@@ -198,7 +216,13 @@ onMounted(fetchUsers)
               <TableCell><Badge :variant="roleBadgeVariant(u.role)">{{ u.role }}</Badge></TableCell>
               <TableCell>
                 <div class="flex items-center gap-2">
-                  <Switch v-if="u.role !== 'superadmin' && u.id !== currentUser?.id" :checked="u.isActive" @update:checked="toggleActive(u)" />
+                  <Switch
+                    v-if="u.role !== 'superadmin' && u.id !== currentUser?.id"
+                    :model-value="u.isActive"
+                    :disabled="updatingUsers.has(u.id)"
+                    :aria-label="t('users.accountEnabled', { name: u.name || u.email })"
+                    @update:model-value="toggleActive(u, $event)"
+                  />
                   <span class="text-xs" :class="u.isActive ? 'text-green-500' : 'text-muted-foreground'">{{ u.isActive ? t('users.active') : t('users.disabled') }}</span>
                 </div>
               </TableCell>

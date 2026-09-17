@@ -548,6 +548,10 @@ export default {
     },
   },
   users: {
+    accountEnabled: 'Account enabled for {name}',
+    statusUpdateError: 'Failed to update account status. Please try again.',
+    enabledSuccess: 'Account enabled',
+    disabledSuccess: 'Account disabled',
     title: 'User Management',
     invite: 'Add User',
     inviteError: 'Failed to create user',

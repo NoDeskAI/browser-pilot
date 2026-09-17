@@ -548,6 +548,10 @@ export default {
     },
   },
   users: {
+    accountEnabled: '{name} 的账号启用状态',
+    statusUpdateError: '更新账号状态失败，请重试',
+    enabledSuccess: '账号已启用',
+    disabledSuccess: '账号已禁用',
     title: '用户管理',
     invite: '添加用户',
     inviteError: '创建用户失败',
