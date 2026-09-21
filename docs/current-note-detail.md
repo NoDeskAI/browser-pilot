@@ -55,7 +55,13 @@ stop and request user intervention; do not retry through another access path.
 Media URLs are download candidates, not exported bytes or an archival guarantee.
 They may expire, require browser context, or fail independent HTTP requests.
 Only successfully downloaded, validated media stored in private TOS may count as
-archived. No live video download/TOS verification has been performed.
+archived. On 2026-09-21, ANTA verified one note end to end against deployed ce0972c:
+2,284,376 bytes downloaded, ffprobe accepted 720x1280 video of 14,536 ms, private
+TOS HEAD size matched, and PostgreSQL readback reported complete with matching
+media metadata. SHA256: 068f7a1b9709e2417b0b9bee011ababeae34228af1c970e5d84efd0a3901f347.
+This validates that note, not all notes or future expiring media URLs. The ANTA
+consumer also needed dynamic group selection; a hard-coded codec-only client
+will still omit EF4/EF5. Its verification lease was released afterward.
 
 Known driver boundary: deployed execute/sync invokes active_page and can recover
 a crashed/closed page before running the fixed script. The backend does not
