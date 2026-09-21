@@ -30,4 +30,6 @@ alwaysApply: true
 
 ## 部署后验证
 
+会话 Pod 的镜像检查必须覆盖浏览器和所有 sidecar（包括 Clash），不能只检查浏览器镜像。Clash 使用 Helm `runtime.clashImage` 单一配置同时生成后端 `NETWORK_EGRESS_CLASH_IMAGE` 与准入规则，必须固定为 sha256 摘要，禁止 latest。新增或升级 sidecar 必须验证镜像可拉取，并用完整多容器 Pod 做 server-side dry-run：批准镜像通过、未批准镜像被拒绝；不得关闭准入校验。线上修改必须同步部署源码，不能只临时 patch 集群。
+
 更新 K8s deployment 后，用 `kubectl rollout status` 确认 pod 就绪。涉及关键功能变更时，抽查产物确认构建正确（如 EE 路由 chunk 是否存在）。
