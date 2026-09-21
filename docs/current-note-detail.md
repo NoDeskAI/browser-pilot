@@ -1,4 +1,4 @@
-# Current Note Detail API (not yet deployed or live-validated)
+# Current Note Detail API
 
 `POST /api/browser/note/detail`
 
@@ -6,7 +6,7 @@
 {"sessionId":"prxanhiceb63","noteId":"0123456789abcdef01234567"}
 ```
 
-CLI: `bpilot note-detail <24-character-note-id>` using the selected session.
+CLI: `bpilot --session <session-id> note-detail <24-character-note-id>`.
 
 Requires existing session access and a valid active DeviceLease owned by the
 caller. Only an already-running `cloak_chromium` with an existing driver session
@@ -22,12 +22,18 @@ Successful response uses the existing governed action envelope plus `ok: true`,
 user.userId/nickname/avatar, interactInfo likedCount/collectedCount/commentCount/
 shareCount, time, ipLocation, imageList URL/dimensions, and
 video.media.stream.{h264,h265,av1}[] masterUrl/backupUrls/width/height/duration.
+The legacy video.mediaV2 JSON/object video.stream codec entries are normalized
+from master_url/backup_urls into the same contract; the raw mediaV2 is not exported.
+Malformed or oversized (>1 MiB) JSON adds a warning. Video notes with no valid
+stream URL add video_source_unavailable; ok means detail extraction succeeded,
+not that downloadable video exists. No global player or og:video fallback is used.
 Missing fields stay empty; no URL construction from opaque video IDs, no HTML
 dump, cookies, storage, arbitrary initial-state export, screenshot or recording.
 
 The current URL must identify the requested note; the matching note-store entry
 must contain the same noteId. Never fall back to the first cached SPA entry.
-This schema is fixture-tested, not yet validated on a real current note.
+The initial release was live-validated for exact note identity and action auditing;
+that video returned no media URL. mediaV2 compatibility still needs live validation.
 
 Errors use the existing action failure/rejection envelope (`ok: false`):
 lease_required/operator_mismatch (existing governance), unsupported_runtime,

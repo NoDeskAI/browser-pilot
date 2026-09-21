@@ -21,7 +21,7 @@ const note = entry?.note;
 if (!note || note.noteId !== expected) return fail('note_detail_unavailable');
 const text = (v, max=4096) => typeof v === 'string' ? v.slice(0, max) : typeof v === 'number' && Number.isFinite(v) ? String(v) : '';
 const url = v => {
-  if (typeof v !== 'string' || v.length > 8192) return '';
+  if (typeof v !== 'string' || !v.trim() || v.length > 8192 || !/^(https?:\/\/|\/\/)/i.test(v)) return '';
   try {
     const u = new URL(v, location.href);
     return ['https:', 'http:'].includes(u.protocol) && !u.username && !u.password ? u.href : '';
@@ -32,13 +32,33 @@ const imageList = (Array.isArray(note.imageList) ? note.imageList : []).slice(0,
   urlDefault: url(i.urlDefault), urlPre: url(i.urlPre), url: url(i.url), width: size(i.width), height: size(i.height)
 }));
 const stream = {};
-for (const codec of ['h264', 'h265', 'av1']) {
-  const list = note.video?.media?.stream?.[codec];
-  if (Array.isArray(list)) stream[codec] = list.slice(0, 16).map(v => ({
-    masterUrl: url(v.masterUrl), backupUrls: (Array.isArray(v.backupUrls) ? v.backupUrls : []).slice(0, 4).map(url).filter(Boolean),
-    width: size(v.width), height: size(v.height), duration: size(v.duration)
-  }));
+const warnings = ['media_urls_may_require_browser_context_and_can_expire'];
+let mediaV2 = note.video?.mediaV2;
+if (typeof mediaV2 === 'string') {
+  if (mediaV2.length > 1048576) {
+    warnings.push('video_media_v2_too_large');
+    mediaV2 = null;
+  } else {
+    try { mediaV2 = JSON.parse(mediaV2); }
+    catch { warnings.push('video_media_v2_invalid'); mediaV2 = null; }
+  }
 }
+for (const codec of ['h264', 'h265', 'av1']) {
+  const primary = note.video?.media?.stream?.[codec];
+  const secondary = mediaV2?.video?.stream?.[codec];
+  const normalize = (list, legacy) => (Array.isArray(list) ? list : []).slice(0, 16)
+    .filter(v => v && typeof v === 'object').map(v => {
+      const backups = legacy ? v.backup_urls : v.backupUrls;
+      return {
+        masterUrl: url(legacy ? v.master_url : v.masterUrl),
+        backupUrls: (Array.isArray(backups) ? backups : []).slice(0, 4).map(url).filter(Boolean),
+        width: size(v.width), height: size(v.height), duration: size(v.duration)
+      };
+    }).filter(v => v.masterUrl);
+  const candidates = [...normalize(primary, false), ...normalize(secondary, true)];
+  if (candidates.length) stream[codec] = candidates.slice(0, 16);
+}
+if (note.type === 'video' && !Object.keys(stream).length) warnings.push('video_source_unavailable');
 const interactInfo = {};
 for (const k of ['likedCount', 'collectedCount', 'commentCount', 'shareCount']) interactInfo[k] = text(note.interactInfo?.[k], 64);
 return {ok: true, schemaVersion: 1, source: 'current_page_note_store',
@@ -48,5 +68,5 @@ return {ok: true, schemaVersion: 1, source: 'current_page_note_store',
     user: {userId: text(note.user?.userId, 128), nickname: text(note.user?.nickname, 512), avatar: url(note.user?.avatar)},
     interactInfo, time: text(note.time, 64), ipLocation: text(note.ipLocation, 256), imageList,
     video: {media: {stream}}
-  }, meta: {}, warnings: ['media_urls_may_require_browser_context_and_can_expire']};
+  }, meta: {}, warnings};
 """
