@@ -76,3 +76,42 @@ def test_malformed_media_v2_is_bounded_and_warned(media):
     result = extract(note={"noteId": NOTE_ID, "type": "video", "video": {"mediaV2": media}})
     assert ("video_media_v2_too_large" if len(media) > 1048576 else "video_media_v2_invalid") in result["warnings"]
     assert "video_source_unavailable" in result["warnings"]
+
+
+def test_live_provider_groups_are_preserved_not_mislabelled_as_codecs():
+    video = {"media": {"stream": {
+        "EF4": [{"masterUrl": "https://cdn.example/avc.mp4", "videoCodec": "EF4", "weight": 1}],
+        "EF5": [{"masterUrl": "https://cdn.example/hevc.mp4", "videoCodec": "EF5", "weight": 2},
+                {"masterUrl": "https://cdn.example/hevc-hd.mp4", "weight": 3}],
+        "EF6": [], "EF7": [],
+    }}, "mediaV2": json.dumps({"stream": {"EF4": [{"master_url": "https://cdn.example/avc.mp4"}]}})}
+    result = extract(note={"noteId": NOTE_ID, "type": "video", "video": video})
+    groups = result["note"]["video"]["media"]["stream"]
+    assert {key: len(items) for key, items in groups.items()} == {"EF4": 1, "EF5": 2}
+    assert groups["EF5"][1]["weight"] == 3
+    assert groups["EF4"][0]["source"] == "note.video.media.stream"
+    assert "video_source_unavailable" not in result["warnings"]
+
+
+def test_root_media_v2_stream_is_supported():
+    result = extract(note={"noteId": NOTE_ID, "type": "video", "video": {
+        "mediaV2": json.dumps({"stream": {"EF4": [{"master_url": "https://cdn.example/video.mp4", "secret": "NEVER_EXPORT"}]}})
+    }})
+    candidate = result["note"]["video"]["media"]["stream"]["EF4"][0]
+    assert candidate["masterUrl"] == "https://cdn.example/video.mp4"
+    assert candidate["source"] == "note.video.mediaV2.stream"
+    assert "NEVER_EXPORT" not in json.dumps(result)
+
+
+def test_provider_groups_and_entries_are_bounded_and_fields_whitelisted():
+    groups = {f"EF{i}": [{"masterUrl": f"https://cdn.example/{i}-{j}.mp4", "private": "NEVER_EXPORT"} for j in range(20)] for i in range(20)}
+    result = extract(note={"noteId": NOTE_ID, "video": {"media": {"stream": groups}}})
+    returned = result["note"]["video"]["media"]["stream"]
+    assert len(returned) == 16
+    assert all(len(items) == 16 for items in returned.values())
+    assert "NEVER_EXPORT" not in json.dumps(result)
+
+
+def test_unsafe_group_names_are_not_exported():
+    groups = {key: [{"masterUrl": "https://cdn.example/v.mp4"}] for key in ["__proto__", "constructor", "prototype", "bad/key", "x" * 25]}
+    assert extract(note={"noteId": NOTE_ID, "video": {"media": {"stream": groups}}})["note"]["video"]["media"]["stream"] == {}

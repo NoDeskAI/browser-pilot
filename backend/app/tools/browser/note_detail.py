@@ -31,7 +31,7 @@ const size = v => Number.isFinite(Number(v)) && Number(v) >= 0 ? Number(v) : nul
 const imageList = (Array.isArray(note.imageList) ? note.imageList : []).slice(0, 100).map(i => ({
   urlDefault: url(i.urlDefault), urlPre: url(i.urlPre), url: url(i.url), width: size(i.width), height: size(i.height)
 }));
-const stream = {};
+const stream = Object.create(null);
 const warnings = ['media_urls_may_require_browser_context_and_can_expire'];
 let mediaV2 = note.video?.mediaV2;
 if (typeof mediaV2 === 'string') {
@@ -43,20 +43,34 @@ if (typeof mediaV2 === 'string') {
     catch { warnings.push('video_media_v2_invalid'); mediaV2 = null; }
   }
 }
-for (const codec of ['h264', 'h265', 'av1']) {
-  const primary = note.video?.media?.stream?.[codec];
-  const secondary = mediaV2?.video?.stream?.[codec];
-  const normalize = (list, legacy) => (Array.isArray(list) ? list : []).slice(0, 16)
-    .filter(v => v && typeof v === 'object').map(v => {
+// Provider group names need not be codec names (the live page uses EF4/EF5).
+// Preserve them without inferring an encoding, and export only known fields.
+const sources = [
+  [note.video?.media?.stream, false, 'note.video.media.stream'],
+  [mediaV2?.stream, true, 'note.video.mediaV2.stream'],
+  [mediaV2?.video?.stream, true, 'note.video.mediaV2.video.stream']
+];
+for (const [groups, legacy, source] of sources) {
+  if (!groups || typeof groups !== 'object' || Array.isArray(groups)) continue;
+  for (const [group, list] of Object.entries(groups).slice(0, 16)) {
+    if (!/^[a-zA-Z][a-zA-Z0-9_]{0,23}$/.test(group) || ['constructor', 'prototype'].includes(group) || !Array.isArray(list)) continue;
+    for (const v of list.slice(0, 16)) {
+      if (!v || typeof v !== 'object') continue;
+      const masterUrl = url(legacy ? v.master_url : v.masterUrl);
+      if (!masterUrl) continue;
+      if (!stream[group]) {
+        if (Object.keys(stream).length >= 16) continue;
+        stream[group] = [];
+      }
+      if (stream[group].length >= 16 || stream[group].some(item => item.masterUrl === masterUrl)) continue;
       const backups = legacy ? v.backup_urls : v.backupUrls;
-      return {
-        masterUrl: url(legacy ? v.master_url : v.masterUrl),
-        backupUrls: (Array.isArray(backups) ? backups : []).slice(0, 4).map(url).filter(Boolean),
-        width: size(v.width), height: size(v.height), duration: size(v.duration)
-      };
-    }).filter(v => v.masterUrl);
-  const candidates = [...normalize(primary, false), ...normalize(secondary, true)];
-  if (candidates.length) stream[codec] = candidates.slice(0, 16);
+      stream[group].push({
+        masterUrl, backupUrls: (Array.isArray(backups) ? backups : []).slice(0, 4).map(url).filter(Boolean),
+        width: size(v.width), height: size(v.height), duration: size(v.duration),
+        weight: size(v.weight), source
+      });
+    }
+  }
 }
 if (note.type === 'video' && !Object.keys(stream).length) warnings.push('video_source_unavailable');
 const interactInfo = {};
