@@ -16,6 +16,8 @@ from app.auth.dependencies import CurrentUser, get_session_aware_user, verify_se
 from app.auto_name import maybe_auto_name
 from app.db import get_pool
 from app.runtime_provider import ensure_localhost_bridge_for_url
+from app.runtime_provider import get_container_status, resolve_selenium_base_url
+from app.tools.browser.note_detail import NOTE_DETAIL_SCRIPT
 from app.tools.browser.scripts import (
     CLICK_ELEMENT_SCRIPT,
     IMAGE_ELEMENT_CURRENT_SRC_SCRIPT,
@@ -87,6 +89,46 @@ class SessionBody(BaseModel):
 class NavigateBody(BaseModel):
     sessionId: str
     url: str
+
+
+class NoteDetailBody(BaseModel):
+    model_config = {"extra": "forbid"}
+    sessionId: str
+    noteId: str = Field(pattern=r"^[a-fA-F0-9]{24}$")
+
+
+@router.post("/api/browser/note/detail")
+async def api_note_detail(body: NoteDetailBody, user: CurrentUser = Depends(get_session_aware_user)):
+    await verify_session_access(body.sessionId, user)
+    ctx, rejected = await agent_devices.begin_compatible_action(
+        body.sessionId, user, action="browser.note.detail", side_effect_level="none"
+    )
+    if rejected:
+        return rejected
+    try:
+        row = await get_pool().fetchrow("SELECT browser_runtime FROM sessions WHERE id = $1", body.sessionId)
+        if not row or row["browser_runtime"] != "cloak_chromium":
+            raise RuntimeError("unsupported_runtime")
+        if await get_container_status(body.sessionId) != "running":
+            raise RuntimeError("runtime_not_running")
+        base = await resolve_selenium_base_url(body.sessionId)
+        # Do not call browser_session(): it can start runtime/download capture.
+        status = await wd_fetch("/status", base_url=base, timeout=5)
+        sessions = [slot.get("session") for node in status.get("nodes", []) for slot in node.get("slots", []) if slot.get("session")]
+        if len(sessions) != 1 or not sessions[0].get("sessionId"):
+            raise RuntimeError("browser_not_ready")
+        await agent_devices.require_active_lease(body.sessionId, user, action="browser.note.detail", side_effect_level="none")
+        result = await wd_fetch(
+            f"/session/{sessions[0]['sessionId']}/execute/sync", "POST",
+            {"script": NOTE_DETAIL_SCRIPT, "args": [body.noteId]}, base_url=base, timeout=10,
+        )
+        # A lease lost while reading must not release the captured data.
+        await agent_devices.require_active_lease(body.sessionId, user, action="browser.note.detail", side_effect_level="none")
+        if not isinstance(result, dict) or result.get("ok") is not True:
+            raise RuntimeError(result.get("error", "note_detail_unavailable") if isinstance(result, dict) else "note_detail_unavailable")
+        return await agent_devices.complete_compatible_action(ctx, result, summary="Read current note details", retry_safety="safe")
+    except Exception as exc:
+        return await agent_devices.fail_compatible_action(ctx, str(exc), retry_safety="safe")
 
 
 class ClickBody(BaseModel):

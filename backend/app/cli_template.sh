@@ -525,6 +525,13 @@ cmd_export_image() {
   _print_or_fail_ok "$resp"
 }
 
+cmd_note_detail() {
+  [[ $# -eq 1 && "$1" =~ ^[a-fA-F0-9]{24}$ ]] || { echo "Usage: $CLI_NAME note-detail <note-id>"; exit 1; }
+  local resp
+  resp=$(_api_post "/api/browser/note/detail" "{\"sessionId\":\"$(_sid)\",\"noteId\":\"$1\"}")
+  _print_or_fail_ok "$resp"
+}
+
 cmd_logs() {
   local tail=200
   while [[ $# -gt 0 ]]; do
@@ -893,6 +900,7 @@ case "${1:-}" in
   page-info)    cmd_page_info ;;
   screenshot)   shift; cmd_screenshot "$@" ;;
   export-image) shift; cmd_export_image "$@" ;;
+  note-detail) shift; cmd_note_detail "$@" ;;
   logs)         shift; cmd_logs "$@" ;;
   files)
     shift
@@ -975,6 +983,7 @@ Browser (require active session):
   page-info                    Current URL and title
   screenshot [-o file]         Store screenshot and signed file URL; -o exports a local copy
   export-image <url> [--name <n>] Store a current-page img.currentSrc in Session Files (Cloak only)
+  note-detail <note-id>         Read current Xiaohongshu note fields (running Cloak + owned lease required)
   export-image --selector <css> [--name <n>]
                                Resolve a current-page <img> selector and store its original bytes
   logs [--tail <n>]            View CDP event logs
