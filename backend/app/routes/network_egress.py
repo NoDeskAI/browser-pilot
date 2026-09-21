@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel
 
 from app.auth.dependencies import CurrentUser, get_current_user, require_role
@@ -84,6 +84,22 @@ async def list_network_egress(user: CurrentUser = Depends(get_current_user)):
     return {"profiles": [direct, *[_response(r) for r in rows]]}
 
 
+@router.get("/api/network-egress/{egress_id}")
+async def get_network_egress(
+    egress_id: str,
+    response: Response,
+    user: CurrentUser = Depends(require_role(["superadmin", "admin"])),
+):
+    try:
+        row = await fetch_egress_for_tenant(user.tenant_id, egress_id)
+    except EgressError as exc:
+        raise HTTPException(404, "Network egress profile not found") from exc
+    if not row or row["type"] not in ("clash", "openvpn"):
+        raise HTTPException(404, "Network egress profile not found")
+    response.headers["Cache-Control"] = "no-store"
+    return {"profile": {**_response(row), "configText": row["config_text"] or ""}}
+
+
 @router.post("/api/network-egress")
 async def create_network_egress(
     body: EgressCreateBody,
@@ -144,11 +160,12 @@ async def update_network_egress(
     config_ref = row["config_ref"] or ""
     config_text = row["config_text"] or ""
     status = row["status"] or "unchecked"
+    config_changed = body.configText is not None or body.configUrl is not None
 
     if body.proxyUrl is not None:
         raise HTTPException(422, "Manual HTTP/SOCKS proxy is no longer supported. Use Clash or OpenVPN.")
 
-    if egress_type in ("clash", "openvpn") and (body.configText is not None or body.configUrl is not None):
+    if egress_type in ("clash", "openvpn") and config_changed:
         try:
             assert_managed_network_egress_supported(egress_type)
         except UnsupportedEgressError as exc:
@@ -169,7 +186,7 @@ async def update_network_egress(
     if body.disabled is not None:
         status = "disabled" if body.disabled else "unchecked"
 
-    if egress_type in ("clash", "openvpn") and (body.configText is not None or body.disabled is True):
+    if egress_type in ("clash", "openvpn") and (config_changed or body.disabled is True):
         await remove_managed_egress(egress_id)
 
     pool = get_pool()
@@ -177,7 +194,7 @@ async def update_network_egress(
         """
         UPDATE network_egress_profiles
         SET name = $1, proxy_url = $2, config_ref = $3, config_text = $4, status = $5,
-            health_error = CASE WHEN $5 = 'disabled' THEN health_error ELSE '' END,
+            health_error = CASE WHEN $8 THEN '' ELSE health_error END,
             updated_at = NOW()
         WHERE id = $6 AND tenant_id = $7
         RETURNING *
@@ -189,6 +206,7 @@ async def update_network_egress(
         status,
         egress_id,
         user.tenant_id,
+        config_changed or body.disabled is False,
     )
     return {"profile": _response(updated)}
 

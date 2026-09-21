@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useNetworkEgress } from '../composables/useNetworkEgress'
+import { useAuth } from '../composables/useAuth'
 import type { NetworkEgressProfile } from '../types'
 import { useNotify } from '../composables/useNotify'
 import { Badge } from '@/components/ui/badge'
@@ -12,20 +13,33 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { AlertTriangle, Loader2, Plus, RefreshCw, Trash2, Upload } from 'lucide-vue-next'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { AlertTriangle, Loader2, Pencil, Plus, RefreshCw, Trash2, Upload } from 'lucide-vue-next'
 
 const { t } = useI18n()
 const notify = useNotify()
+const { user } = useAuth()
+const canManage = computed(() => ['superadmin', 'admin'].includes(user.value?.role || ''))
 const {
   state,
   fetchNetworkEgress,
   createNetworkEgress,
+  fetchNetworkEgressDetail,
+  updateNetworkEgress,
   deleteNetworkEgress,
   checkNetworkEgress,
 } = useNetworkEgress()
 
 const dialogOpen = ref(false)
 const saving = ref(false)
+const editingId = ref<string | null>(null)
+const loadingDetailId = ref<string | null>(null)
+const initialConfig = ref('')
+const initialName = ref('')
+const saveError = ref('')
+const loadingConfigFile = ref(false)
+let formVersion = 0
+let configAbort: AbortController | null = null
 const loadingConfigFromUrl = ref(false)
 const checking = ref<Record<string, boolean>>({})
 const deleting = ref<Record<string, boolean>>({})
@@ -44,8 +58,46 @@ const form = reactive({
 
 const realProfiles = computed(() => state.profiles.filter(p => p.type !== 'direct'))
 const managedConfigMissing = computed(() =>
-  (form.type === 'clash' || form.type === 'openvpn') && !form.configText.trim() && !form.configUrl.trim(),
+  (!editingId.value || configurationChanged.value) && !form.configText.trim() && !form.configUrl.trim(),
 )
+const credentialsChanged = computed(() => form.type === 'openvpn' && !!(form.username || form.password))
+const credentialsIncomplete = computed(() => credentialsChanged.value && (!form.username.trim() || !form.password))
+const configurationChanged = computed(() => !!editingId.value && (form.configText !== initialConfig.value || !!form.configUrl.trim() || credentialsChanged.value))
+const formChanged = computed(() => !editingId.value || form.name.trim() !== initialName.value || configurationChanged.value)
+const formBusy = computed(() => saving.value || loadingConfigFromUrl.value || loadingConfigFile.value)
+
+function openCreate() {
+  if (!canManage.value || loadingDetailId.value) return
+  resetForm()
+  dialogOpen.value = true
+}
+
+async function openEdit(profile: NetworkEgressProfile) {
+  if (!canManage.value || !profile.id || loadingDetailId.value || saving.value) return
+  loadingDetailId.value = profile.id
+  const version = formVersion
+  try {
+    const detail = await fetchNetworkEgressDetail(profile.id)
+    if (version !== formVersion) return
+    resetForm()
+    editingId.value = profile.id
+    form.type = detail.type
+    form.name = detail.name
+    form.configText = detail.configText
+    initialName.value = detail.name
+    initialConfig.value = detail.configText
+    dialogOpen.value = true
+  } catch (err: any) {
+    notify.error(err?.message || t('networkEgress.loadError'))
+  } finally {
+    loadingDetailId.value = null
+  }
+}
+
+function setDialogOpen(open: boolean) {
+  if (saving.value) return
+  dialogOpen.value = open
+}
 
 function statusVariant(status: string) {
   if (status === 'healthy') return 'default'
@@ -62,6 +114,15 @@ function statusLabel(status: string) {
 }
 
 function resetForm() {
+  formVersion++
+  configAbort?.abort()
+  configAbort = null
+  loadingConfigFromUrl.value = false
+  loadingConfigFile.value = false
+  editingId.value = null
+  initialConfig.value = ''
+  initialName.value = ''
+  saveError.value = ''
   Object.assign(form, {
     name: '',
     type: 'clash',
@@ -95,16 +156,23 @@ function triggerConfigFilePicker() {
 }
 
 async function processConfigFile(file: File | null) {
-  if (!file) return
+  if (!file || formBusy.value) return
+  const version = formVersion
+  loadingConfigFile.value = true
   try {
     const text = await file.text()
+    if (version !== formVersion) return
     if (!text.trim()) {
       throw new Error(t('networkEgress.configEmpty'))
     }
     form.configText = text
+    form.configUrl = ''
     setConfigSourceLabel(t('networkEgress.configSourceFile', { name: file.name, size: formatBytes(file.size) }))
   } catch (err: any) {
+    if (version !== formVersion) return
     configError.value = err?.message || t('networkEgress.configReadError')
+  } finally {
+    if (version === formVersion) loadingConfigFile.value = false
   }
 }
 
@@ -138,46 +206,67 @@ async function handleConfigDrop(event: DragEvent) {
 
 async function handleFetchConfigUrl() {
   const url = form.configUrl.trim()
-  if (!url) return
+  if (!url || formBusy.value) return
+  const version = formVersion
+  configAbort = new AbortController()
   loadingConfigFromUrl.value = true
   configError.value = ''
 
   try {
-    const res = await fetch(url)
+    const res = await fetch(url, { signal: configAbort.signal })
     if (!res.ok) {
       throw new Error(t('networkEgress.configUrlFetchFailed', { status: res.status }))
     }
     const text = await res.text()
+    if (version !== formVersion) return
     if (!text.trim()) {
       throw new Error(t('networkEgress.configEmpty'))
     }
     form.configText = text
+    form.configUrl = ''
     setConfigSourceLabel(t('networkEgress.configSourceUrl', { url }))
     notify.success(t('networkEgress.configLoaded'))
   } catch (err: any) {
+    if (version !== formVersion) return
     configError.value = err?.message || t('networkEgress.configUrlFetchError')
   } finally {
-    loadingConfigFromUrl.value = false
+    if (version === formVersion) loadingConfigFromUrl.value = false
   }
 }
 
-async function handleCreate() {
-  if (saving.value) return
+async function handleSave() {
+  if (!canManage.value || formBusy.value || !form.name.trim() || managedConfigMissing.value || credentialsIncomplete.value || !formChanged.value) return
   saving.value = true
+  saveError.value = ''
   try {
-    await createNetworkEgress({ ...form })
-    notify.success(t('networkEgress.created'))
+    if (editingId.value) {
+      const body: Record<string, string> = { name: form.name.trim() }
+      if (configurationChanged.value) {
+        if (form.configUrl.trim()) body.configUrl = form.configUrl.trim()
+        else body.configText = form.configText
+        if (credentialsChanged.value) {
+          body.username = form.username.trim()
+          body.password = form.password
+          // Credentials are applied by the existing config replacement API.
+        }
+      }
+      await updateNetworkEgress(editingId.value, body)
+      notify.success(t('networkEgress.updated'))
+    } else {
+      await createNetworkEgress({ ...form, name: form.name.trim(), configText: form.configUrl.trim() ? '' : form.configText })
+      notify.success(t('networkEgress.created'))
+    }
     dialogOpen.value = false
     resetForm()
   } catch (err: any) {
-    notify.error(err?.message || t('networkEgress.createError'))
+    saveError.value = err?.message || t(editingId.value ? 'networkEgress.updateError' : 'networkEgress.createError')
   } finally {
     saving.value = false
   }
 }
 
 async function handleCheck(profile: NetworkEgressProfile) {
-  if (!profile.id || checking.value[profile.id]) return
+  if (!canManage.value || !profile.id || checking.value[profile.id]) return
   checking.value[profile.id] = true
   try {
     await checkNetworkEgress(profile.id)
@@ -190,7 +279,7 @@ async function handleCheck(profile: NetworkEgressProfile) {
 }
 
 async function handleDelete(profile: NetworkEgressProfile) {
-  if (!profile.id || deleting.value[profile.id]) return
+  if (!canManage.value || !profile.id || deleting.value[profile.id]) return
   deleting.value[profile.id] = true
   try {
     await deleteNetworkEgress(profile.id)
@@ -210,10 +299,13 @@ function handleTypeChange() {
 }
 
 onMounted(fetchNetworkEgress)
+onBeforeUnmount(resetForm)
 watch(
   () => form.type,
   handleTypeChange,
+  { flush: 'sync' },
 )
+watch(dialogOpen, open => { if (!open) resetForm() })
 </script>
 
 <template>
@@ -227,7 +319,7 @@ watch(
         <Button variant="outline" size="icon" class="size-8" :disabled="state.loading" @click="fetchNetworkEgress">
           <RefreshCw class="size-3.5" :class="state.loading && 'animate-spin'" />
         </Button>
-        <Button size="sm" @click="dialogOpen = true">
+        <Button v-if="canManage" size="sm" :disabled="!!loadingDetailId" @click="openCreate">
           <Plus class="size-3.5 mr-1" />
           {{ t('networkEgress.add') }}
         </Button>
@@ -268,12 +360,21 @@ watch(
               {{ profile.lastCheckedAt ? new Date(profile.lastCheckedAt).toLocaleString() : '-' }}
             </TableCell>
             <TableCell class="text-right">
-              <div class="inline-flex items-center gap-1">
-                <Button variant="ghost" size="sm" :disabled="!profile.id || checking[profile.id]" @click="handleCheck(profile)">
+              <div v-if="canManage" class="inline-flex items-center gap-1">
+                <Tooltip>
+                  <TooltipTrigger as-child>
+                    <Button variant="ghost" size="icon" class="size-8" :aria-label="t('networkEgress.edit')" :disabled="!!loadingDetailId || !!(profile.id && deleting[profile.id])" @click="openEdit(profile)">
+                      <Loader2 v-if="loadingDetailId === profile.id" class="size-3.5 animate-spin" />
+                      <Pencil v-else class="size-3.5" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>{{ t('networkEgress.edit') }}</TooltipContent>
+                </Tooltip>
+                <Button variant="ghost" size="icon" class="size-8" :title="t('networkEgress.check')" :aria-label="t('networkEgress.check')" :disabled="!profile.id || checking[profile.id] || !!loadingDetailId" @click="handleCheck(profile)">
                   <Loader2 v-if="profile.id && checking[profile.id]" class="size-3.5 animate-spin" />
                   <RefreshCw v-else class="size-3.5" />
                 </Button>
-                <Button variant="ghost" size="sm" class="text-destructive" :disabled="!profile.id || deleting[profile.id]" @click="handleDelete(profile)">
+                <Button variant="ghost" size="icon" class="size-8 text-destructive" :title="t('networkEgress.delete')" :aria-label="t('networkEgress.delete')" :disabled="!profile.id || deleting[profile.id] || !!loadingDetailId" @click="handleDelete(profile)">
                   <Loader2 v-if="profile.id && deleting[profile.id]" class="size-3.5 animate-spin" />
                   <Trash2 v-else class="size-3.5" />
                 </Button>
@@ -285,21 +386,22 @@ watch(
     </CardContent>
   </Card>
 
-  <Dialog :open="dialogOpen" @update:open="dialogOpen = $event">
-    <DialogContent class="sm:max-w-lg">
-      <DialogHeader>
-        <DialogTitle>{{ t('networkEgress.add') }}</DialogTitle>
+  <Dialog :open="dialogOpen" @update:open="setDialogOpen">
+    <DialogContent class="sm:max-w-lg" :show-close-button="!saving" @escape-key-down="saving && $event.preventDefault()" @interact-outside="saving && $event.preventDefault()">
+      <DialogHeader class="static m-0 p-0">
+        <DialogTitle>{{ t(editingId ? 'networkEgress.edit' : 'networkEgress.add') }}</DialogTitle>
       </DialogHeader>
-      <form class="space-y-4" @submit.prevent="handleCreate">
+      <form class="space-y-4" @submit.prevent="handleSave">
+        <fieldset :disabled="formBusy" class="min-w-0 space-y-4">
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div class="space-y-2">
             <Label for="egress-name">{{ t('networkEgress.name') }}</Label>
-            <Input id="egress-name" v-model="form.name" :placeholder="t('networkEgress.namePlaceholder')" />
+            <Input id="egress-name" v-model="form.name" maxlength="120" required :placeholder="t('networkEgress.namePlaceholder')" />
           </div>
           <div class="space-y-2">
             <Label for="egress-type">{{ t('networkEgress.typeLabel') }}</Label>
-            <Select v-model="form.type">
-              <SelectTrigger id="egress-type">
+            <Select v-model="form.type" :disabled="!!editingId || formBusy">
+              <SelectTrigger id="egress-type" class="w-full">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -368,6 +470,7 @@ watch(
         </div>
 
         <div v-if="form.type === 'openvpn'" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <p v-if="editingId" class="text-xs text-muted-foreground md:col-span-2">{{ t('networkEgress.credentialsKeep') }}</p>
           <div class="space-y-2">
             <Label for="egress-user">{{ t('networkEgress.username') }}</Label>
             <Input id="egress-user" v-model="form.username" autocomplete="off" />
@@ -377,12 +480,16 @@ watch(
             <Input id="egress-password" v-model="form.password" type="password" autocomplete="new-password" />
           </div>
         </div>
+        </fieldset>
+        <p v-if="credentialsIncomplete" role="alert" class="text-sm text-destructive">{{ t('networkEgress.credentialsRequired') }}</p>
+        <p v-if="configurationChanged" class="flex items-start gap-2 text-sm text-muted-foreground"><AlertTriangle class="mt-0.5 size-4 shrink-0" />{{ t('networkEgress.configChangeWarning') }}</p>
+        <p v-if="saveError" role="alert" class="text-sm text-destructive">{{ saveError }}</p>
 
         <DialogFooter>
           <Button type="button" variant="outline" :disabled="saving" @click="dialogOpen = false">{{ t('session.cancel') }}</Button>
-          <Button type="submit" :disabled="saving || !form.name.trim() || managedConfigMissing">
+          <Button type="submit" :disabled="formBusy || !form.name.trim() || managedConfigMissing || credentialsIncomplete || !formChanged">
             <Loader2 v-if="saving" class="size-4 animate-spin" />
-            {{ saving ? t('networkEgress.saving') : t('networkEgress.create') }}
+            {{ saving ? t('networkEgress.saving') : t(editingId ? 'networkEgress.save' : 'networkEgress.create') }}
           </Button>
         </DialogFooter>
       </form>

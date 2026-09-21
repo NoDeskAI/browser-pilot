@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Network egress editor fixture</title></head>
+<body>
+<div id="app"></div>
+<script type="module">
+// Isolated browser fixture. Never forwards API requests to a real server.
+import { createApp, h } from 'vue'
+import { createI18n } from 'vue-i18n'
+import en from '/src/locales/en.ts'
+import zh from '/src/locales/zh.ts'
+import '/src/style.css'
+const fixture = window.egressFixture = {
+  failSave: false, requests: [],
+  profiles: [
+    { id: 'clash-test', name: 'Office Clash', type: 'clash', status: 'healthy', configText: 'mixed-port: 7890\nproxies: []' },
+    { id: 'vpn-test', name: 'Office VPN', type: 'openvpn', status: 'healthy', configText: 'client\ndev tun' },
+  ],
+}
+window.fetch = async (input, init = {}) => {
+  const path = String(input)
+  const method = init.method || 'GET'
+  const body = init.body ? JSON.parse(init.body) : null
+  fixture.requests.push({ path, method, body })
+  const id = path.split('/')[3]
+  const profile = fixture.profiles.find(p => p.id === id)
+  const json = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } })
+  if (path === '/api/network-egress' && method === 'GET') return json({ profiles: fixture.profiles.map(({configText, ...p}) => p) })
+  if (profile && method === 'GET') return json({ profile })
+  if (profile && method === 'PATCH') {
+    if (fixture.failSave) return json({ detail: 'Simulated save failure' }, 422)
+    Object.assign(profile, body)
+    return json({ profile })
+  }
+  if (path === '/api/network-egress' && method === 'POST') {
+    const profile = { ...body, id: 'new-test', status: 'unchecked' }
+    fixture.profiles.push(profile)
+    return json({ profile })
+  }
+  throw new Error(`Unexpected fixture request: ${method} ${path}`)
+}
+const { useAuth } = await import('/src/composables/useAuth.ts')
+fixture.setRole = role => useAuth().setAuth('fixture-only', { id: 'test', tenantId: 'test', name: 'Test', email: 'test@example.invalid', role })
+fixture.setRole('admin')
+const { default: Editor } = await import('/src/components/NetworkEgressSettings.vue')
+const { TooltipProvider } = await import('/src/components/ui/tooltip/index.ts')
+const i18n = createI18n({ legacy: false, locale: 'en', messages: { en, zh } })
+fixture.locale = value => { i18n.global.locale.value = value }
+createApp({render:()=>h(TooltipProvider, {}, {default:()=>h('main',{style:'max-width:960px;margin:32px auto;padding:0 16px'},[h(Editor)])})}).use(i18n).mount('#app')
+</script>
+</body>
+</html>

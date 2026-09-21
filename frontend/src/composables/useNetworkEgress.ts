@@ -36,6 +36,13 @@ async function createNetworkEgress(body: Record<string, any>): Promise<NetworkEg
   return data.profile
 }
 
+async function fetchNetworkEgressDetail(id: string): Promise<NetworkEgressProfile & { configText: string }> {
+  const res = await api(`/api/network-egress/${encodeURIComponent(id)}`, { cache: 'no-store' })
+  const data = await res.json()
+  if (!res.ok) throw new Error(data?.detail || 'Failed to load network egress')
+  return data.profile
+}
+
 async function updateNetworkEgress(id: string, body: Record<string, any>): Promise<NetworkEgressProfile> {
   const res = await api(`/api/network-egress/${id}`, {
     method: 'PATCH',
@@ -70,6 +77,7 @@ export function useNetworkEgress() {
     state: readonly(state),
     fetchNetworkEgress,
     createNetworkEgress,
+    fetchNetworkEgressDetail,
     updateNetworkEgress,
     deleteNetworkEgress,
     checkNetworkEgress,
